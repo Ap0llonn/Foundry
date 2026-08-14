@@ -38,6 +38,16 @@
   loop_control:
     label: "{{ item.key }} -> {{ item.value }}"
 
+- name: Validate no obsolete Foundry-owned groups remain
+  ansible.builtin.assert:
+    that:
+      - >-
+        ansible_facts.getent_group.keys()
+        | select('match', identity_access_owned_group_pattern)
+        | difference(identity_access_group_map.values() | list)
+        | length == 0
+    fail_msg: "Obsolete Foundry-owned Linux groups remain on the host."
+
 - name: Inspect managed SSH directories
   ansible.builtin.stat:
     path: "{{ identity_access_default_home_root }}/{{ item.name }}/.ssh"
@@ -117,17 +127,54 @@
     label: "{{ item.name }}"
   register: identity_access_group_membership_checks
 
-- name: Validate exact Linux group memberships without implicit sudo groups
+- name: Validate exact Foundry-owned group memberships
   ansible.builtin.assert:
     that:
       - >-
-        item.stdout.split() | sort
+        item.stdout.split()
+        | select('match', identity_access_owned_group_pattern)
+        | sort
         ==
-        (
-          [item.item.name]
-          + (item.item.groups | map('extract', identity_access_group_map) | list)
-        ) | unique | sort
-    fail_msg: "Linux group membership is incorrect for {{ item.item.name }}."
+        (item.item.groups | map('extract', identity_access_group_map) | list)
+        | unique | sort
+    fail_msg: >-
+      Foundry-owned group membership is incorrect for {{ item.item.name }}.
+  when: not item.skipped | default(false)
+  loop: "{{ identity_access_group_membership_checks.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Validate unrelated group memberships were preserved
+  ansible.builtin.assert:
+    that:
+      - >-
+        item.stdout.split()
+        | reject('match', identity_access_owned_group_pattern)
+        | difference([item.item.name])
+        | unique | sort
+        == identity_access_unmanaged_groups_before[item.item.name]
+    fail_msg: >-
+      An unrelated host group membership changed for {{ item.item.name }}.
+      Foundry may reconcile only groups in the foundry-* namespace.
+  when:
+    - not item.skipped | default(false)
+    - identity_access_unmanaged_groups_before is defined
+    - item.item.name in identity_access_unmanaged_groups_before
+  loop: "{{ identity_access_group_membership_checks.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Reject conflicting privileged memberships outside Foundry ownership
+  ansible.builtin.assert:
+    that:
+      - >-
+        item.stdout.split()
+        | intersect(identity_access_privileged_groups)
+        | length == 0
+    fail_msg: >-
+      User {{ item.item.name }} belongs to an externally managed privileged
+      group. Foundry preserved it as required, but cannot verify its explicit
+      sudo policy until an administrator removes that conflicting membership.
   when: not item.skipped | default(false)
   loop: "{{ identity_access_group_membership_checks.results }}"
   loop_control:

@@ -5,15 +5,18 @@
       - identity | default({}) is mapping
       - >-
         (identity | default({})).keys()
-        | difference(['default_admin_sudo', 'users'])
+        | difference(['default_admin_sudo', 'groups', 'users'])
         | length == 0
+      - identity_access_group_definitions_config is sequence
+      - identity_access_group_definitions_config is not string
+      - identity_access_group_definitions_config is not mapping
       - identity_access_users_config is sequence
       - identity_access_users_config is not string
       - identity_access_users_config is not mapping
       - identity_access_default_admin_sudo is mapping
     fail_msg: >-
-      identity may contain only default_admin_sudo and users, and both must
-      have the documented types.
+      identity may contain only default_admin_sudo, groups, and users, and all
+      values must have the documented types.
   no_log: true
 
 - name: Validate default administrative sudo policy properties
@@ -64,6 +67,97 @@
   no_log: >-
     {{ identity_access_default_admin_sudo.password_hash is defined }}
 
+- name: Validate Foundry group definition shape
+  ansible.builtin.assert:
+    that:
+      - item is mapping
+      - item.name is defined
+    fail_msg: "Every identity.groups entry must be an object containing name."
+  loop: "{{ identity_access_group_definitions_config }}"
+  loop_control:
+    label: "{{ item.name | default('invalid group') }}"
+
+- name: Validate Foundry group definitions
+  ansible.builtin.assert:
+    that:
+      - >-
+        item.keys() | difference(identity_access_allowed_group_definition_properties)
+        | length == 0
+      - item.name is string
+      - item.name is match(identity_access_group_name_pattern)
+      - item.name not in identity_access_default_group_map.keys() | list
+      - item.name not in identity_access_privileged_groups
+      - item.replaces is not defined or item.replaces is string
+      - >-
+        item.replaces is not defined
+        or item.replaces in identity_access_default_group_aliases
+    fail_msg: >-
+      Invalid Foundry group definition {{ item.name }}. Custom names must be
+      unique, fit the Foundry-owned Linux namespace, and replaces may reference
+      only developer(s), operator(s), or viewer(s).
+  loop: "{{ identity_access_group_definitions_config }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Reject duplicate custom group names
+  ansible.builtin.assert:
+    that:
+      - >-
+        identity_access_group_definitions_config | map(attribute='name')
+        | list | unique | length
+        == identity_access_group_definitions_config | length
+    fail_msg: "identity.groups contains duplicate custom group names."
+
+- name: Reject multiple replacements of the same default group
+  ansible.builtin.assert:
+    that:
+      - >-
+        identity_access_group_definitions_config
+        | selectattr('replaces', 'defined')
+        | map(attribute='replaces')
+        | map('extract', identity_access_default_group_aliases)
+        | list | unique | length
+        == identity_access_group_definitions_config
+           | selectattr('replaces', 'defined')
+           | list | length
+    fail_msg: "A default Foundry group may be replaced only once."
+
+- name: Initialize effective Foundry authorization groups
+  ansible.builtin.set_fact:
+    identity_access_group_map: "{{ identity_access_default_group_map }}"
+
+- name: Apply configured default group replacements
+  ansible.builtin.set_fact:
+    identity_access_group_map: >-
+      {{
+        identity_access_group_map
+        | dict2items
+        | rejectattr(
+            'key',
+            'equalto',
+            identity_access_default_group_aliases[item.replaces]
+          )
+        | list
+        | items2dict
+        | combine({item.name: identity_access_group_prefix + item.name})
+      }}
+  when: item.replaces is defined
+  loop: "{{ identity_access_group_definitions_config }}"
+  loop_control:
+    label: "{{ item.replaces | default('') }} -> {{ item.name }}"
+
+- name: Add configured custom Foundry authorization groups
+  ansible.builtin.set_fact:
+    identity_access_group_map: >-
+      {{
+        identity_access_group_map
+        | combine({item.name: identity_access_group_prefix + item.name})
+      }}
+  when: item.replaces is not defined
+  loop: "{{ identity_access_group_definitions_config }}"
+  loop_control:
+    label: "{{ item.name }}"
+
 - name: Validate identity user entry shape
   ansible.builtin.assert:
     that:
@@ -82,6 +176,7 @@
       - item.keys() | difference(identity_access_allowed_user_properties) | length == 0
       - item.name is string
       - item.name is match('^[a-z_][a-z0-9_-]{0,31}$')
+      - not (item.name is match(identity_access_owned_group_pattern))
       - (item.state | default('present')) in identity_access_allowed_states
       - (item.admin | default(false)) is boolean
       - (item.groups | default([])) is sequence

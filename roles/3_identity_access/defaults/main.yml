@@ -3,6 +3,8 @@
 # may contain password hashes, so downstream tasks use a normalized, secret-free
 # list built during validation.
 identity_access_users_config: "{{ (identity | default({})).get('users', []) }}"
+identity_access_group_definitions_config: >-
+  {{ (identity | default({})).get('groups', []) }}
 identity_access_default_admin_sudo: >-
   {{ (identity | default({})).get('default_admin_sudo', {}) }}
 
@@ -12,14 +14,34 @@ identity_access_sudo_package: sudo
 identity_access_sudo_binary: /usr/bin/sudo
 identity_access_visudo_binary: /usr/sbin/visudo
 identity_access_passwd_binary: /usr/bin/passwd
+identity_access_gpasswd_binary: /usr/bin/gpasswd
 identity_access_sudoers_directory: /etc/sudoers.d
 identity_access_sudoers_prefix: foundry-
 
-# Foundry group names exposed in config map to Linux groups owned by Foundry.
-identity_access_group_map:
+# Foundry owns only Linux groups in the `foundry-*` namespace. The effective
+# map is built during validation after applying configured replacements.
+identity_access_group_prefix: foundry-
+identity_access_owned_group_pattern: '^foundry-'
+identity_access_default_group_map:
   developer: foundry-developer
   operator: foundry-operator
-  observer: foundry-observer
+  viewer: foundry-viewer
+
+# `replaces` accepts singular or plural names for the built-in logical roles.
+identity_access_default_group_aliases:
+  developer: developer
+  developers: developer
+  operator: operator
+  operators: operator
+  viewer: viewer
+  viewers: viewer
+
+identity_access_allowed_group_definition_properties:
+  - name
+  - replaces
+
+# The logical name is limited so `foundry-<name>` remains a valid Linux group.
+identity_access_group_name_pattern: '^[a-z_][a-z0-9_-]{0,23}$'
 
 # These groups carry privileges outside Foundry's authorization policy and may
 # not be requested through identity.users[].groups.

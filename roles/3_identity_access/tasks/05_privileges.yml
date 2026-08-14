@@ -63,18 +63,69 @@
       - /etc/sudoers
   changed_when: false
 
-- name: Reconcile Foundry groups without implicit administrative groups
-  ansible.builtin.user:
-    name: "{{ item.name }}"
-    groups: >-
-      {{
-        item.groups
-        | map('extract', identity_access_group_map)
-        | unique
-        | list
-      }}
-    append: false
+- name: Read memberships before Foundry-owned group reconciliation
+  ansible.builtin.command:
+    argv:
+      - id
+      - -nG
+      - "{{ item.name }}"
+  changed_when: false
+  check_mode: false
   when: item.state == 'present'
   loop: "{{ identity_access_users }}"
   loop_control:
     label: "{{ item.name }}"
+  register: identity_access_group_memberships_before
+
+- name: Initialize unrelated group preservation snapshot
+  ansible.builtin.set_fact:
+    identity_access_unmanaged_groups_before: {}
+
+- name: Record unrelated supplementary groups before reconciliation
+  ansible.builtin.set_fact:
+    identity_access_unmanaged_groups_before: >-
+      {{
+        identity_access_unmanaged_groups_before
+        | combine(
+          {
+            item.item.name: (
+              item.stdout.split()
+              | reject('match', identity_access_owned_group_pattern)
+              | difference([item.item.name])
+              | unique
+              | sort
+            )
+          }
+        )
+      }}
+  when: not item.skipped | default(false)
+  loop: "{{ identity_access_group_memberships_before.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Reconcile only Foundry-owned group memberships
+  ansible.builtin.include_tasks: reconcile_user_groups.yml
+  when: not identity_access_membership.skipped | default(false)
+  loop: "{{ identity_access_group_memberships_before.results }}"
+  loop_control:
+    loop_var: identity_access_membership
+    label: "{{ identity_access_membership.item.name }}"
+
+- name: Gather groups after membership reconciliation
+  ansible.builtin.getent:
+    database: group
+
+- name: Remove obsolete Foundry-owned Linux groups
+  ansible.builtin.group:
+    name: "{{ item }}"
+    state: absent
+    force: false
+  loop: >-
+    {{
+      ansible_facts.getent_group.keys()
+      | select('match', identity_access_owned_group_pattern)
+      | difference(identity_access_group_map.values() | list)
+      | sort
+    }}
+  loop_control:
+    label: "{{ item }}"

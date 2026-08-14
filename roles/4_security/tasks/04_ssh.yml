@@ -15,23 +15,29 @@
     mode: "0755"
   when: security_resolved.ssh.enabled
 
-- name: Install Foundry SSH daemon policy
-  ansible.builtin.template:
-    src: foundry-sshd.conf.j2
-    dest: "{{ security_sshd_dropin }}"
-    owner: root
-    group: root
-    mode: "0600"
-    validate: "{{ security_sshd_binary }} -t -f %s"
-  notify: Validate and reload SSH
+- name: Install temporary dual-listener SSH policy
+  ansible.builtin.include_tasks: apply_ssh_policy.yml
+  vars:
+    security_ssh_policy_phase: transition
   when: security_resolved.ssh.enabled
 
-- name: Validate complete SSH daemon configuration before reload
-  ansible.builtin.command:
-    argv:
-      - "{{ security_sshd_binary }}"
-      - -t
-  changed_when: false
+- name: Switch Ansible to a newly authenticated SSH connection
+  ansible.builtin.include_tasks: migrate_ssh_connection.yml
+  when:
+    - security_resolved.ssh.enabled
+    - not ansible_check_mode
+    - security_active_management_port | int != security_resolved.ssh.port | int
+
+- name: Resolve final single-listener SSH policy
+  ansible.builtin.set_fact:
+    security_ssh_ports:
+      - "{{ security_resolved.ssh.port | int }}"
+  when: security_resolved.ssh.enabled
+
+- name: Install final desired-port-only SSH policy
+  ansible.builtin.include_tasks: apply_ssh_policy.yml
+  vars:
+    security_ssh_policy_phase: final
   when: security_resolved.ssh.enabled
 
 - name: Remove Foundry SSH policy when SSH is explicitly disabled

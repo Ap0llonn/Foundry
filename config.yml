@@ -3,6 +3,16 @@
 vm_ip: 149.56.96.110
 
 identity:
+  # Optional Foundry role customization. Built-ins are developer, operator,
+  # and viewer. Custom Linux groups always use the foundry-* namespace.
+  groups: []
+  # groups:
+  #   - name: team1
+  #     replaces: developers
+  #   - name: devteam
+  #     replaces: operators
+  #   - name: database-team
+
   # Every admin using sudo.mode: inherit resolves to this explicit policy.
   # SSH authentication remains controlled independently under security.ssh.
   default_admin_sudo:
@@ -48,6 +58,8 @@ identity:
 security:
   ssh:
     enabled: true
+    # Desired management port only. Foundry discovers and migrates from the
+    # current port automatically; a new VM starts from the standard port 22.
     port: 22
     permit_root_login: false
     password_authentication: false

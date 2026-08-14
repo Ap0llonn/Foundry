@@ -39,6 +39,11 @@ security_fail2ban_service: fail2ban
 security_fail2ban_jail: /etc/fail2ban/jail.d/00-foundry-sshd.local
 security_firewall_state_directory: /var/lib/foundry
 security_firewall_state_file: /var/lib/foundry/security-firewall-rules.yml
+security_controller_state_directory: "{{ playbook_dir }}/.foundry/state"
+security_controller_state_file: >-
+  {{ security_controller_state_directory }}/{{ inventory_hostname }}.yml
+security_ssh_probe_timeout: 10
+security_ssh_connection_timeout: 45
 security_unattended_reboot_time: "03:00"
 
 security_allowed_root_keys:

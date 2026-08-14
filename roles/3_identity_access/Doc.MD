@@ -6,6 +6,8 @@ The global configuration is defined in the root [`config.yml`](../../config.yml)
 
 ```yaml
 identity:
+  groups: []
+
   default_admin_sudo:
     mode: passwordless
 
@@ -40,17 +42,70 @@ Configuration group names are translated to Linux groups:
 |---|---|
 | `developer` | `foundry-developer` |
 | `operator` | `foundry-operator` |
-| `observer` | `foundry-observer` |
+| `viewer` | `foundry-viewer` |
 
 Example:
 
 ```yaml
 groups:
   - developer
-  - observer
+  - viewer
 ```
 
-Managed users receive exactly their private primary group and configured Foundry groups. Do not place privileged system groups such as `sudo`, `root`, `docker`, or `lxd` in `groups`. Administrative access must use `admin: true` and an explicit sudo policy.
+### Rename or add Foundry groups
+
+Use `identity.groups` to replace a built-in logical role or add a new one:
+
+```yaml
+identity:
+  groups:
+    - name: team1
+      replaces: developers
+
+    - name: devteam
+      replaces: operators
+
+    - name: database-team
+```
+
+`replaces` accepts the singular or plural built-in names: `developer(s)`, `operator(s)`, and `viewer(s)`.
+
+After this configuration, users may request `team1`, `devteam`, `database-team`, or the unreplaced `viewer` role:
+
+```yaml
+users:
+  - name: alice
+    groups:
+      - team1
+      - database-team
+```
+
+The resulting Linux groups are `foundry-team1`, `foundry-devteam`, `foundry-database-team`, and `foundry-viewer`. A replaced logical name is no longer valid in `identity.users[].groups`.
+
+### Group ownership boundary
+
+Foundry owns only Linux groups whose names begin with `foundry-`:
+
+- Desired Foundry memberships are added.
+- Stale Foundry memberships are removed.
+- Obsolete `foundry-*` groups are removed after their memberships are reconciled.
+- Every unrelated host membership is preserved, including groups created by packages, applications, or administrators.
+
+The role does not use a whole-account `append: false` replacement. It adds desired Foundry groups with `append: true` and removes stale memberships individually only from the owned namespace.
+
+Do not manually create groups beginning with `foundry-`; that namespace belongs to this role. Do not place privileged system groups such as `sudo`, `root`, `docker`, or `lxd` in `identity.users[].groups`. Administrative access must use `admin: true` and an explicit sudo policy. If an unrelated privileged membership already exists, Foundry preserves it but fails final validation so an administrator can resolve the conflict explicitly.
+
+### Migrating from the previous sudo-group behavior
+
+Earlier versions of this role added admins to the system `sudo` group. The new ownership boundary deliberately does not remove that unrelated group automatically.
+
+On the first migration run, Foundry installs and validates the user's explicit `/etc/sudoers.d/foundry-<username>` policy, preserves the old `sudo` membership, and reports the conflict during final validation. After confirming the new per-user policy works, remove the legacy membership explicitly:
+
+```bash
+sudo gpasswd -d alice sudo
+```
+
+Then run the identity role again. Do not remove the old membership until the new sudoers file has passed `visudo` and the user's configured elevation path has been tested.
 
 ## SSH public keys
 
@@ -177,7 +232,7 @@ Creates no Foundry sudo policy:
 - name: charlie
   admin: false
   groups:
-    - observer
+    - viewer
   ssh_keys:
     - "ssh-ed25519 AAAA... charlie@example"
   sudo:
@@ -385,7 +440,7 @@ identity:
       state: present
       admin: false
       groups:
-        - observer
+        - viewer
       ssh_keys:
         - "ssh-ed25519 DDDD... charlie@example"
 ```

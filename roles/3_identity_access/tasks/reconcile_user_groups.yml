@@ -1,0 +1,41 @@
+---
+- name: Resolve desired Foundry groups for user
+  ansible.builtin.set_fact:
+    identity_access_desired_linux_groups: >-
+      {{
+        identity_access_membership.item.groups
+        | map('extract', identity_access_group_map)
+        | unique
+        | list
+      }}
+    identity_access_current_foundry_groups: >-
+      {{
+        identity_access_membership.stdout.split()
+        | select('match', identity_access_owned_group_pattern)
+        | unique
+        | list
+      }}
+
+- name: Add desired Foundry-owned memberships
+  ansible.builtin.user:
+    name: "{{ identity_access_membership.item.name }}"
+    groups: "{{ identity_access_desired_linux_groups }}"
+    append: true
+  when: identity_access_desired_linux_groups | length > 0
+
+- name: Remove stale Foundry-owned memberships
+  ansible.builtin.command:
+    argv:
+      - "{{ identity_access_gpasswd_binary }}"
+      - -d
+      - "{{ identity_access_membership.item.name }}"
+      - "{{ item }}"
+  loop: >-
+    {{
+      identity_access_current_foundry_groups
+      | difference(identity_access_desired_linux_groups)
+      | sort
+    }}
+  loop_control:
+    label: "{{ identity_access_membership.item.name }} -/-> {{ item }}"
+  changed_when: true

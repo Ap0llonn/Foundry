@@ -1,3 +1,149 @@
+- name: Resolve the current Foundry SSH management endpoint
+  hosts: all
+  gather_facts: false
+
+  vars_files:
+    - config.yml
+
+  tasks:
+    - name: Validate desired SSH endpoint configuration
+      ansible.builtin.assert:
+        that:
+          - security | default({}) is mapping
+          - (security | default({})).get('ssh', {}) is mapping
+          - (security | default({})).get('ssh', {}).get('port', 22) is number
+          - (security | default({})).get('ssh', {}).get('port', 22) | int >= 1
+          - (security | default({})).get('ssh', {}).get('port', 22) | int <= 65535
+        fail_msg: "security.ssh.port must be an integer between 1 and 65535."
+
+    - name: Resolve controller connection state paths
+      ansible.builtin.set_fact:
+        foundry_desired_ssh_port: >-
+          {{ (security | default({})).get('ssh', {}).get('port', 22) | int }}
+        foundry_controller_state_directory: "{{ playbook_dir }}/.foundry/state"
+        foundry_controller_state_file: >-
+          {{ playbook_dir }}/.foundry/state/{{ inventory_hostname }}.yml
+
+    - name: Inspect saved controller connection state
+      ansible.builtin.stat:
+        path: "{{ foundry_controller_state_file }}"
+      delegate_to: localhost
+      become: false
+      register: foundry_controller_state_check
+
+    - name: Read saved controller connection state
+      ansible.builtin.slurp:
+        path: "{{ foundry_controller_state_file }}"
+      delegate_to: localhost
+      become: false
+      register: foundry_controller_state_raw
+      when: foundry_controller_state_check.stat.exists
+
+    - name: Resolve saved controller connection state
+      ansible.builtin.set_fact:
+        foundry_saved_connection: >-
+          {{
+            (foundry_controller_state_raw.content | b64decode | from_yaml)
+            if foundry_controller_state_check.stat.exists
+            else {}
+          }}
+
+    - name: Validate saved controller connection state
+      ansible.builtin.assert:
+        that:
+          - foundry_saved_connection is mapping
+          - foundry_saved_connection.current_port | default(22) is number
+          - foundry_saved_connection.current_port | default(22) | int >= 1
+          - foundry_saved_connection.current_port | default(22) | int <= 65535
+        fail_msg: >-
+          {{ foundry_controller_state_file }} is invalid. It must contain a
+          current_port integer between 1 and 65535.
+
+    - name: Resolve current SSH endpoint candidate
+      ansible.builtin.set_fact:
+        foundry_saved_ssh_port: >-
+          {{
+            foundry_saved_connection.current_port
+            | default(ansible_port | default(22))
+            | int
+          }}
+        foundry_management_host: "{{ ansible_host | default(vm_ip) }}"
+
+    - name: Probe the last validated SSH endpoint
+      ansible.builtin.wait_for:
+        host: "{{ foundry_management_host }}"
+        port: "{{ foundry_saved_ssh_port }}"
+        state: started
+        search_regex: '^SSH-'
+        connect_timeout: 2
+        timeout: 4
+      delegate_to: localhost
+      become: false
+      check_mode: false
+      register: foundry_saved_ssh_probe
+      failed_when: false
+
+    - name: Probe the desired SSH endpoint
+      ansible.builtin.wait_for:
+        host: "{{ foundry_management_host }}"
+        port: "{{ foundry_desired_ssh_port }}"
+        state: started
+        search_regex: '^SSH-'
+        connect_timeout: 2
+        timeout: 4
+      delegate_to: localhost
+      become: false
+      check_mode: false
+      register: foundry_desired_ssh_probe
+      failed_when: false
+
+    - name: Probe the standard bootstrap SSH endpoint
+      ansible.builtin.wait_for:
+        host: "{{ foundry_management_host }}"
+        port: 22
+        state: started
+        search_regex: '^SSH-'
+        connect_timeout: 2
+        timeout: 4
+      delegate_to: localhost
+      become: false
+      check_mode: false
+      register: foundry_bootstrap_ssh_probe
+      failed_when: false
+
+    - name: Require at least one reachable SSH management endpoint
+      ansible.builtin.assert:
+        that:
+          - >-
+            foundry_saved_ssh_probe.msg | default('') | length == 0
+            or foundry_desired_ssh_probe.msg | default('') | length == 0
+            or foundry_bootstrap_ssh_probe.msg | default('') | length == 0
+        fail_msg: >-
+          No SSH banner was found on the last validated port
+          {{ foundry_saved_ssh_port }}, desired port
+          {{ foundry_desired_ssh_port }}, or bootstrap port 22 for
+          {{ foundry_management_host }}.
+
+    - name: Select the reachable SSH management endpoint
+      ansible.builtin.set_fact:
+        ansible_port: >-
+          {{
+            foundry_saved_ssh_port
+            if foundry_saved_ssh_probe.msg | default('') | length == 0
+            else (
+              foundry_desired_ssh_port
+              if foundry_desired_ssh_probe.msg | default('') | length == 0
+              else 22
+            )
+          }}
+
+    - name: Report selected SSH management endpoint
+      ansible.builtin.debug:
+        msg: >-
+          Foundry will connect to {{ foundry_management_host }}:{{ ansible_port }};
+          desired SSH port is {{ foundry_desired_ssh_port }}.
+  tags: [always]
+
 - name: Standardize infrastructure
   hosts: all
   gather_facts: false

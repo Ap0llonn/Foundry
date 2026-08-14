@@ -5,6 +5,7 @@
       - "{{ security_sshd_binary }}"
       - -t
   changed_when: false
+  check_mode: false
   when: security_resolved.ssh.enabled
 
 - name: Read effective SSH daemon configuration
@@ -14,6 +15,7 @@
       - -T
   register: security_sshd_effective_configuration
   changed_when: false
+  check_mode: false
   when: security_resolved.ssh.enabled
 
 - name: Gather security service facts
@@ -46,7 +48,11 @@
       - ('maxauthtries ' + (security_resolved.ssh.max_auth_tries | string)) in security_sshd_effective_configuration.stdout_lines
       - ('logingracetime ' + (security_resolved.ssh.login_grace_time | string)) in security_sshd_effective_configuration.stdout_lines
     fail_msg: "Effective SSH daemon policy does not match the resolved security policy."
-  when: security_resolved.ssh.enabled
+  when:
+    - security_resolved.ssh.enabled
+    - >-
+      not ansible_check_mode
+      or security_active_management_port | int == security_resolved.ssh.port | int
 
 - name: Read UFW status
   ansible.builtin.command:
@@ -58,6 +64,7 @@
     LC_ALL: C
   register: security_ufw_status
   changed_when: false
+  check_mode: false
 
 - name: Validate enabled firewall policy
   ansible.builtin.assert:
@@ -76,7 +83,11 @@
     that:
       - security_ufw_status.stdout is search('(?m)^' + (item.port | string) + '/' + item.protocol + '\s+ALLOW IN')
     fail_msg: "Required firewall rule is missing: {{ item.port }}/{{ item.protocol }}."
-  when: security_resolved.firewall.enabled
+  when:
+    - security_resolved.firewall.enabled
+    - >-
+      not ansible_check_mode
+      or security_active_management_port | int == security_resolved.ssh.port | int
   loop: "{{ security_firewall_rules }}"
   loop_control:
     label: "{{ item.source }} -> {{ item.port }}/{{ item.protocol }}"
@@ -103,6 +114,7 @@
       - status
       - sshd
   changed_when: false
+  check_mode: false
   when:
     - security_resolved.fail2ban.enabled
     - security_resolved.fail2ban.ssh.enabled
@@ -141,19 +153,40 @@
     fail_msg: "Automatic reboot policy does not match desired state."
   when: security_resolved.updates.automatic_security_updates
 
-- name: Report safe SSH port transition
+- name: Report completed SSH port transition
   ansible.builtin.debug:
     msg: >-
-      SSH now listens on desired port {{ security_resolved.ssh.port }} and active
-      management port {{ security_active_management_port }}. Update ansible_port
-      in inventory, then rerun Foundry to remove the transition port.
-  when: security_active_management_port | int != security_resolved.ssh.port | int
+      SSH migration completed from port {{ security_active_management_port }}
+      to {{ security_resolved.ssh.port }}. A fresh authenticated connection was
+      established, and the previous listener and temporary firewall rule were
+      removed.
+  when:
+    - not ansible_check_mode
+    - security_active_management_port | int != security_resolved.ssh.port | int
 
 - name: Report security validation result
   ansible.builtin.debug:
     msg:
       - "Host security validation: OK"
-      - "SSH ports: {{ security_ssh_ports | join(', ') }}"
+      - "SSH management port: {{ security_resolved.ssh.port }}"
       - "Firewall enabled: {{ security_resolved.firewall.enabled }}"
       - "Fail2ban enabled: {{ security_resolved.fail2ban.enabled }}"
       - "Automatic security updates: {{ security_resolved.updates.automatic_security_updates }}"
+  when:
+    - >-
+      not ansible_check_mode
+      or security_active_management_port | int == security_resolved.ssh.port | int
+
+- name: Report planned SSH migration in check mode
+  ansible.builtin.debug:
+    msg:
+      - "Security configuration check: OK"
+      - >-
+        Planned SSH migration: {{ security_active_management_port }} ->
+        {{ security_resolved.ssh.port }}
+      - >-
+        The fresh connection, endpoint retirement, and resulting live policy
+        require a normal (non-check-mode) run for verification.
+  when:
+    - ansible_check_mode
+    - security_active_management_port | int != security_resolved.ssh.port | int
