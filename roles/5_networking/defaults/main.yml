@@ -1,0 +1,38 @@
+---
+networking_defaults:
+  stale_network_policy: report
+  overlay_migration_approved: false
+
+networking_allowed_root_keys: [stale_network_policy, overlay_migration_approved]
+networking_allowed_project_keys: [name]
+networking_allowed_environment_keys: [name, network]
+networking_allowed_environment_network_keys: [name]
+networking_allowed_stale_network_policies: [report, fail, remove_unused]
+
+networking_identifier_pattern: '^[a-z][a-z0-9-]{0,31}$'
+networking_explicit_network_name_pattern: '^[a-z0-9][a-z0-9_.-]{0,62}$'
+networking_reserved_network_names:
+  - bridge
+  - host
+  - none
+  - ingress
+  - docker_gwbridge
+
+networking_network_driver: >-
+  {{
+    'overlay'
+    if ((platform | default({})).get('swarm', {}).get('enabled', false) | bool
+        or (platform | default({})).get('dokploy', {}).get('enabled', false) | bool)
+    else 'bridge'
+  }}
+networking_network_internal: false
+networking_docker_binary: docker
+networking_docker_service: docker.service
+networking_runtime_ownership_manifest: /var/lib/foundry/runtime/docker-ownership.yml
+networking_state_directory: /var/lib/foundry/networking
+networking_state_file: /var/lib/foundry/networking/resolved-networks.yml
+networking_label_managed: foundry.managed
+networking_label_project: foundry.project
+networking_label_environment: foundry.environment
+networking_label_resource: foundry.resource
+networking_resource_type: environment-network

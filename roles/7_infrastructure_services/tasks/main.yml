@@ -1,4 +1,107 @@
 ---
-# Role: 7 - Infrastructure services
-# Placeholder — ne fait rien pour le moment.
-[]
+- name: 7.1 Validate and resolve Infrastructure Services intent
+  ansible.builtin.import_tasks: 01_validate.yml
+  tags: [always, infrastructure_services_validation]
+
+- name: 7.2 Consume authoritative Networking state
+  ansible.builtin.import_tasks: common/resolve_networks.yml
+  become: true
+  when: infrastructure_services_any_enabled
+  tags: [infrastructure_services, infrastructure_services_resolution]
+
+- name: 7.3 Resolve optional global and environment domains
+  ansible.builtin.import_tasks: common/resolve_domains.yml
+  when: infrastructure_services_any_enabled
+  tags: [infrastructure_services, infrastructure_services_domains]
+
+- name: 7.4 Prepare service state and stable per-environment credentials
+  ansible.builtin.import_tasks: common/prepare.yml
+  become: true
+  when: infrastructure_services_any_enabled
+  tags: [infrastructure_services, infrastructure_services_secrets]
+
+- name: 7.5 Complete generated object-storage credentials
+  ansible.builtin.import_tasks: common/prepare_object_storage.yml
+  become: true
+  when:
+    - infrastructure_services_any_enabled
+    - infrastructure_services_resolved.minio.enabled
+  tags: [infrastructure_services, object_storage, minio]
+
+- name: 7.6 Converge isolated PostgreSQL services
+  ansible.builtin.import_tasks: postgres/main.yml
+  become: true
+  when: foundry_services_resolved.postgres.enabled
+  tags: [infrastructure_services, postgres]
+
+- name: 7.7 Converge isolated Redis services
+  ansible.builtin.import_tasks: redis/main.yml
+  become: true
+  when: foundry_services_resolved.redis.enabled
+  tags: [infrastructure_services, redis]
+
+- name: 7.8 Resolve authoritative environment networks for MinIO
+  ansible.builtin.import_tasks: minio/resolve.yml
+  become: true
+  when: infrastructure_services_resolved.minio.enabled
+  tags: [infrastructure_services, object_storage, minio]
+
+- name: 7.9 Verify Docker before managing MinIO
+  ansible.builtin.import_tasks: minio/docker_dependency.yml
+  become: true
+  when: infrastructure_services_resolved.minio.enabled
+  tags: [infrastructure_services, object_storage, minio]
+
+- name: 7.10 Discover MinIO ownership and collisions
+  ansible.builtin.import_tasks: minio/discovery.yml
+  become: true
+  when: infrastructure_services_resolved.minio.enabled
+  tags: [infrastructure_services, object_storage, minio]
+
+- name: 7.11 Converge MinIO S3 instances
+  ansible.builtin.import_tasks: minio/converge.yml
+  become: true
+  when: infrastructure_services_resolved.minio.enabled
+  tags: [infrastructure_services, object_storage, minio]
+
+- name: 7.12 Validate MinIO S3 health and isolation
+  ansible.builtin.import_tasks: minio/validate.yml
+  become: true
+  when: infrastructure_services_resolved.minio.enabled
+  tags: [infrastructure_services, object_storage, minio, infrastructure_services_result]
+
+- name: 7.13 Validate Runtime single-manager Swarm ownership
+  ansible.builtin.import_tasks: swarm/main.yml
+  become: true
+  when: infrastructure_services_swarm_enabled
+  tags: [infrastructure_services, swarm, dokploy]
+
+- name: 7.14 Converge Foundry-owned ingress overlay
+  ansible.builtin.import_tasks: ingress/main.yml
+  become: true
+  when: infrastructure_services_traefik_enabled
+  tags: [infrastructure_services, ingress, traefik, dokploy]
+
+- name: 7.15 Converge pinned Dokploy platform services
+  ansible.builtin.import_tasks: dokploy/main.yml
+  become: true
+  when: foundry_platform_resolved.dokploy.enabled
+  tags: [infrastructure_services, platform, dokploy]
+
+- name: 7.16 Converge the single Dokploy-compatible Traefik authority
+  ansible.builtin.import_tasks: traefik/main.yml
+  become: true
+  when: infrastructure_services_traefik_enabled
+  tags: [infrastructure_services, ingress, traefik]
+
+- name: 7.17 Validate Dokploy health and report onboarding state
+  ansible.builtin.import_tasks: dokploy/validate.yml
+  become: true
+  when: foundry_platform_resolved.dokploy.enabled
+  tags: [infrastructure_services, platform, dokploy, infrastructure_services_result]
+
+- name: 7.18 Publish non-secret service and backup contracts
+  ansible.builtin.import_tasks: output/main.yml
+  become: true
+  when: infrastructure_services_any_enabled
+  tags: [infrastructure_services, infrastructure_services_result]

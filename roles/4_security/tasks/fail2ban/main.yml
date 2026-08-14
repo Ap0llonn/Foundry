@@ -1,0 +1,94 @@
+---
+- name: Ensure Fail2ban jail directory exists
+  ansible.builtin.file:
+    path: /etc/fail2ban/jail.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: security_resolved.fail2ban.enabled
+
+- name: Inspect previous Foundry Fail2ban jail
+  ansible.builtin.stat:
+    path: "{{ security_fail2ban_jail }}"
+  register: security_fail2ban_previous_jail_check
+  when: security_resolved.fail2ban.enabled
+
+- name: Back up previous Foundry Fail2ban jail
+  ansible.builtin.slurp:
+    path: "{{ security_fail2ban_jail }}"
+  register: security_fail2ban_previous_jail
+  when:
+    - security_resolved.fail2ban.enabled
+    - security_fail2ban_previous_jail_check.stat.exists
+
+- name: Install only a valid Fail2ban policy
+  when: security_resolved.fail2ban.enabled
+  block:
+    - name: Install Foundry Fail2ban SSH jail candidate
+      ansible.builtin.template:
+        src: fail2ban-sshd.local.j2
+        dest: "{{ security_fail2ban_jail }}"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart Fail2ban
+
+    - name: Validate complete Fail2ban configuration before restart
+      ansible.builtin.command:
+        argv: [fail2ban-client, -t]
+      changed_when: false
+      check_mode: false
+
+  rescue:
+    - name: Restore previous Foundry Fail2ban jail
+      ansible.builtin.copy:
+        dest: "{{ security_fail2ban_jail }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ security_fail2ban_previous_jail.content | b64decode }}"
+      when: security_fail2ban_previous_jail_check.stat.exists
+
+    - name: Remove invalid Fail2ban jail when none existed before
+      ansible.builtin.file:
+        path: "{{ security_fail2ban_jail }}"
+        state: absent
+      when: not security_fail2ban_previous_jail_check.stat.exists
+
+    - name: Validate restored Fail2ban configuration
+      ansible.builtin.command:
+        argv: [fail2ban-client, -t]
+      changed_when: false
+      check_mode: false
+
+    - name: Report safe Fail2ban policy rollback
+      ansible.builtin.fail:
+        msg: >-
+          The Fail2ban candidate was invalid. Foundry restored the previous
+          valid jail and left the running service unchanged.
+
+- name: Enable and start Fail2ban
+  ansible.builtin.systemd_service:
+    name: "{{ security_fail2ban_service }}"
+    enabled: true
+    state: started
+  when: security_resolved.fail2ban.enabled
+
+- name: Remove Foundry Fail2ban jail when disabled
+  ansible.builtin.file:
+    path: "{{ security_fail2ban_jail }}"
+    state: absent
+  notify: Restart Fail2ban
+  when:
+    - not security_resolved.fail2ban.enabled
+    - "'fail2ban' in ansible_facts.packages"
+
+- name: Stop and disable Fail2ban when disabled
+  ansible.builtin.systemd_service:
+    name: "{{ security_fail2ban_service }}"
+    enabled: false
+    state: stopped
+  when:
+    - not security_resolved.fail2ban.enabled
+    - "'fail2ban' in ansible_facts.packages"

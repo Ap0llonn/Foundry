@@ -2,9 +2,18 @@
 {% for ssh_port in security_ssh_ports %}
 Port {{ ssh_port }}
 {% endfor %}
-PermitRootLogin {{ security_resolved.ssh.permit_root_login | ternary('yes', 'no') }}
+PermitRootLogin {{ security_resolved.ssh.root_login | ternary('yes', 'no') }}
 PasswordAuthentication {{ security_resolved.ssh.password_authentication | ternary('yes', 'no') }}
 KbdInteractiveAuthentication {{ security_resolved.ssh.password_authentication | ternary('yes', 'no') }}
+PermitEmptyPasswords {{ security_resolved.ssh.empty_passwords | ternary('yes', 'no') }}
 PubkeyAuthentication {{ security_resolved.ssh.public_key_authentication | ternary('yes', 'no') }}
+AllowAgentForwarding {{ security_resolved.ssh.forwarding.agent | ternary('yes', 'no') }}
+AllowTcpForwarding {{ security_resolved.ssh.forwarding.tcp | ternary('yes', 'no') }}
+X11Forwarding {{ security_resolved.ssh.forwarding.x11 | ternary('yes', 'no') }}
 MaxAuthTries {{ security_resolved.ssh.max_auth_tries }}
 LoginGraceTime {{ security_resolved.ssh.login_grace_time }}
+MaxSessions {{ security_resolved.ssh.max_sessions }}
+MaxStartups {{ security_resolved.ssh.max_startups }}
+{% if security_resolved.ssh.allow_groups | length > 0 %}
+AllowGroups {{ security_resolved.ssh.allow_groups | join(' ') }}
+{% endif %}

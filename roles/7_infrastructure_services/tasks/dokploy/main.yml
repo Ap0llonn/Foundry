@@ -1,0 +1,422 @@
+---
+- name: Inspect Dokploy bind-mount paths before creation
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop:
+    - "{{ infrastructure_services_dokploy_directory }}"
+    - "{{ infrastructure_services_traefik_directory }}"
+    - "{{ infrastructure_services_traefik_dynamic_directory }}"
+  register: infrastructure_services_dokploy_path_checks
+
+- name: Refuse unsafe Dokploy bind-mount paths
+  ansible.builtin.assert:
+    that:
+      - not item.stat.islnk | default(false)
+      - not item.stat.exists or item.stat.isdir
+      - not item.stat.exists or item.stat.pw_name == 'root'
+    fail_msg: "Dokploy bind path is symlinked, not a directory, or not root-owned: {{ item.item }}"
+  loop: "{{ infrastructure_services_dokploy_path_checks.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Ensure trusted Dokploy bind-mount directories exist before service creation
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+    follow: false
+  loop:
+    - "{{ infrastructure_services_dokploy_directory }}"
+    - "{{ infrastructure_services_traefik_directory }}"
+    - "{{ infrastructure_services_traefik_dynamic_directory }}"
+
+- name: Ensure root-only Dokploy secret state exists
+  ansible.builtin.include_tasks: common/validate_directory_path.yml
+  vars:
+    infrastructure_services_checked_directory: >-
+      {{ infrastructure_services_secret_directory }}/{{ project.name }}/dokploy
+
+- name: Create root-only Dokploy secret state directory
+  ansible.builtin.file:
+    path: "{{ infrastructure_services_secret_directory }}/{{ project.name }}/dokploy"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+    follow: false
+
+- name: Prepare stable Dokploy PostgreSQL password
+  ansible.builtin.include_tasks: dokploy/prepare_secret.yml
+  vars:
+    infrastructure_services_dokploy_secret_key: postgres_password
+    infrastructure_services_dokploy_secret_file: >-
+      {{ infrastructure_services_secret_directory }}/{{ project.name }}/dokploy/postgres-password-{{ foundry_platform_resolved.dokploy.secret_version }}
+    infrastructure_services_dokploy_secret_external_value: >-
+      {{ foundry_platform_resolved.dokploy.credentials.get('postgres_password', '') }}
+
+- name: Prepare stable Dokploy authentication secret
+  ansible.builtin.include_tasks: dokploy/prepare_secret.yml
+  vars:
+    infrastructure_services_dokploy_secret_key: auth_secret
+    infrastructure_services_dokploy_secret_file: >-
+      {{ infrastructure_services_secret_directory }}/{{ project.name }}/dokploy/auth-secret-{{ foundry_platform_resolved.dokploy.secret_version }}
+    infrastructure_services_dokploy_secret_external_value: >-
+      {{ foundry_platform_resolved.dokploy.credentials.get('auth_secret', '') }}
+
+- name: Resolve versioned Dokploy Docker secret declarations
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_secrets:
+      - name: "foundry-{{ project.name }}-dokploy-postgres-{{ foundry_platform_resolved.dokploy.secret_version }}"
+        target: postgres_password
+        path: "{{ infrastructure_services_secret_directory }}/{{ project.name }}/dokploy/postgres-password-{{ foundry_platform_resolved.dokploy.secret_version }}"
+      - name: "foundry-{{ project.name }}-dokploy-auth-{{ foundry_platform_resolved.dokploy.secret_version }}"
+        target: dokploy_auth_secret
+        path: "{{ infrastructure_services_secret_directory }}/{{ project.name }}/dokploy/auth-secret-{{ foundry_platform_resolved.dokploy.secret_version }}"
+  no_log: true
+
+- name: Read stable Dokploy secret sources from the managed host
+  ansible.builtin.slurp:
+    path: "{{ item.path }}"
+  loop: "{{ infrastructure_services_dokploy_secrets }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: infrastructure_services_dokploy_secret_sources
+  no_log: true
+
+- name: Inspect Dokploy Docker secret names
+  ansible.builtin.command:
+    argv: [docker, secret, inspect, "{{ item.name }}"]
+  loop: "{{ infrastructure_services_dokploy_secrets }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: infrastructure_services_dokploy_secret_inspections
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Refuse external same-name Docker secrets
+  ansible.builtin.assert:
+    that:
+      - >-
+        item.1.rc != 0
+        or (
+          ((item.1.stdout | from_json | first).Spec.Labels | default({}, true)).get('foundry.managed') == 'true'
+          and ((item.1.stdout | from_json | first).Spec.Labels | default({}, true)).get('foundry.project') == project.name
+          and ((item.1.stdout | from_json | first).Spec.Labels | default({}, true)).get('foundry.service') == 'dokploy'
+          and ((item.1.stdout | from_json | first).Spec.Labels | default({}, true)).get('foundry.secret-sha256')
+              == (item.2.content | b64decode | hash('sha256'))
+        )
+    fail_msg: >-
+      Same-name Dokploy Docker secret is external or its stable source changed.
+      Refusing replacement; increment platform.dokploy.secret_version for explicit rotation.
+  loop: >-
+    {{ infrastructure_services_dokploy_secrets
+       | zip(infrastructure_services_dokploy_secret_inspections.results,
+             infrastructure_services_dokploy_secret_sources.results) | list }}
+  loop_control:
+    label: "{{ item.0.name }}"
+  no_log: true
+
+- name: Create missing stable Dokploy Docker secrets
+  ansible.builtin.command:
+    argv:
+      - docker
+      - secret
+      - create
+      - --label
+      - foundry.managed=true
+      - --label
+      - "foundry.project={{ project.name }}"
+      - --label
+      - foundry.service=dokploy
+      - --label
+      - "foundry.secret-sha256={{ item.2.content | b64decode | hash('sha256') }}"
+      - "{{ item.0.name }}"
+      - "-"
+    stdin: "{{ item.2.content | b64decode }}"
+    stdin_add_newline: true
+  loop: >-
+    {{ infrastructure_services_dokploy_secrets
+       | zip(infrastructure_services_dokploy_secret_inspections.results,
+             infrastructure_services_dokploy_secret_sources.results) | list }}
+  loop_control:
+    label: "{{ item.0.name }}"
+  when: item.1.rc != 0
+  no_log: true
+
+- name: Resolve Dokploy persistent volume declarations
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_volumes:
+      - {name: dokploy-postgres, resource: dokploy-postgres-data}
+      - {name: dokploy, resource: dokploy-client-data}
+
+- name: Inspect Dokploy persistent volumes
+  ansible.builtin.command:
+    argv: [docker, volume, inspect, "{{ item.name }}"]
+  loop: "{{ infrastructure_services_dokploy_volumes }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: infrastructure_services_dokploy_volume_inspections
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Refuse external same-name Dokploy volumes
+  ansible.builtin.assert:
+    that:
+      - >-
+        item.rc != 0
+        or (
+          ((item.stdout | from_json | first).Labels | default({}, true)).get('foundry.managed') == 'true'
+          and ((item.stdout | from_json | first).Labels | default({}, true)).get('foundry.project') == project.name
+          and ((item.stdout | from_json | first).Labels | default({}, true)).get('foundry.service') == 'dokploy'
+          and ((item.stdout | from_json | first).Labels | default({}, true)).get('foundry.resource') == item.item.resource
+        )
+    fail_msg: Same-name Dokploy volume is external; refusing adoption/deletion.
+  loop: "{{ infrastructure_services_dokploy_volume_inspections.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Create missing labeled Dokploy volumes
+  ansible.builtin.command:
+    argv:
+      - docker
+      - volume
+      - create
+      - --label
+      - foundry.managed=true
+      - --label
+      - "foundry.project={{ project.name }}"
+      - --label
+      - foundry.service=dokploy
+      - --label
+      - "foundry.resource={{ item.0.resource }}"
+      - "{{ item.0.name }}"
+  loop: >-
+    {{ infrastructure_services_dokploy_volumes | zip(infrastructure_services_dokploy_volume_inspections.results) | list }}
+  loop_control:
+    label: "{{ item.0.name }}"
+  when: item.1.rc != 0
+
+- name: Resolve Dokploy routing and immutable service fingerprints
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_host_rule: >-
+      {{
+        infrastructure_services_dokploy_hosts | map('regex_replace', '^(.*)$', 'Host(`\\1`)') | join(' || ')
+        if infrastructure_services_domain_enabled else 'PathPrefix(`/`)'
+      }}
+    infrastructure_services_dokploy_entrypoint: >-
+      {{ 'web' if infrastructure_services_domain_enabled else 'management' }}
+    infrastructure_services_dokploy_allowlist: >-
+      {{ (management | default({})).get('allowed_cidrs', []) | join(',') }}
+    infrastructure_services_dokploy_postgres_config_hash: >-
+      {{ {
+        'image': foundry_platform_resolved.dokploy.postgres_image,
+        'network': foundry_platform_resolved.traefik.ingress_network,
+        'secret': infrastructure_services_dokploy_secrets[0].name,
+        'volume': 'dokploy-postgres'
+      } | to_json | hash('sha256') }}
+    infrastructure_services_dokploy_config_hash: >-
+      {{ {
+        'image': foundry_platform_resolved.dokploy.image,
+        'network': foundry_platform_resolved.traefik.ingress_network,
+        'secrets': infrastructure_services_dokploy_secrets | map(attribute='name') | list,
+        'domain_enabled': infrastructure_services_domain_enabled,
+        'host_rule': (
+          infrastructure_services_dokploy_hosts | map('regex_replace', '^(.*)$', 'Host(`\\1`)') | join(' || ')
+          if infrastructure_services_domain_enabled else 'PathPrefix(`/`)'
+        ),
+        'entrypoint': ('web' if infrastructure_services_domain_enabled else 'management'),
+        'allowlist': (management | default({})).get('allowed_cidrs', []) | sort,
+        'tls': foundry_platform_resolved.traefik.tls.enabled
+      } | to_json | hash('sha256') }}
+
+- name: Inspect Dokploy internal PostgreSQL service
+  ansible.builtin.command:
+    argv: [docker, service, inspect, "{{ infrastructure_services_dokploy_postgres_service_name }}"]
+  register: infrastructure_services_dokploy_postgres_inspect
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Refuse external or incompatible Dokploy PostgreSQL service
+  ansible.builtin.assert:
+    that:
+      - >-
+        infrastructure_services_dokploy_postgres_inspect.rc != 0
+        or (
+          ((infrastructure_services_dokploy_postgres_inspect.stdout | from_json | first).Spec.Labels | default({}, true)).get('foundry.managed') == 'true'
+          and ((infrastructure_services_dokploy_postgres_inspect.stdout | from_json | first).Spec.Labels | default({}, true)).get('foundry.project') == project.name
+          and ((infrastructure_services_dokploy_postgres_inspect.stdout | from_json | first).Spec.Labels | default({}, true)).get('foundry.service') == 'dokploy-postgres'
+        )
+    fail_msg: Same-name Dokploy PostgreSQL service is external; refusing adoption.
+
+- name: Resolve Dokploy PostgreSQL service reconciliation
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_postgres_recreate: >-
+      {{
+        infrastructure_services_dokploy_postgres_inspect.rc == 0
+        and ((infrastructure_services_dokploy_postgres_inspect.stdout | from_json | first).Spec.Labels | default({}, true)).get('foundry.config-sha256')
+            != infrastructure_services_dokploy_postgres_config_hash
+      }}
+
+- name: Recreate drifted owned Dokploy PostgreSQL service while preserving its volume
+  ansible.builtin.command:
+    argv: [docker, service, rm, "{{ infrastructure_services_dokploy_postgres_service_name }}"]
+  when: infrastructure_services_dokploy_postgres_recreate
+
+- name: Create missing Dokploy internal PostgreSQL service
+  ansible.builtin.command:
+    argv:
+      - docker
+      - service
+      - create
+      - --name
+      - "{{ infrastructure_services_dokploy_postgres_service_name }}"
+      - --replicas
+      - "1"
+      - --constraint
+      - node.role==manager
+      - --network
+      - "{{ foundry_platform_resolved.traefik.ingress_network }}"
+      - --label
+      - foundry.managed=true
+      - --label
+      - "foundry.project={{ project.name }}"
+      - --label
+      - foundry.service=dokploy-postgres
+      - --label
+      - "foundry.config-sha256={{ infrastructure_services_dokploy_postgres_config_hash }}"
+      - --env
+      - POSTGRES_USER=dokploy
+      - --env
+      - POSTGRES_DB=dokploy
+      - --env
+      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
+      - --secret
+      - "source={{ infrastructure_services_dokploy_secrets[0].name }},target=/run/secrets/postgres_password"
+      - --mount
+      - type=volume,source=dokploy-postgres,target=/var/lib/postgresql/data
+      - --restart-condition
+      - on-failure
+      - "{{ foundry_platform_resolved.dokploy.postgres_image }}"
+  register: infrastructure_services_dokploy_postgres_create
+  retries: 5
+  delay: 2
+  until: infrastructure_services_dokploy_postgres_create.rc == 0
+  when: infrastructure_services_dokploy_postgres_inspect.rc != 0 or infrastructure_services_dokploy_postgres_recreate
+  no_log: true
+
+- name: Wait for Dokploy PostgreSQL replica
+  ansible.builtin.command:
+    argv:
+      - docker
+      - service
+      - ls
+      - --filter
+      - "name={{ infrastructure_services_dokploy_postgres_service_name }}"
+      - --format
+      - "{{ '{{.Replicas}}' }}"
+  register: infrastructure_services_dokploy_postgres_replicas
+  changed_when: false
+  retries: "{{ infrastructure_services_health_retries }}"
+  delay: "{{ infrastructure_services_health_delay }}"
+  until: infrastructure_services_dokploy_postgres_replicas.stdout == '1/1'
+
+- name: Inspect Dokploy application service
+  ansible.builtin.command:
+    argv: [docker, service, inspect, "{{ infrastructure_services_dokploy_service_name }}"]
+  register: infrastructure_services_dokploy_inspect
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Refuse external or incompatible Dokploy application service
+  ansible.builtin.assert:
+    that:
+      - >-
+        infrastructure_services_dokploy_inspect.rc != 0
+        or (
+          ((infrastructure_services_dokploy_inspect.stdout | from_json | first).Spec.Labels | default({}, true)).get('foundry.managed') == 'true'
+          and ((infrastructure_services_dokploy_inspect.stdout | from_json | first).Spec.Labels | default({}, true)).get('foundry.project') == project.name
+          and ((infrastructure_services_dokploy_inspect.stdout | from_json | first).Spec.Labels | default({}, true)).get('foundry.service') == 'dokploy'
+        )
+    fail_msg: Same-name Dokploy service is external; refusing adoption.
+
+- name: Resolve Dokploy application service reconciliation
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_recreate: >-
+      {{
+        infrastructure_services_dokploy_inspect.rc == 0
+        and ((infrastructure_services_dokploy_inspect.stdout | from_json | first).Spec.Labels | default({}, true)).get('foundry.config-sha256')
+            != infrastructure_services_dokploy_config_hash
+      }}
+
+- name: Recreate drifted owned Dokploy service while preserving its state volume
+  ansible.builtin.command:
+    argv: [docker, service, rm, "{{ infrastructure_services_dokploy_service_name }}"]
+  when: infrastructure_services_dokploy_recreate
+
+- name: Create missing pinned Dokploy service
+  ansible.builtin.command:
+    argv: >-
+      {{
+        ['docker', 'service', 'create', '--name', infrastructure_services_dokploy_service_name,
+         '--replicas', '1', '--constraint', 'node.role==manager',
+         '--network', foundry_platform_resolved.traefik.ingress_network,
+         '--label', 'foundry.managed=true', '--label', 'foundry.project=' + project.name,
+         '--label', 'foundry.service=dokploy',
+         '--label', 'foundry.config-sha256=' + infrastructure_services_dokploy_config_hash,
+         '--mount', 'type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock',
+         '--mount', 'type=bind,source=' + infrastructure_services_dokploy_directory + ',target=/etc/dokploy',
+         '--mount', 'type=volume,source=dokploy,target=/root/.docker',
+         '--secret', 'source=' + infrastructure_services_dokploy_secrets[0].name + ',target=/run/secrets/postgres_password',
+         '--secret', 'source=' + infrastructure_services_dokploy_secrets[1].name + ',target=/run/secrets/dokploy_auth_secret',
+         '--env', 'POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password',
+         '--env', 'BETTER_AUTH_SECRET_FILE=/run/secrets/dokploy_auth_secret',
+         '--update-parallelism', '1', '--update-order', 'stop-first',
+         '--restart-condition', 'on-failure']
+        + ['--label', 'traefik.enable=true',
+           '--label', 'traefik.http.routers.dokploy.rule=' + infrastructure_services_dokploy_host_rule,
+           '--label', 'traefik.http.routers.dokploy.entrypoints=' + infrastructure_services_dokploy_entrypoint,
+           '--label', 'traefik.http.routers.dokploy.middlewares=' + ('dokploy-allow@swarm,dokploy-redirect@swarm' if foundry_platform_resolved.traefik.tls.enabled else 'dokploy-allow@swarm'),
+           '--label', 'traefik.http.middlewares.dokploy-allow.ipallowlist.sourcerange=' + infrastructure_services_dokploy_allowlist,
+           '--label', 'traefik.http.services.dokploy.loadbalancer.server.port=3000']
+        + (['--label', 'traefik.http.middlewares.dokploy-redirect.redirectscheme.scheme=https',
+            '--label', 'traefik.http.middlewares.dokploy-redirect.redirectscheme.permanent=true']
+           if foundry_platform_resolved.traefik.tls.enabled else [])
+        + (['--label', 'traefik.http.routers.dokploy-secure.rule=' + infrastructure_services_dokploy_host_rule,
+            '--label', 'traefik.http.routers.dokploy-secure.entrypoints=websecure',
+            '--label', 'traefik.http.routers.dokploy-secure.tls=true',
+            '--label', 'traefik.http.routers.dokploy-secure.tls.certresolver=letsencrypt',
+            '--label', 'traefik.http.routers.dokploy-secure.service=dokploy',
+            '--label', 'traefik.http.routers.dokploy-secure.middlewares=dokploy-allow@swarm']
+           if infrastructure_services_domain_enabled and foundry_platform_resolved.traefik.tls.enabled else [])
+        + [foundry_platform_resolved.dokploy.image]
+      }}
+  register: infrastructure_services_dokploy_create
+  retries: 5
+  delay: 2
+  until: infrastructure_services_dokploy_create.rc == 0
+  when: infrastructure_services_dokploy_inspect.rc != 0 or infrastructure_services_dokploy_recreate
+  no_log: true
+
+- name: Wait for Dokploy application replica
+  ansible.builtin.command:
+    argv:
+      - docker
+      - service
+      - ls
+      - --filter
+      - "name={{ infrastructure_services_dokploy_service_name }}"
+      - --format
+      - "{{ '{{.Replicas}}' }}"
+  register: infrastructure_services_dokploy_replicas
+  changed_when: false
+  retries: "{{ infrastructure_services_health_retries }}"
+  delay: "{{ infrastructure_services_health_delay }}"
+  until: infrastructure_services_dokploy_replicas.stdout == '1/1'

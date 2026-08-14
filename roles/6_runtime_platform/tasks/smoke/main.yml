@@ -1,0 +1,74 @@
+---
+- name: Inspect the reserved Runtime certification container name
+  ansible.builtin.command:
+    argv: [docker, container, inspect, "{{ runtime_docker_smoke_container }}"]
+  register: runtime_docker_smoke_collision
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Refuse to touch a pre-existing certification-name container
+  ansible.builtin.assert:
+    that:
+      - runtime_docker_smoke_collision.rc != 0
+    fail_msg: >-
+      Container {{ runtime_docker_smoke_container }} already exists. Foundry will
+      not adopt or remove an external Docker resource.
+
+- name: Inspect the certified smoke-test image
+  ansible.builtin.command:
+    argv: [docker, image, inspect, "{{ runtime_resolved.docker.smoke_test.image }}"]
+  register: runtime_docker_smoke_image_state
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Pull the missing digest-pinned certification image
+  ansible.builtin.command:
+    argv: [docker, image, pull, "{{ runtime_resolved.docker.smoke_test.image }}"]
+  when: runtime_docker_smoke_image_state.rc != 0
+  register: runtime_docker_smoke_image_pull
+  changed_when: true
+  check_mode: false
+
+- name: Execute a digest-pinned disposable runtime certification container
+  block:
+    - name: Run the isolated Runtime smoke test
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --network
+          - none
+          - --pull
+          - never
+          - --name
+          - "{{ runtime_docker_smoke_container }}"
+          - "{{ runtime_resolved.docker.smoke_test.image }}"
+      register: runtime_docker_smoke_result
+      changed_when: false
+      check_mode: false
+  always:
+    - name: Remove only a failed Foundry certification container
+      ansible.builtin.command:
+        argv: [docker, container, rm, --force, "{{ runtime_docker_smoke_container }}"]
+      register: runtime_docker_smoke_cleanup
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+- name: Verify certification container cleanup
+  ansible.builtin.command:
+    argv: [docker, container, inspect, "{{ runtime_docker_smoke_container }}"]
+  register: runtime_docker_smoke_cleanup_check
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Require successful execution and complete smoke-test cleanup
+  ansible.builtin.assert:
+    that:
+      - runtime_docker_smoke_result.rc == 0
+      - runtime_docker_smoke_cleanup_check.rc != 0
+    fail_msg: Docker could not execute and clean up the certification container.

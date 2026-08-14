@@ -1,0 +1,45 @@
+---
+- name: Inspect converged environment networks
+  ansible.builtin.command:
+    argv: "{{ ['docker', 'network', 'inspect'] + (networking_resolved_network_list | map(attribute='network_name') | list) }}"
+  register: networking_final_network_inspection
+  changed_when: false
+  check_mode: false
+
+- name: Resolve final environment network state
+  ansible.builtin.set_fact:
+    networking_final_networks: "{{ networking_final_network_inspection.stdout | from_json }}"
+    networking_foundry_attachments: []
+
+- name: Validate every environment network contract
+  ansible.builtin.assert:
+    that:
+      - item.0.Name == item.1.network_name
+      - item.0.Driver == networking_network_driver
+      - not item.0.Internal
+      - (item.0.Labels | default({}, true)).get(networking_label_managed) == 'true'
+      - (item.0.Labels | default({}, true)).get(networking_label_project) == project.name
+      - (item.0.Labels | default({}, true)).get(networking_label_environment) == item.1.environment
+      - (item.0.Labels | default({}, true)).get(networking_label_resource) == networking_resource_type
+    fail_msg: "Environment network {{ item.1.network_name }} does not match the Foundry V1 contract."
+  loop: "{{ networking_final_networks | zip(networking_resolved_network_list) | list }}"
+  loop_control:
+    label: "{{ item.1.environment }} -> {{ item.1.network_name }}"
+
+- name: Collect attached container identities for isolation validation
+  ansible.builtin.include_tasks: collect_attachments.yml
+  loop: "{{ networking_final_networks | zip(networking_resolved_network_list) | list }}"
+  loop_control:
+    loop_var: networking_attachment_network
+    label: "{{ networking_attachment_network.1.environment }}"
+
+- name: Validate labeled workload environment attachments
+  ansible.builtin.include_tasks: validate_attachment.yml
+  loop: "{{ networking_foundry_attachments }}"
+  loop_control:
+    loop_var: networking_attachment
+    label: "{{ networking_attachment.environment }} -> {{ networking_attachment.container_id }}"
+
+- name: Report authoritative environment network mapping
+  ansible.builtin.debug:
+    var: foundry_resolved_networks

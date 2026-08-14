@@ -1,0 +1,7 @@
+---
+project:
+  name: test-project
+environments:
+  - name: dev
+  - name: dev
+networking: {}

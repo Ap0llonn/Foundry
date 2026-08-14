@@ -3,86 +3,97 @@ security_defaults:
   ssh:
     enabled: true
     port: 22
-    permit_root_login: false
+    root_login: false
     password_authentication: false
     public_key_authentication: true
+    empty_passwords: false
+    forwarding:
+      agent: false
+      tcp: false
+      x11: false
     max_auth_tries: 4
     login_grace_time: 60
-
+    max_sessions: 10
+    max_startups: "10:30:60"
+    allow_groups: []
+    accept_host_key_change: false
   firewall:
     enabled: true
     default_incoming: deny
     default_outgoing: allow
-    automatic_rules: true
-    additional_rules: []
-
+    ipv6: true
+    unexpected_listener_policy: warn
   fail2ban:
     enabled: true
+    backend: systemd
+    banaction: ufw
+    ignore: []
     ssh:
       enabled: true
-      max_retries: 5
-      ban_time: 3600
-
+      maxretry: 5
+      findtime: 10m
+      bantime: 1h
   updates:
     automatic_security_updates: true
     automatic_reboot: false
+    validate_dry_run: false
+  apparmor:
+    enabled: true
+  logging:
+    persistent_journal: true
 
-# Future slices may provide required connectivity here. Internal services must
-# never be added merely because their packages are installed.
-security_firewall_derived_rules: []
+security_network_exposure_config: "{{ (network | default({})).get('exposure', []) }}"
+security_management_allowed_cidrs: "{{ (management | default({})).get('allowed_cidrs', []) }}"
+security_management_restrict_by_cidr: "{{ (management | default({})).get('restrict_by_cidr', false) }}"
 
-security_admin_group: sudo
 security_ssh_service: ssh
 security_sshd_binary: /usr/sbin/sshd
 security_sshd_dropin: /etc/ssh/sshd_config.d/00-foundry.conf
+security_ssh_host_key_state_file: /var/lib/foundry/security-ssh-host-keys.yml
 security_fail2ban_service: fail2ban
 security_fail2ban_jail: /etc/fail2ban/jail.d/00-foundry-sshd.local
 security_firewall_state_directory: /var/lib/foundry
 security_firewall_state_file: /var/lib/foundry/security-firewall-rules.yml
+security_journald_dropin: /etc/systemd/journald.conf.d/00-foundry-persistent.conf
 security_controller_state_directory: "{{ playbook_dir }}/.foundry/state"
-security_controller_state_file: >-
-  {{ security_controller_state_directory }}/{{ inventory_hostname }}.yml
+security_controller_state_file: "{{ security_controller_state_directory }}/{{ inventory_hostname }}.yml"
 security_ssh_probe_timeout: 10
 security_ssh_connection_timeout: 45
 security_unattended_reboot_time: "03:00"
+security_reboot_required_file: /var/run/reboot-required
+security_firewall_comment_prefix: "foundry:"
 
-security_allowed_root_keys:
-  - ssh
-  - firewall
-  - fail2ban
-  - updates
-
+security_allowed_root_keys: [ssh, firewall, fail2ban, updates, apparmor, logging]
+security_allowed_network_keys: [exposure]
+security_allowed_management_keys: [allowed_cidrs, restrict_by_cidr]
+security_allowed_exposure_keys: [name, port, protocol, scope]
 security_allowed_ssh_keys:
   - enabled
   - port
-  - permit_root_login
+  - root_login
   - password_authentication
   - public_key_authentication
+  - empty_passwords
+  - forwarding
   - max_auth_tries
   - login_grace_time
-
+  - max_sessions
+  - max_startups
+  - allow_groups
+  - accept_host_key_change
+security_allowed_ssh_forwarding_keys: [agent, tcp, x11]
 security_allowed_firewall_keys:
   - enabled
   - default_incoming
   - default_outgoing
-  - automatic_rules
-  - additional_rules
+  - ipv6
+  - unexpected_listener_policy
+security_allowed_fail2ban_keys: [enabled, backend, banaction, ignore, ssh]
+security_allowed_fail2ban_ssh_keys: [enabled, maxretry, findtime, bantime]
+security_allowed_update_keys: [automatic_security_updates, automatic_reboot, validate_dry_run]
+security_allowed_apparmor_keys: [enabled]
+security_allowed_logging_keys: [persistent_journal]
 
-security_allowed_firewall_rule_keys:
-  - name
-  - port
-  - protocol
-  - source
-
-security_allowed_fail2ban_keys:
-  - enabled
-  - ssh
-
-security_allowed_fail2ban_ssh_keys:
-  - enabled
-  - max_retries
-  - ban_time
-
-security_allowed_update_keys:
-  - automatic_security_updates
-  - automatic_reboot
+security_duration_pattern: '^[1-9][0-9]*[smhdw]?$'
+security_max_startups_pattern: '^[1-9][0-9]*:[1-9][0-9]*:[1-9][0-9]*$'
+security_exposure_name_pattern: '^[a-z][a-z0-9-]{0,47}$'

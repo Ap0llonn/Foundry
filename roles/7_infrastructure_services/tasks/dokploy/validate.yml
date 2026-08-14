@@ -1,0 +1,70 @@
+---
+- name: Validate Dokploy service replica state
+  ansible.builtin.command:
+    argv: [docker, service, ls, --filter, "name={{ item }}", --format, "{{ '{{.Replicas}}' }}"]
+  loop:
+    - "{{ infrastructure_services_dokploy_postgres_service_name }}"
+    - "{{ infrastructure_services_dokploy_service_name }}"
+  register: infrastructure_services_dokploy_service_health
+  changed_when: false
+  failed_when: item.rc | default(0) != 0 or item.stdout | default('') != '1/1'
+
+- name: Resolve the local Dokploy task container
+  ansible.builtin.command:
+    argv:
+      - docker
+      - container
+      - ls
+      - --quiet
+      - --filter
+      - label=com.docker.swarm.service.name=dokploy
+  register: infrastructure_services_dokploy_task_container
+  changed_when: false
+  failed_when: infrastructure_services_dokploy_task_container.stdout_lines | length != 1
+
+- name: Probe Dokploy application health inside its task network namespace
+  ansible.builtin.command:
+    argv:
+      - docker
+      - container
+      - exec
+      - "{{ infrastructure_services_dokploy_task_container.stdout_lines | first }}"
+      - wget
+      - --spider
+      - --quiet
+      - http://127.0.0.1:3000/api/trpc/settings.health
+  register: infrastructure_services_dokploy_health_probe
+  changed_when: false
+  retries: "{{ infrastructure_services_health_retries }}"
+  delay: "{{ infrastructure_services_health_delay }}"
+  until: infrastructure_services_dokploy_health_probe.rc == 0
+
+- name: Inspect Dokploy registration redirect without creating an administrator
+  ansible.builtin.command:
+    argv:
+      - docker
+      - container
+      - exec
+      - "{{ infrastructure_services_dokploy_task_container.stdout_lines | first }}"
+      - wget
+      - --server-response
+      - --spider
+      - --max-redirect=0
+      - http://127.0.0.1:3000/register
+  register: infrastructure_services_dokploy_registration_probe
+  changed_when: false
+  failed_when: false
+
+- name: Resolve and validate Dokploy onboarding state
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_onboarding_required: >-
+      {{ 'Location: /' not in infrastructure_services_dokploy_registration_probe.stderr }}
+  failed_when: >-
+    '200 OK' not in infrastructure_services_dokploy_registration_probe.stderr
+    and 'Location: /' not in infrastructure_services_dokploy_registration_probe.stderr
+
+- name: Report mandatory Dokploy onboarding state
+  ansible.builtin.debug:
+    msg: >-
+      Dokploy is healthy at {{ infrastructure_services_dokploy_endpoint }}.
+      Initial administrator onboarding required={{ infrastructure_services_dokploy_onboarding_required }}.

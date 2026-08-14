@@ -1,0 +1,29 @@
+---
+- name: Read installed Foundry Fail2ban policy
+  ansible.builtin.slurp:
+    path: "{{ security_fail2ban_jail }}"
+  register: security_fail2ban_policy
+  when: security_resolved.fail2ban.enabled
+
+- name: Validate Fail2ban service, jail, backend, action, and limits
+  ansible.builtin.assert:
+    that:
+      - (security_fail2ban_service + '.service') in ansible_facts.services
+      - ansible_facts.services[security_fail2ban_service + '.service'].state == 'running'
+      - (security_fail2ban_policy.content | b64decode) is search('(?m)^backend = ' + security_resolved.fail2ban.backend + '$')
+      - (security_fail2ban_policy.content | b64decode) is search('(?m)^banaction = ' + security_resolved.fail2ban.banaction + '$')
+      - (security_fail2ban_policy.content | b64decode) is search('(?m)^maxretry = ' + (security_resolved.fail2ban.ssh.maxretry | string) + '$')
+      - (security_fail2ban_policy.content | b64decode) is search('(?m)^findtime = ' + security_resolved.fail2ban.ssh.findtime + '$')
+      - (security_fail2ban_policy.content | b64decode) is search('(?m)^bantime = ' + security_resolved.fail2ban.ssh.bantime + '$')
+      - (security_fail2ban_policy.content | b64decode) is search('(?m)^ignoreip = ' + (security_fail2ban_effective_ignore | join(' ')) + '$')
+    fail_msg: Fail2ban effective policy does not match the V1 SSH protection profile.
+  when: security_resolved.fail2ban.enabled
+
+- name: Validate active Fail2ban SSH jail
+  ansible.builtin.command:
+    argv: [fail2ban-client, status, sshd]
+  changed_when: false
+  check_mode: false
+  when:
+    - security_resolved.fail2ban.enabled
+    - security_resolved.fail2ban.ssh.enabled

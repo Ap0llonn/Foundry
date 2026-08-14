@@ -1,0 +1,31 @@
+---
+- name: Add Redis endpoint and optional backup metadata
+  ansible.builtin.set_fact:
+    foundry_resolved_services: >-
+      {{
+        foundry_resolved_services | combine({
+          redis_instance.environment: {
+            'redis': {
+              'host': 'redis',
+              'port': 6379,
+              'container_name': redis_instance.container_name,
+              'network_name': redis_instance.network_name,
+              'persistence': redis_instance.persistence,
+              'volume_name': (redis_instance.volume_name if redis_instance.persistence else none)
+            }
+          }
+        }, recursive=true)
+      }}
+    infrastructure_services_backup_targets: >-
+      {{
+        infrastructure_services_backup_targets
+        + ([{
+          'project': project.name,
+          'environment': redis_instance.environment,
+          'service': 'redis',
+          'container_name': redis_instance.container_name,
+          'volume_name': redis_instance.volume_name,
+          'mount_path': '/data'
+        }] if redis_instance.persistence else [])
+      }}
+  no_log: true

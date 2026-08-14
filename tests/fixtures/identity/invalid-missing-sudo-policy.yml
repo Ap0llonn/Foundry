@@ -1,0 +1,12 @@
+---
+identity:
+  groups: []
+  users:
+    - name: alice
+      state: present
+      admin: true
+      groups: []
+      ssh_keys:
+        - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f alice@acceptance.invalid"
+      sudo:
+        mode: inherit

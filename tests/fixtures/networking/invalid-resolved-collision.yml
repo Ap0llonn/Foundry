@@ -1,0 +1,11 @@
+---
+project:
+  name: test-project
+environments:
+  - name: dev
+    network:
+      name: shared-network
+  - name: prod
+    network:
+      name: shared-network
+networking: {}

@@ -1,0 +1,13 @@
+---
+project:
+  name: fixture-project
+environments:
+  - name: dev
+services:
+  postgres:
+    enabled: true
+    resources:
+      memory: 512mb
+network:
+  exposure: []
+

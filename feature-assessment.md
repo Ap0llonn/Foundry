@@ -1,13 +1,14 @@
 # Foundry VM Feature and Production-Readiness Assessment
 
 Date: 2026-08-14  
-Scope: implemented roles `2_os_base_system`, `3_identity_access`, and `4_security`
+Scope: implemented roles `2_os_base_system`, `3_identity_access`, `4_security`,
+`5_networking`, and the MinIO portion of `7_infrastructure_services`
 
 ## Executive verdict
 
-The implemented roles provide a useful bootstrap baseline, but Foundry is **not yet production-ready**. The strongest existing parts are the modular role structure, early input validation, explicit SSH-key management, UFW defaults, SSH syntax checks, Fail2ban, unattended security updates, and end-of-role assertions.
+The implemented roles provide a useful bootstrap baseline, but Foundry is **not yet production-ready**. The strongest existing parts are the modular role structure, early input validation, explicit identity/sudo policy, ownership-scoped UFW convergence, transactional SSH management, Fail2ban, unattended security updates, and end-of-role assertions.
 
-The next milestone should focus on access safety, transactional SSH changes, firewall/SSH port migration, group ownership boundaries, reproducible dependencies, reboot recovery, and external validation. A robust VM also requires the currently unimplemented networking, runtime, infrastructure-service, application, and observability layers.
+The next milestone should certify access, SSH migration/rollback, Docker Runtime and networking, MinIO persistence, reboot recovery, and dependency reproducibility on disposable machines and CI. A robust VM also requires the remaining infrastructure-service, application, external-networking, and observability layers.
 
 “Production-ready” in this document means that a fresh supported VM can be converged, safely re-run, rebooted, recovered, monitored, and restored without accidental loss of administrative access.
 
@@ -16,8 +17,11 @@ The next milestone should focus on access safety, transactional SSH changes, fir
 | Layer | Implemented baseline | Current maturity |
 |---|---|---|
 | [2. OS / Base System](roles/2_os_base_system/tasks/main.yml) | OS checks, package maintenance, base packages, hostname, Chrony, locale, filesystems/directories, services, final validation | Functional bootstrap; maintenance and recovery controls incomplete |
-| [3. Identity & Access](roles/3_identity_access/tasks/main.yml) | Input validation, local groups/users, SSH keys, admin group assignment, state validation | Good declarative start; privilege and ownership-boundary risks remain |
-| [4. Security](roles/4_security/tasks/main.yml) | UFW, SSH hardening, transactional SSH-port migration, Fail2ban, unattended upgrades, preflight lockout checks, final validation | Useful host hardening; deployment and failure-injection verification remain |
+| [3. Identity & Access](roles/3_identity_access/tasks/main.yml) | Input validation, Foundry-owned groups, local users/SSH keys, explicit sudo policy, state validation | V1 controls implemented; fresh-VM and recovery certification remain |
+| [4. Security](roles/4_security/tasks/main.yml) | Owned UFW exposure, transactional SSH hardening/migration, host-key identity, Fail2ban, unattended upgrades, AppArmor, persistent journal, final validation | V1 controls implemented; disposable-VM failure, migration, and reboot certification remain |
+| [6. Runtime](roles/6_runtime_platform/tasks/main.yml) | Official pinned Docker Engine/CLI/containerd/Buildx/Compose supply chain, owned validated daemon policy, bounded logging, socket/storage/service health, smoke test | Implemented and live-validated; fresh-VM, injected drift/rollback, and reboot certification pending |
+| [5. Networking](roles/5_networking/tasks/main.yml) | Certified Runtime dependency plus deterministic per-environment bridge networks, label-scoped ownership, collision/stale safety, authoritative resolver, isolation validation | Implemented; Docker-host reboot/isolation certification pending |
+| [7. Infrastructure services](roles/7_infrastructure_services/tasks/main.yml) | Internal environment-scoped MinIO S3 instances consuming role-5 networks | MinIO implemented; runtime, persistence, recovery, and idempotence certification pending |
 
 ## Priority definitions
 
@@ -36,7 +40,7 @@ The next milestone should focus on access safety, transactional SSH changes, fir
 | P0-05 | Security | **Implemented in code; migration testing pending.** The controller checks the new SSH banner, resets Ansible's persistent connection, establishes a fresh authenticated transport, and executes a task before removing the old endpoint. | Prove success and authentication-failure rollback with the expected controller user/key. Add a reboot-and-reconnect test before closing this blocker. |
 | P0-06 | Delivery | **Implemented in code; first CI execution pending.** Foundry now owns a Python 3.14.7 virtualenv, pins `ansible-core` and every Python dependency, installs exact project-local collection versions, verifies the resolved environment, and recreates the same controller in CI. | Run the new workflow successfully on the remote repository. Dependency updates must modify the input, lock, collection requirements, and immutable CI action references intentionally and together. |
 | P0-07 | Recovery / operations | There is no backup policy, restore workflow, persistent/central log path, monitoring, or alerting. A correctly configured VM can still fail silently or be impossible to recover. | Implement role 9 with health, capacity, security-event, update/reboot, time-sync, and backup alerts. Define off-host backups and complete at least one timed restore test. |
-| P0-08 | End-to-end platform | Roles 5–9 are placeholders. Network policy, runtime, infrastructure services, applications, and observability are not provisioned or validated. | Implement those layers with explicit contracts. “VM production-ready” cannot be declared until the actual workload is deployed, exposed only as intended, monitored, backed up, and exercised through an end-to-end health check. |
+| P0-08 | End-to-end platform | Docker Runtime, environment networking, and internal MinIO now have explicit contracts, but remaining infrastructure services, applications, external networking, backup, and observability are not implemented. Runtime fresh-VM/reboot/drift certification also remains open. | Implement the remaining layers and complete Runtime certification. “VM production-ready” cannot be declared until the actual workload is deployed, exposed only as intended, monitored, backed up, and exercised through an end-to-end health and restore test. |
 
 ## Role 2 — OS / Base System
 
@@ -89,30 +93,38 @@ The next milestone should focus on access safety, transactional SSH changes, fir
 
 ## Role 4 — Security
 
-### What is already solid
+### Implemented controls and certification status
 
-- Configuration and lockout risks are validated before package/firewall/SSH changes.
-- UFW defaults to deny incoming traffic and allow outgoing traffic.
-- SSH is managed through a drop-in and syntax validation is attempted before reload.
-- Root/password login hardening, Fail2ban, and unattended security updates are configurable.
-- The final phase checks effective SSH, firewall, Fail2ban, and update state.
+- Configuration and lockout risks are validated before package, firewall, or SSH mutation.
+- A complete SSH baseline is managed through a validated drop-in. Port migration keeps both
+  endpoints until a fresh authenticated and privileged connection succeeds, persists the
+  validated controller endpoint, and then retires the old listener and owned firewall rule.
+- SSH host keys are preserved and fingerprinted; unexpected replacement fails closed unless
+  rotation is explicitly approved.
+- Global `network.exposure` intent is expanded into stable, comment-owned UFW rules. Foundry
+  removes only its own stale rules and validates default-deny policy, IPv4/IPv6 parity, and
+  wildcard listeners.
+- Fail2ban owns explicit timing, retry, backend, action, and trusted-source policy. The active
+  controller source is automatically protected from accidental banning.
+- Automatic security updates remain separate from broad OS maintenance; effective APT policy,
+  timers, failures, and pending reboot state are validated without authorizing a reboot.
+- AppArmor kernel/service/enforcement state and persistent journald storage are validated.
+- Static policy tests and a converged-host idempotency run pass. The destructive port migration,
+  rollback, reboot, and safe ban/unban scenarios remain **disposable-VM certification pending**.
 
 ### Missing or incomplete features
 
 | Priority | Finding | Recommended feature and acceptance test |
 |---|---|---|
-| P0 | **Implemented in code; deployment verification pending.** SSH migration, controller-side post-reload authentication, rollback, old-endpoint retirement, and endpoint persistence now form one transaction. | Exercise failure injection, all supported migration directions, a second idempotence run, and reboot/reconnect before release. |
-| P1 | SSH hardening does not yet define empty-password behavior, forwarding, session/channel limits, startup throttling, access allow-lists, or audit verbosity. | Add a documented profile with `PermitEmptyPasswords no`, deliberate forwarding policy, `MaxSessions`, `MaxStartups`, optional `AllowGroups`, and suitable logging. Keep crypto defaults unless a tested compliance profile requires overrides. |
-| P1 | Automatically generated SSH firewall rules allow any source. | Support one or more management CIDRs and a documented emergency override. Test from allowed and denied networks before enforcing a restricted rule. |
-| P1 | Firewall validation is mostly rule-oriented; it does not reconcile the complete listening-socket exposure, IPv4/IPv6 parity, cloud firewall/security groups, or unmanaged equivalent rules. | Build a single exposure manifest and compare it with `ufw status`, `ss -lntup`, IPv6 state, and provider-side controls. Fail if an unexpected public listener exists. |
-| P1 | Stale-rule cleanup identifies rules by network fields, which can collide with equivalent rules not owned by Foundry. | Give generated rules stable ownership identifiers/comments or use a dedicated managed ruleset. Remove only owned rules and test coexistence with an external rule. |
-| P1 | Security runs before runtime/services/apps, so later roles cannot safely “discover then open” their required ports in the same one-pass order. | Declare the complete exposure manifest in global configuration before the security role, or use a deliberate collect/apply two-pass design. Application roles must not directly bypass firewall ownership. |
-| P1 | Unattended-upgrades files are validated, but effective `apt-daily` timer scheduling, allowed origins, dry-run behavior, reboot notification, and fleet rollout are not fully proven. | Validate timers and effective policy, run a dry-run test, define maintenance windows/canaries, and alert on failure or pending reboot. Keep automatic reboot opt-in and health-gated. |
-| P1 | Fail2ban lacks an explicit observation window, trusted-source exclusions, action policy, and operational visibility. | Manage `findtime`, `ignoreip`, backend/action, log source, and alerts. Test a ban from a safe test source and confirm a recovery mechanism. |
-| P1 | AppArmor is not asserted as loaded/enforcing, and service-specific profiles are not part of the platform contract. | Verify AppArmor status in the security layer. Let workload roles own tested profiles and fail production validation when a required profile is not enforcing. |
-| P1 | Security event auditing, persistent logs, forwarding, retention, integrity, and alerting are absent. | Add audit requirements, persistent journald/rsyslog policy, off-host transport, retention, time-consistent event fields, and alerts for SSH bans, sudo failures, firewall changes, and update failures. Keep secrets out of logs. |
+| P0 | **Implemented in code; disposable-VM certification pending.** SSH migration, controller-side post-reload authentication/elevation, rollback, old-endpoint retirement, endpoint persistence, and owned firewall cleanup form one transaction. | Exercise `22 -> custom`, `custom -> custom`, `custom -> 22`, invalid-candidate rollback, authentication/elevation failure, interrupted runs, and reboot/reconnect on disposable VMs. Run every successful path twice before release. |
+| P1 | Local UFW intent cannot prove provider-side firewall/security-group state. | Add a provider adapter in the compute/network layer and compare provider ingress with the same exposure manifest. Keep local validation fail-closed for undeclared wildcard listeners. |
+| P1 | Security runs before runtime/services/apps, so all required exposure must be declared globally before convergence. | Keep `network.exposure` as the single contract, or later introduce a deliberate collect/apply two-pass design. Application roles must not directly bypass firewall ownership. |
+| P1 | Automatic-update dry-run, fleet rollout, and failed-update alert delivery need environment certification. | Exercise the optional dry-run and failure paths on disposable VMs, then add maintenance windows/canaries and alert routing. Keep automatic reboot opt-in and health-gated. |
+| P1 | Fail2ban safe ban/unban and recovery are implemented as documented procedures but not certified against a disposable remote source. | Test a ban from a non-management test address, verify management/controller exclusions, unban through the recovery path, and capture evidence without risking the bootstrap source. |
+| P1 | Workload-specific AppArmor profiles are not yet part of the platform contract. | Let workload roles own tested profiles and fail production validation when a required workload profile is absent or not enforcing. |
+| P1 | Persistent local journald is implemented, but audit rules, off-host forwarding, retention/integrity policy, and alerts remain absent. | Add audit requirements, authenticated off-host transport, retention, time-consistent event fields, and alerts for SSH bans, sudo failures, firewall changes, and update failures. Keep secrets out of logs. |
 | P1 | There is no vulnerability scan, compliance report, or configuration drift signal independent of Ansible. | Add authenticated vulnerability scanning and a selected benchmark/profile. Record exceptions with owners and expiry dates; do not blindly enforce every CIS recommendation. |
-| P1 | SSH host-key lifecycle is not managed or reported. | Preserve/backup host keys securely, report fingerprints through a trusted channel, define rotation/reprovisioning behavior, and detect unexpected changes. |
+| P1 | SSH host-key fingerprint inventory and explicit rotation approval are implemented, but encrypted backup and trusted out-of-band fingerprint distribution remain operational responsibilities. | Integrate encrypted backup and publish fingerprints through a trusted inventory/CMDB channel before production certification. Test approved and unapproved replacement paths. |
 | P2 | Host egress is broadly allowed. | If the threat model requires it, introduce DNS/NTP/repository/proxy-aware egress policy after all service dependencies are mapped. |
 | P2 | Advanced controls such as Livepatch, Secure Boot/TPM attestation, file-integrity monitoring, or endpoint detection are not represented. | Add only where infrastructure and risk requirements justify them, with monitoring and recovery procedures. |
 

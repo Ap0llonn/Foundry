@@ -1,0 +1,67 @@
+---
+- name: Configure UFW IPv6 parity
+  ansible.builtin.lineinfile:
+    path: /etc/default/ufw
+    regexp: '^IPV6='
+    line: "IPV6={{ security_resolved.firewall.ipv6 | ternary('yes', 'no') }}"
+  when: security_resolved.firewall.enabled
+
+- name: Configure default-deny incoming policy
+  community.general.ufw:
+    direction: incoming
+    default: deny
+  when: security_resolved.firewall.enabled
+
+- name: Configure declared outgoing policy
+  community.general.ufw:
+    direction: outgoing
+    default: "{{ security_resolved.firewall.default_outgoing }}"
+  when: security_resolved.firewall.enabled
+
+- name: Add desired Foundry-owned firewall rules
+  community.general.ufw:
+    rule: allow
+    to_port: "{{ item.port | string }}"
+    proto: "{{ item.protocol }}"
+    from_ip: "{{ item.source }}"
+    comment: "{{ item.comment }}"
+  loop: "{{ security_firewall_rules }}"
+  loop_control:
+    label: "{{ item.comment }} {{ item.source }} -> {{ item.port }}/{{ item.protocol }}"
+  when: security_resolved.firewall.enabled
+
+- name: Remove stale rules using exact Foundry ownership metadata
+  community.general.ufw:
+    rule: allow
+    to_port: "{{ item.port | string }}"
+    proto: "{{ item.protocol }}"
+    from_ip: "{{ item.source }}"
+    comment: "{{ item.comment }}"
+    delete: true
+  when: >-
+    item.comment + '|' + item.source + '|'
+    + (item.port | string) + '|' + item.protocol
+    not in security_firewall_rule_ids
+  loop: "{{ security_firewall_previous_rules }}"
+  loop_control:
+    label: "{{ item.comment }}"
+
+- name: Persist Foundry-owned firewall intent
+  ansible.builtin.copy:
+    dest: "{{ security_firewall_state_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+    content: "{{ security_firewall_rules | to_nice_yaml(indent=2) }}"
+
+- name: Enable UFW only after management exposure exists
+  community.general.ufw:
+    state: enabled
+  when: security_resolved.firewall.enabled
+
+- name: Report firewall management disabled without touching external state
+  ansible.builtin.debug:
+    msg: >-
+      Foundry firewall enforcement is disabled. Foundry-owned rules were
+      withdrawn; UFW and all external rules were otherwise preserved.
+  when: not security_resolved.firewall.enabled

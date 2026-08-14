@@ -1,0 +1,526 @@
+---
+# Machine-readable acceptance catalog. `automated: false` is an explicit gap,
+# never an implicit pass.
+test_cases:
+  - id: TC-GLOBAL-001
+    criterion: AC-GLOBAL-001
+    title: Pinned controller verification
+    tier: static
+    automated: true
+    destructive: false
+    expected: Exact locked controller dependencies are installed.
+
+  - id: TC-GLOBAL-002
+    criterion: AC-GLOBAL-002
+    title: Main and detached role syntax
+    tier: static
+    automated: true
+    destructive: false
+    expected: Main playbook, OS helpers, and identity helpers parse successfully.
+
+  - id: TC-GLOBAL-003
+    criterion: AC-GLOBAL-003
+    title: Acceptance catalog consistency and safety classification
+    tier: static
+    automated: true
+    destructive: false
+    expected: IDs are unique, criteria exist, fixtures exist, and mutation tiers are explicit.
+
+  - id: TC-IDENTITY-001
+    criterion: AC-IDENTITY-001
+    title: Valid passwordless admin policy
+    tier: static
+    automated: true
+    destructive: false
+    fixture: fixtures/identity/valid-passwordless.yml
+    expected: Configuration validation succeeds.
+
+  - id: TC-IDENTITY-002
+    criterion: AC-IDENTITY-001
+    title: Admin without a resolved sudo policy
+    tier: static
+    automated: true
+    destructive: false
+    fixture: fixtures/identity/invalid-missing-sudo-policy.yml
+    expected: Configuration validation fails before mutation.
+
+  - id: TC-IDENTITY-003
+    criterion: AC-IDENTITY-004
+    title: Invalid SSH key payload
+    tier: static
+    automated: true
+    destructive: false
+    fixture: fixtures/identity/invalid-malformed-key.yml
+    expected: A lexically plausible but invalid key is rejected by cryptographic parsing.
+
+  - id: TC-IDENTITY-004
+    criterion: AC-IDENTITY-004
+    title: Duplicate SSH credential with different comments
+    tier: static
+    automated: true
+    destructive: false
+    fixture: fixtures/identity/invalid-duplicate-key-comments.yml
+    expected: The duplicate canonical key is rejected across accounts.
+
+  - id: TC-IDENTITY-005
+    criterion: AC-IDENTITY-003
+    title: Preserve package-managed supplementary group
+    tier: fresh
+    automated: false
+    destructive: true
+    setup: Add the test user to a synthetic package-owned group before convergence.
+    expected: The unrelated membership is unchanged while stale foundry-* membership is removed.
+
+  - id: TC-IDENTITY-006
+    criterion: AC-IDENTITY-005
+    title: Preserve external key in coexistence mode
+    tier: fresh
+    automated: false
+    destructive: true
+    expected: Foundry key reconciliation does not alter the external key authority.
+
+  - id: TC-IDENTITY-007
+    criterion: AC-IDENTITY-005
+    title: Reconcile exact keys in exclusive mode
+    tier: fresh
+    automated: false
+    destructive: true
+    expected: Only declared keys remain and the intentional removal is reported.
+
+  - id: TC-IDENTITY-008
+    criterion: AC-IDENTITY-006
+    title: Refuse symlinked home
+    tier: fresh
+    automated: false
+    destructive: true
+    expected: The role fails before writing through the symlink.
+
+  - id: TC-IDENTITY-009
+    criterion: AC-IDENTITY-006
+    title: Refuse symlinked SSH directory and authorized_keys
+    tier: fresh
+    automated: false
+    destructive: true
+    expected: Each unsafe path type fails before mutation of its target.
+
+  - id: TC-IDENTITY-010
+    criterion: AC-IDENTITY-007
+    title: Enforce home mode and login umask
+    tier: fresh
+    automated: false
+    destructive: true
+    expected: Home metadata matches policy and a newly created file is not world-accessible.
+
+  - id: TC-IDENTITY-011
+    criterion: AC-IDENTITY-002
+    title: Two independent recovery paths
+    tier: fresh
+    automated: false
+    destructive: true
+    expected: New SSH sessions and required elevation work through both paths before hardening.
+
+  - id: TC-IDENTITY-012
+    criterion: AC-IDENTITY-008
+    title: Second identity convergence
+    tier: fresh
+    automated: true
+    destructive: true
+    expected: The second identical role run reports changed=0.
+
+  - id: TC-IDENTITY-013
+    criterion: AC-IDENTITY-008
+    title: Existing-host read-only stability
+    tier: live
+    automated: true
+    destructive: false
+    expected: Check mode and final-state validation both report changed=0.
+
+  - id: TC-OS-001
+    criterion: AC-OS-001
+    title: OS policy invariants
+    tier: static
+    automated: true
+    destructive: false
+    expected: Static policy verifier confirms safe defaults and approval gates.
+
+  - id: TC-OS-002
+    criterion: AC-OS-002
+    title: Supported-image second convergence
+    tier: fresh
+    automated: false
+    destructive: true
+    expected: Every matrix image passes complete bootstrap twice with zero second-run changes.
+
+  - id: TC-SECURITY-001
+    criterion: AC-SECURITY-001
+    title: Security architecture and policy invariants
+    tier: static
+    automated: true
+    destructive: false
+    expected: Modular syntax and non-negotiable V1 policy checks pass.
+
+  - id: TC-SECURITY-002
+    criterion: AC-SECURITY-001
+    title: SSH 22 to custom migration
+    tier: fresh
+    automated: false
+    destructive: true
+    expected: New authentication and elevation succeed before endpoint retirement.
+
+  - id: TC-SECURITY-003
+    criterion: AC-SECURITY-001
+    title: SSH custom to custom migration and rollback failures
+    tier: fresh
+    automated: false
+    destructive: true
+    expected: Success retires the old endpoint; injected validation/connection failures preserve it.
+
+  - id: TC-SECURITY-004
+    criterion: AC-SECURITY-002
+    title: Firewall ownership and external-rule preservation
+    tier: fresh
+    automated: false
+    destructive: true
+    expected: Owned rules reconcile by comment while synthetic external rules remain unchanged.
+
+  - id: TC-SECURITY-005
+    criterion: AC-SECURITY-003
+    title: Public and CIDR-restricted exposure with IPv4/IPv6 parity
+    tier: fresh
+    automated: false
+    destructive: true
+    expected: Allowed sources connect, denied sources fail, and unexpected listeners are detected.
+
+  - id: TC-SECURITY-006
+    criterion: AC-SECURITY-004
+    title: Controlled Fail2ban ban, trusted source, and unban
+    tier: fresh
+    automated: false
+    destructive: true
+    expected: Controlled source is banned and recovered while controller/trusted sources are never banned.
+
+  - id: TC-SECURITY-007
+    criterion: AC-SECURITY-005
+    title: Effective security updates and pending reboot
+    tier: fresh
+    automated: false
+    destructive: true
+    expected: Origins, timers, dry-run, failure visibility, and reboot marker are correct.
+
+  - id: TC-SECURITY-008
+    criterion: AC-SECURITY-006
+    title: AppArmor platform enforcement
+    tier: fresh
+    automated: false
+    destructive: true
+    expected: AppArmor is loaded, active, and has enforcing profiles.
+
+  - id: TC-SECURITY-009
+    criterion: AC-SECURITY-007
+    title: Journal persistence after reboot
+    tier: fresh
+    automated: false
+    destructive: true
+    expected: Pre-reboot security log evidence remains readable after reconnect.
+
+  - id: TC-SECURITY-010
+    criterion: AC-SECURITY-008
+    title: SSH host-key preservation and approved rotation
+    tier: fresh
+    automated: false
+    destructive: true
+    expected: Normal convergence preserves fingerprints and unapproved replacement fails.
+
+  - id: TC-SECURITY-011
+    criterion: AC-SECURITY-009
+    title: Security drift repair and second convergence
+    tier: fresh
+    automated: false
+    destructive: true
+    expected: Owned drift is repaired, external state is preserved, and second run reports changed=0.
+
+  - id: TC-SECURITY-012
+    criterion: AC-SECURITY-009
+    title: Existing-host security stability
+    tier: live
+    automated: true
+    destructive: false
+    expected: Check mode and read-only security validation both report changed=0.
+
+  - id: TC-RUNTIME-001
+    criterion: AC-RUNTIME-001
+    title: Runtime architecture and supply-chain invariants
+    tier: static
+    automated: true
+    destructive: false
+    expected: Official signed repository, exact versions, ownership boundaries, and safe orchestration are present.
+
+  - id: TC-RUNTIME-002
+    criterion: AC-RUNTIME-002
+    title: Runtime role syntax
+    tier: static
+    automated: true
+    destructive: false
+    expected: Every statically imported Runtime task path parses successfully.
+
+  - id: TC-RUNTIME-003
+    criterion: AC-RUNTIME-004
+    title: Fresh supported host Runtime convergence
+    tier: fresh
+    automated: true
+    destructive: true
+    expected: Official Docker installs, config validates, smoke test executes and cleans up, and the complete contract passes.
+
+  - id: TC-RUNTIME-004
+    criterion: AC-RUNTIME-004
+    title: Runtime second convergence
+    tier: fresh
+    automated: true
+    destructive: true
+    expected: The second identical Runtime run reports changed=0 and does not restart Docker.
+
+  - id: TC-RUNTIME-005
+    criterion: AC-RUNTIME-003
+    title: Existing-host Runtime result validation
+    tier: live
+    automated: true
+    destructive: false
+    expected: Runtime service, version, socket, storage, and daemon checks pass with changed=0.
+
+  - id: TC-RUNTIME-006
+    criterion: AC-RUNTIME-004
+    title: Runtime drift and reboot certification
+    tier: fresh
+    automated: false
+    destructive: true
+    expected: Service/config drift repairs, external resources survive, and post-reboot Docker remains healthy.
+
+  - id: TC-NETWORKING-001
+    criterion: AC-NETWORKING-001
+    title: Networking architecture and policy invariants
+    tier: static
+    automated: true
+    destructive: false
+    expected: Docker ownership, network ownership, non-internal bridge, and MinIO boundaries are present.
+
+  - id: TC-NETWORKING-002
+    criterion: AC-NETWORKING-001
+    title: Valid deterministic and custom network resolution
+    tier: static
+    automated: true
+    destructive: false
+    fixture: fixtures/networking/valid.yml
+    expected: dev and prod resolve to distinct default/custom names.
+
+  - id: TC-NETWORKING-003
+    criterion: AC-NETWORKING-001
+    title: Duplicate environment rejection
+    tier: static
+    automated: true
+    destructive: false
+    fixture: fixtures/networking/invalid-duplicate-environment.yml
+    expected: Validation fails before Docker access.
+
+  - id: TC-NETWORKING-004
+    criterion: AC-NETWORKING-001
+    title: Resolved network collision rejection
+    tier: static
+    automated: true
+    destructive: false
+    fixture: fixtures/networking/invalid-resolved-collision.yml
+    expected: Validation fails before Docker access.
+
+  - id: TC-NETWORKING-005
+    criterion: AC-NETWORKING-001
+    title: Reserved Docker network-name rejection
+    tier: static
+    automated: true
+    destructive: false
+    fixture: fixtures/networking/invalid-reserved-name.yml
+    expected: Validation fails before Docker access.
+
+  - id: TC-NETWORKING-006
+    criterion: AC-NETWORKING-002
+    title: Owned reconciliation and external preservation
+    tier: fresh
+    automated: false
+    destructive: true
+    expected: Owned stale state follows policy while external and attached networks survive.
+
+  - id: TC-NETWORKING-007
+    criterion: AC-NETWORKING-003
+    title: Dev/prod isolation, restart, reboot, and idempotence
+    tier: fresh
+    automated: false
+    destructive: true
+    expected: Disposable containers cannot cross-connect and networks survive with changed=0.
+
+  - id: TC-NETWORKING-008
+    criterion: AC-NETWORKING-004
+    title: Role-5 Runtime dependency boundary
+    tier: static
+    automated: true
+    destructive: false
+    expected: Static policy proves role 5 consumes Runtime and cannot install or configure Docker.
+
+  - id: TC-NETWORKING-009
+    criterion: AC-NETWORKING-004
+    title: Runtime dependency and Networking idempotence
+    tier: fresh
+    automated: false
+    destructive: true
+    expected: Docker is installed and operational; the second networking run reports changed=0.
+
+  - id: TC-MINIO-001
+    criterion: AC-MINIO-001
+    title: Valid internal MinIO declaration
+    tier: static
+    automated: true
+    destructive: false
+    fixture: fixtures/minio/valid.yml
+    expected: Secret-safe MinIO configuration validation succeeds without Docker.
+
+  - id: TC-MINIO-002
+    criterion: AC-MINIO-002
+    title: Mutable MinIO image rejection
+    tier: static
+    automated: true
+    destructive: false
+    fixture: fixtures/minio/invalid-latest-image.yml
+    expected: Configuration validation rejects latest before Docker access.
+
+  - id: TC-MINIO-003
+    criterion: AC-MINIO-001
+    title: MinIO internal S3 health, persistence, and idempotence
+    tier: fresh
+    automated: false
+    destructive: true
+    expected: S3 remains healthy after restart/reboot with no host ports and changed=0.
+
+  - id: TC-MINIO-004
+    criterion: AC-MINIO-002
+    title: MinIO ownership collision and stale-data preservation
+    tier: fresh
+    automated: false
+    destructive: true
+    expected: External collisions fail safely and stale containers/data remain untouched.
+
+  - id: TC-MINIO-005
+    criterion: AC-MINIO-002
+    title: Secret-safe collision inspection projection
+    tier: static
+    automated: true
+    destructive: false
+    expected: Raw Docker state is reduced to name/existence/compatibility without credentials.
+
+  - id: TC-INFRA-001
+    criterion: AC-INFRA-001
+    title: Infrastructure Services policy invariants
+    tier: static
+    automated: true
+    destructive: false
+    expected: Service privacy, immutable images, health, secrets, ownership, Swarm, ingress, and Dokploy invariants are present.
+
+  - id: TC-INFRA-002
+    criterion: AC-GLOBAL-002
+    title: Complete Infrastructure Services syntax
+    tier: static
+    automated: true
+    destructive: false
+    expected: Every statically imported role-7 task path parses successfully.
+
+  - id: TC-INFRA-003
+    criterion: AC-INFRA-005
+    title: Hyphen domain resolution
+    tier: static
+    automated: true
+    destructive: false
+    fixture: fixtures/infrastructure/valid-hyphen.yml
+    expected: Environment and global Dokploy hostnames resolve exactly.
+
+  - id: TC-INFRA-004
+    criterion: AC-INFRA-005
+    title: Nested domain resolution
+    tier: static
+    automated: true
+    destructive: false
+    fixture: fixtures/infrastructure/valid-nested.yml
+    expected: dev.api.example.com resolves without changing Dokploy's global hostname.
+
+  - id: TC-INFRA-005
+    criterion: AC-INFRA-005
+    title: Domainless endpoint resolution
+    tier: static
+    automated: true
+    destructive: false
+    fixture: fixtures/infrastructure/valid-domainless.yml
+    expected: Dokploy resolves to the management IP/port and no fake DNS name is produced.
+
+  - id: TC-INFRA-006
+    criterion: AC-INFRA-004
+    title: Reject publicly claimable Dokploy bootstrap
+    tier: static
+    automated: true
+    destructive: false
+    fixture: fixtures/infrastructure/invalid-dokploy-public-bootstrap.yml
+    expected: Dokploy without a management CIDR allowlist fails before mutation.
+
+  - id: TC-INFRA-007
+    criterion: AC-INFRA-001
+    title: Reject mutable PostgreSQL image
+    tier: static
+    automated: true
+    destructive: false
+    fixture: fixtures/infrastructure/invalid-mutable-postgres.yml
+    expected: A latest-tag database image fails validation before Docker access.
+
+  - id: TC-INFRA-008
+    criterion: AC-INFRA-003
+    title: Stable pre-Security exposure planning
+    tier: static
+    automated: true
+    destructive: false
+    expected: Required Traefik and management listeners are appended exactly once before Security convergence.
+
+  - id: TC-INFRA-009
+    criterion: AC-INFRA-005
+    title: Bracket domainless IPv6 endpoint
+    tier: static
+    automated: true
+    destructive: false
+    fixture: fixtures/infrastructure/valid-domainless-ipv6.yml
+    expected: Domainless Dokploy resolves to http://[IPv6]:port.
+
+  - id: TC-INFRA-010
+    criterion: AC-INFRA-001
+    title: Reject ambiguous resource memory suffix
+    tier: static
+    automated: true
+    destructive: false
+    fixture: fixtures/infrastructure/invalid-memory-suffix.yml
+    expected: Resource memory uses raw bytes or one b/k/m/g suffix so reconciliation math is exact.
+
+  - id: TC-INFRA-011
+    criterion: AC-INFRA-001
+    title: Reject zero CPU allocation
+    tier: static
+    automated: true
+    destructive: false
+    fixture: fixtures/infrastructure/invalid-zero-cpu.yml
+    expected: CPU constraints must be strictly greater than zero.
+
+  - id: TC-INFRA-100
+    criterion: AC-INFRA-006
+    title: Fresh full Infrastructure Services convergence and second run
+    tier: fresh
+    automated: false
+    destructive: true
+    expected: Every enabled service converges, persists, remains isolated/private, survives reboot, and the second run reports changed=0.
+
+  - id: TC-INFRA-101
+    criterion: AC-INFRA-002
+    title: Infrastructure ownership and failure injection
+    tier: fresh
+    automated: false
+    destructive: true
+    expected: Unowned collisions, missing state, invalid config, and unhealthy services fail without deleting recoverable data.

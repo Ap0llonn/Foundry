@@ -1,0 +1,60 @@
+---
+- name: Require Runtime Docker to be enabled in global configuration
+  ansible.builtin.assert:
+    that:
+      - runtime | default({}) is mapping
+      - (runtime | default({})).get('docker', {}) is mapping
+      - (runtime | default({})).get('docker', {}).get('enabled', false) | bool
+    fail_msg: >-
+      Networking requires runtime.docker.enabled: true and must execute after
+      role 6 Runtime. Networking does not install or configure Docker.
+
+- name: Inspect the Runtime ownership contract
+  ansible.builtin.stat:
+    path: "{{ networking_runtime_ownership_manifest }}"
+  register: networking_runtime_contract
+
+- name: Verify Docker daemon operation
+  ansible.builtin.command:
+    argv: ["{{ networking_docker_binary }}", info]
+  register: networking_docker_info
+  changed_when: false
+  check_mode: false
+  failed_when: false
+
+- name: Verify Docker Compose availability for later slices
+  ansible.builtin.command:
+    argv: ["{{ networking_docker_binary }}", compose, version]
+  register: networking_docker_compose
+  changed_when: false
+  check_mode: false
+  failed_when: false
+
+- name: Read effective Docker service state
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - show
+      - "{{ networking_docker_service }}"
+      - --property=ActiveState
+      - --property=UnitFileState
+  register: networking_docker_systemd_state
+  changed_when: false
+  check_mode: false
+  failed_when: false
+
+- name: Require the complete Runtime Docker contract
+  ansible.builtin.assert:
+    that:
+      - networking_runtime_contract.stat.exists
+      - networking_runtime_contract.stat.pw_name == 'root'
+      - networking_runtime_contract.stat.gr_name == 'root'
+      - networking_runtime_contract.stat.mode == '0600'
+      - networking_docker_info.rc == 0
+      - networking_docker_compose.rc == 0
+      - networking_docker_systemd_state.rc == 0
+      - networking_docker_systemd_state.stdout is search('(?m)^ActiveState=active$')
+      - networking_docker_systemd_state.stdout is search('(?m)^UnitFileState=enabled$')
+    fail_msg: >-
+      Runtime did not publish a healthy Docker contract. Run the Runtime slice
+      successfully before attempting Networking.

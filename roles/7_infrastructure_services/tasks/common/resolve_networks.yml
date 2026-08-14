@@ -1,0 +1,37 @@
+---
+- name: Inspect persisted networking state when role facts are unavailable
+  ansible.builtin.stat:
+    path: "{{ infrastructure_services_network_state_file }}"
+  register: infrastructure_services_network_state_check
+  when: foundry_resolved_networks is not defined
+
+- name: Require authoritative role-5 networking state
+  ansible.builtin.assert:
+    that:
+      - foundry_resolved_networks is defined or infrastructure_services_network_state_check.stat.exists
+    fail_msg: Run the Networking slice successfully before Infrastructure Services.
+
+- name: Read persisted networking state
+  ansible.builtin.slurp:
+    path: "{{ infrastructure_services_network_state_file }}"
+  register: infrastructure_services_network_state_raw
+  when: foundry_resolved_networks is not defined
+
+- name: Resolve authoritative environment network mapping
+  ansible.builtin.set_fact:
+    infrastructure_services_network_state: >-
+      {{
+        (infrastructure_services_network_state_raw.content | b64decode | from_yaml)
+        if foundry_resolved_networks is not defined
+        else {'project': project.name, 'resolved_networks': foundry_resolved_networks}
+      }}
+
+- name: Validate environment networking belongs to this project
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_network_state is mapping
+      - infrastructure_services_network_state.project == project.name
+      - infrastructure_services_network_state.resolved_networks is mapping
+      - infrastructure_services_environment_names | difference(infrastructure_services_network_state.resolved_networks.keys()) | length == 0
+    fail_msg: Networking state is stale, belongs to another project, or lacks an environment.
+

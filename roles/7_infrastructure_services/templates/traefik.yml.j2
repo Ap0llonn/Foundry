@@ -1,0 +1,50 @@
+api:
+  dashboard: false
+  insecure: false
+
+ping:
+  entryPoint: health
+
+entryPoints:
+  web:
+    address: ":80"
+{% if foundry_platform_resolved.dokploy.enabled and not infrastructure_services_domain_enabled %}
+  management:
+    address: ":3000"
+{% endif %}
+{% if foundry_platform_resolved.traefik.tls.enabled %}
+  websecure:
+    address: ":443"
+    http3:
+      advertisedPort: 443
+{% endif %}
+  health:
+    address: ":8082"
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    network: "{{ foundry_platform_resolved.traefik.ingress_network }}"
+  swarm:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    network: "{{ foundry_platform_resolved.traefik.ingress_network }}"
+  file:
+    directory: "{{ infrastructure_services_traefik_dynamic_directory }}"
+    watch: true
+
+log:
+  level: INFO
+
+accessLog: {}
+{% if foundry_platform_resolved.traefik.tls.enabled %}
+
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: "{{ foundry_platform_resolved.traefik.tls.email }}"
+      storage: "{{ infrastructure_services_traefik_dynamic_directory }}/acme.json"
+      httpChallenge:
+        entryPoint: web
+{% endif %}

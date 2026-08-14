@@ -1,0 +1,14 @@
+---
+- name: Parse networking role task graph
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars:
+    project:
+      name: syntax-project
+    environments:
+      - name: dev
+      - name: prod
+    networking: {}
+  roles:
+    - role: 5_networking

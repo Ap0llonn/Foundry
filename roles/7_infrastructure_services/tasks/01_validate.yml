@@ -1,0 +1,354 @@
+---
+- name: Validate infrastructure-service root input types
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services | default({}) is mapping
+      - services | default({}) is mapping
+      - platform | default({}) is mapping
+      - domains | default({}) is mapping
+      - project | default({}) is mapping
+      - environments | default([]) is sequence
+      - environments | default([]) is not string
+    fail_msg: infrastructure_services, services, platform, domains, and project must use the documented mappings.
+
+- name: Resolve infrastructure-service configuration defaults
+  ansible.builtin.set_fact:
+    infrastructure_services_resolved: >-
+      {{ infrastructure_services_defaults | combine(infrastructure_services | default({}), recursive=true) }}
+    foundry_services_resolved: >-
+      {{ services_defaults | combine(services | default({}), recursive=true) }}
+    foundry_platform_resolved: >-
+      {{ platform_defaults | combine(platform | default({}), recursive=true) }}
+    foundry_domains_resolved: >-
+      {{ domains_defaults | combine(domains | default({}), recursive=true) }}
+    infrastructure_services_environment_names: >-
+      {{ environments | default([]) | map(attribute='name') | list }}
+  no_log: true
+
+- name: Validate known option names
+  ansible.builtin.assert:
+    that:
+      - (infrastructure_services | default({})).keys() | difference(infrastructure_services_allowed_root_keys) | length == 0
+      - ((infrastructure_services | default({})).get('minio', {})).keys() | difference(infrastructure_services_allowed_minio_keys) | length == 0
+      - (services | default({})).keys() | difference(infrastructure_services_allowed_services_keys) | length == 0
+      - ((services | default({})).get('postgres', {})).keys() | difference(infrastructure_services_allowed_postgres_keys) | length == 0
+      - ((services | default({})).get('redis', {})).keys() | difference(infrastructure_services_allowed_redis_keys) | length == 0
+      - ((services | default({})).get('object_storage', {})).keys() | difference(infrastructure_services_allowed_object_storage_keys) | length == 0
+      - (platform | default({})).keys() | difference(infrastructure_services_allowed_platform_keys) | length == 0
+      - ((platform | default({})).get('swarm', {})).keys() | difference(infrastructure_services_allowed_swarm_keys) | length == 0
+      - ((platform | default({})).get('traefik', {})).keys() | difference(infrastructure_services_allowed_traefik_keys) | length == 0
+      - ((platform | default({})).get('dokploy', {})).keys() | difference(infrastructure_services_allowed_dokploy_keys) | length == 0
+      - (domains | default({})).keys() | difference(infrastructure_services_allowed_domain_keys) | length == 0
+    fail_msg: Infrastructure Services contains an unsupported option. Consult roles/7_infrastructure_services/Doc.MD.
+
+- name: Validate environment and project contracts
+  ansible.builtin.assert:
+    that:
+      - project.name | default('') is string
+      - project.name | default('') is match(infrastructure_services_identifier_pattern)
+      - infrastructure_services_environment_names | length > 0
+      - infrastructure_services_environment_names | unique | length == infrastructure_services_environment_names | length
+      - infrastructure_services_environment_names | select('match', infrastructure_services_environment_pattern) | list | length == infrastructure_services_environment_names | length
+    fail_msg: Project and environment names must be unique lowercase Foundry identifiers.
+
+- name: Validate service configuration types
+  ansible.builtin.assert:
+    that:
+      - foundry_services_resolved.postgres is mapping
+      - foundry_services_resolved.redis is mapping
+      - foundry_services_resolved.object_storage is mapping
+      - foundry_services_resolved.postgres.enabled is boolean
+      - foundry_services_resolved.redis.enabled is boolean
+      - foundry_services_resolved.object_storage.enabled is boolean
+      - foundry_services_resolved.postgres.environments is sequence
+      - foundry_services_resolved.postgres.environments is not string
+      - foundry_services_resolved.redis.environments is sequence
+      - foundry_services_resolved.redis.environments is not string
+      - foundry_services_resolved.object_storage.environments is sequence
+      - foundry_services_resolved.object_storage.environments is not string
+      - foundry_services_resolved.postgres.credentials is mapping
+      - foundry_services_resolved.redis.credentials is mapping
+      - foundry_services_resolved.object_storage.credentials is mapping
+      - foundry_services_resolved.postgres.major | int == 17
+      - foundry_services_resolved.redis.version | string == '8.2'
+      - foundry_services_resolved.postgres.resources is mapping
+      - foundry_services_resolved.redis.resources is mapping
+      - foundry_services_resolved.postgres.resources.keys() | difference(infrastructure_services_allowed_resource_keys) | length == 0
+      - foundry_services_resolved.redis.resources.keys() | difference(infrastructure_services_allowed_resource_keys) | length == 0
+      - foundry_services_resolved.object_storage.provider == 'minio'
+      - foundry_services_resolved.object_storage.run_as_uid is number
+      - foundry_services_resolved.object_storage.run_as_uid | int >= 1
+      - foundry_services_resolved.object_storage.run_as_gid is number
+      - foundry_services_resolved.object_storage.run_as_gid | int >= 1
+      - >-
+        foundry_services_resolved.object_storage.data_root | length == 0
+        or (foundry_services_resolved.object_storage.data_root is match(infrastructure_services_absolute_safe_path_pattern)
+            and foundry_services_resolved.object_storage.data_root is match('^/srv/foundry(?:/|$)'))
+      - foundry_services_resolved.redis.persistence is boolean
+      - foundry_services_resolved.redis.maxmemory_policy in infrastructure_services_allowed_redis_policies
+    fail_msg: Invalid PostgreSQL, Redis, or object-storage configuration shape.
+  no_log: true
+
+- name: Validate PostgreSQL credential overrides
+  ansible.builtin.assert:
+    that:
+      - item.value is mapping
+      - item.value.keys() | difference(['password']) | length == 0
+      - item.value.get('password', '') is string
+      - item.value.get('password', '') | length == 0 or item.value.get('password', '') | length >= 16
+    fail_msg: PostgreSQL credential overrides accept only a strong Vault-sourced password.
+  loop: "{{ foundry_services_resolved.postgres.credentials | dict2items }}"
+  no_log: true
+
+- name: Validate Redis credential overrides
+  ansible.builtin.assert:
+    that:
+      - item.value is mapping
+      - item.value.keys() | difference(['password']) | length == 0
+      - item.value.get('password', '') is string
+      - item.value.get('password', '') | length == 0 or item.value.get('password', '') | length >= 16
+    fail_msg: Redis credential overrides accept only a strong Vault-sourced password.
+  loop: "{{ foundry_services_resolved.redis.credentials | dict2items }}"
+  no_log: true
+
+- name: Validate object-storage credential overrides
+  ansible.builtin.assert:
+    that:
+      - item.value is mapping
+      - item.value.keys() | difference(['root_user', 'root_password']) | length == 0
+      - item.value.get('root_user', 'foundryadmin') is string
+      - item.value.get('root_user', 'foundryadmin') | length >= 3
+      - item.value.get('root_password', '') is string
+      - item.value.get('root_password', '') | length == 0 or item.value.get('root_password', '') | length >= 16
+    fail_msg: Object-storage credential overrides accept only root_user/root_password Vault values.
+  loop: "{{ foundry_services_resolved.object_storage.credentials | dict2items }}"
+  no_log: true
+
+- name: Resolve implicit service environment selections
+  ansible.builtin.set_fact:
+    infrastructure_services_postgres_environments: >-
+      {{ foundry_services_resolved.postgres.environments if foundry_services_resolved.postgres.environments | length > 0 else infrastructure_services_environment_names }}
+    infrastructure_services_redis_environments: >-
+      {{ foundry_services_resolved.redis.environments if foundry_services_resolved.redis.environments | length > 0 else infrastructure_services_environment_names }}
+    infrastructure_services_object_storage_environments: >-
+      {{ foundry_services_resolved.object_storage.environments if foundry_services_resolved.object_storage.environments | length > 0 else infrastructure_services_environment_names }}
+  no_log: true
+
+- name: Validate service environment selections
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_postgres_environments | unique | length == infrastructure_services_postgres_environments | length
+      - infrastructure_services_redis_environments | unique | length == infrastructure_services_redis_environments | length
+      - infrastructure_services_object_storage_environments | unique | length == infrastructure_services_object_storage_environments | length
+      - infrastructure_services_postgres_environments | difference(infrastructure_services_environment_names) | length == 0
+      - infrastructure_services_redis_environments | difference(infrastructure_services_environment_names) | length == 0
+      - infrastructure_services_object_storage_environments | difference(infrastructure_services_environment_names) | length == 0
+      - foundry_services_resolved.postgres.credentials.keys() | difference(infrastructure_services_postgres_environments) | length == 0
+      - foundry_services_resolved.redis.credentials.keys() | difference(infrastructure_services_redis_environments) | length == 0
+      - foundry_services_resolved.object_storage.credentials.keys() | difference(infrastructure_services_object_storage_environments) | length == 0
+    fail_msg: A service references an unknown/duplicate environment or credential key.
+  no_log: true
+
+- name: Validate immutable service images and resource constraints
+  ansible.builtin.assert:
+    that:
+      - not foundry_services_resolved.postgres.enabled or foundry_services_resolved.postgres.image is match(infrastructure_services_immutable_image_pattern)
+      - not foundry_services_resolved.redis.enabled or foundry_services_resolved.redis.image is match(infrastructure_services_immutable_image_pattern)
+      - not foundry_services_resolved.object_storage.enabled or foundry_services_resolved.object_storage.image is match(infrastructure_services_immutable_image_pattern)
+      - foundry_services_resolved.postgres.user is match('^[a-z_][a-z0-9_-]{0,62}$')
+      - foundry_services_resolved.postgres.database is match('^[a-z_][a-z0-9_-]{0,62}$')
+      - foundry_services_resolved.postgres.resources.memory | length == 0 or foundry_services_resolved.postgres.resources.memory is match(infrastructure_services_memory_pattern)
+      - foundry_services_resolved.redis.resources.memory | length == 0 or foundry_services_resolved.redis.resources.memory is match(infrastructure_services_memory_pattern)
+      - foundry_services_resolved.postgres.resources.cpus | string | length == 0 or foundry_services_resolved.postgres.resources.cpus | string is match(infrastructure_services_cpu_pattern)
+      - foundry_services_resolved.redis.resources.cpus | string | length == 0 or foundry_services_resolved.redis.resources.cpus | string is match(infrastructure_services_cpu_pattern)
+      - foundry_services_resolved.postgres.resources.cpus | string | length == 0 or foundry_services_resolved.postgres.resources.cpus | float > 0
+      - foundry_services_resolved.redis.resources.cpus | string | length == 0 or foundry_services_resolved.redis.resources.cpus | float > 0
+      - foundry_services_resolved.redis.maxmemory | length == 0 or foundry_services_resolved.redis.maxmemory is match(infrastructure_services_memory_pattern)
+    fail_msg: Enabled services require immutable image digests and valid resource settings.
+
+- name: Validate platform and domain configuration
+  ansible.builtin.assert:
+    that:
+      - foundry_platform_resolved.swarm is mapping
+      - foundry_platform_resolved.traefik is mapping
+      - foundry_platform_resolved.dokploy is mapping
+      - foundry_platform_resolved.swarm.enabled is boolean
+      - foundry_platform_resolved.traefik.enabled is boolean
+      - foundry_platform_resolved.dokploy.enabled is boolean
+      - foundry_platform_resolved.traefik.tls is mapping
+      - foundry_platform_resolved.traefik.tls.keys() | difference(infrastructure_services_allowed_tls_keys) | length == 0
+      - foundry_platform_resolved.traefik.tls.enabled is boolean
+      - foundry_platform_resolved.dokploy.credentials is mapping
+      - foundry_platform_resolved.dokploy.credentials.keys() | difference(['postgres_password', 'auth_secret']) | length == 0
+      - foundry_platform_resolved.dokploy.secret_version is match('^[a-z0-9][a-z0-9.-]{0,31}$')
+      - foundry_platform_resolved.traefik.ingress_network is match('^[a-z0-9][a-z0-9_.-]{0,62}$')
+      - foundry_domains_resolved.environment_style in infrastructure_services_allowed_domain_styles
+      - foundry_domains_resolved.service_names is sequence
+      - foundry_domains_resolved.service_names is not string
+      - foundry_domains_resolved.service_names | unique | length == foundry_domains_resolved.service_names | length
+      - foundry_domains_resolved.service_names | select('match', infrastructure_services_identifier_pattern) | list | length == foundry_domains_resolved.service_names | length
+      - foundry_domains_resolved.dokploy_label is match(infrastructure_services_identifier_pattern)
+      - foundry_domains_resolved.base | length == 0 or foundry_domains_resolved.base is match(infrastructure_services_domain_pattern)
+      - foundry_platform_resolved.traefik.http_port | int >= 1
+      - foundry_platform_resolved.traefik.http_port | int <= 65535
+      - foundry_platform_resolved.traefik.https_port | int >= 1
+      - foundry_platform_resolved.traefik.https_port | int <= 65535
+      - foundry_platform_resolved.dokploy.management_port | int >= 1
+      - foundry_platform_resolved.dokploy.management_port | int <= 65535
+      - foundry_platform_resolved.swarm.subnet_size | int >= 16
+      - foundry_platform_resolved.swarm.subnet_size | int <= 28
+      - not foundry_platform_resolved.traefik.enabled or foundry_platform_resolved.traefik.image is match(infrastructure_services_immutable_image_pattern)
+      - not foundry_platform_resolved.dokploy.enabled or foundry_platform_resolved.dokploy.image is match(infrastructure_services_immutable_image_pattern)
+      - not foundry_platform_resolved.dokploy.enabled or foundry_platform_resolved.dokploy.postgres_image is match(infrastructure_services_immutable_image_pattern)
+      - not foundry_platform_resolved.traefik.tls.enabled or foundry_domains_resolved.base | length > 0
+      - not foundry_platform_resolved.traefik.tls.enabled or foundry_platform_resolved.traefik.tls.email | length > 3
+      - >-
+        not foundry_platform_resolved.dokploy.enabled
+        or ((management | default({})).get('restrict_by_cidr', false) | bool
+            and (management | default({})).get('allowed_cidrs', []) | length > 0)
+    fail_msg: Invalid Swarm, Traefik, Dokploy, TLS, or domain configuration.
+
+- name: Validate optional Dokploy Vault secret lengths
+  ansible.builtin.assert:
+    that:
+      - item.value is string
+      - item.value | length >= 32
+    fail_msg: Supplied Dokploy secrets must be at least 32 characters and loaded from Vault/external secret storage.
+  loop: "{{ foundry_platform_resolved.dokploy.credentials | dict2items }}"
+  no_log: true
+
+- name: Resolve effective platform dependencies
+  ansible.builtin.set_fact:
+    infrastructure_services_swarm_enabled: >-
+      {{ foundry_platform_resolved.swarm.enabled or foundry_platform_resolved.dokploy.enabled }}
+    infrastructure_services_traefik_enabled: >-
+      {{ foundry_platform_resolved.traefik.enabled or foundry_platform_resolved.dokploy.enabled }}
+    infrastructure_services_domain_enabled: "{{ foundry_domains_resolved.base | length > 0 }}"
+    infrastructure_services_any_enabled: >-
+      {{
+        foundry_services_resolved.postgres.enabled
+        or foundry_services_resolved.redis.enabled
+        or foundry_services_resolved.object_storage.enabled
+        or infrastructure_services_resolved.minio.enabled
+        or foundry_platform_resolved.traefik.enabled
+        or foundry_platform_resolved.dokploy.enabled
+        or foundry_platform_resolved.swarm.enabled
+      }}
+
+- name: Validate required host exposure is declared before Security convergence
+  ansible.builtin.assert:
+    that:
+      - >-
+        not infrastructure_services_traefik_enabled
+        or ((network | default({})).get('exposure', [])
+            | selectattr('port', 'defined')
+            | selectattr('port', 'equalto', foundry_platform_resolved.traefik.http_port)
+            | selectattr('protocol', 'equalto', 'tcp') | list | length > 0)
+      - >-
+        not (infrastructure_services_traefik_enabled and foundry_platform_resolved.traefik.tls.enabled)
+        or ((network | default({})).get('exposure', [])
+            | selectattr('port', 'defined')
+            | selectattr('port', 'equalto', foundry_platform_resolved.traefik.https_port)
+            | selectattr('protocol', 'equalto', 'tcp') | list | length > 0)
+      - >-
+        not (infrastructure_services_traefik_enabled and foundry_platform_resolved.traefik.tls.enabled)
+        or ((network | default({})).get('exposure', [])
+            | selectattr('port', 'defined')
+            | selectattr('port', 'equalto', foundry_platform_resolved.traefik.https_port)
+            | selectattr('protocol', 'equalto', 'udp') | list | length > 0)
+      - >-
+        not (foundry_platform_resolved.dokploy.enabled and not infrastructure_services_domain_enabled)
+        or ((network | default({})).get('exposure', [])
+            | selectattr('port', 'defined')
+            | selectattr('port', 'equalto', foundry_platform_resolved.dokploy.management_port)
+            | selectattr('protocol', 'equalto', 'tcp') | list | length > 0)
+    fail_msg: >-
+      Declare every Traefik/Dokploy listener in network.exposure before running
+      Security. Domainless Dokploy requires its management port; domain mode uses Traefik.
+
+- name: Validate legacy MinIO option names and types
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_resolved.minio.enabled is boolean
+      - infrastructure_services_resolved.minio.run_as_uid is number
+      - infrastructure_services_resolved.minio.run_as_uid | int >= 1
+      - infrastructure_services_resolved.minio.run_as_gid is number
+      - infrastructure_services_resolved.minio.run_as_gid | int >= 1
+      - infrastructure_services_resolved.minio.instances is sequence
+      - infrastructure_services_resolved.minio.instances is not string
+      - not infrastructure_services_resolved.minio.enabled or infrastructure_services_resolved.minio.instances | length > 0
+      - not (infrastructure_services_resolved.minio.enabled and foundry_services_resolved.object_storage.enabled)
+    fail_msg: Invalid legacy MinIO policy, or both legacy and services.object_storage are enabled.
+
+- name: Validate every legacy MinIO instance is a mapping
+  ansible.builtin.assert:
+    that: item is mapping
+    fail_msg: Every legacy MinIO instance must be a mapping.
+  loop: "{{ infrastructure_services_resolved.minio.instances }}"
+  loop_control:
+    label: "{{ item.environment | default('invalid instance') if item is mapping else 'invalid instance' }}"
+  no_log: true
+
+- name: Validate legacy MinIO instance contracts
+  ansible.builtin.assert:
+    that:
+      - item.keys() | difference(infrastructure_services_allowed_minio_instance_keys) | length == 0
+      - item.environment | default('') is match(infrastructure_services_environment_pattern)
+      - item.environment in infrastructure_services_environment_names
+      - item.image | default('') is match(infrastructure_services_immutable_image_pattern)
+      - >-
+        item.data_path | default('') | length == 0
+        or (item.data_path is match(infrastructure_services_absolute_safe_path_pattern)
+            and item.data_path is match('^/srv/foundry(?:/|$)'))
+      - item.root_user | default('') | length >= 3
+      - item.root_password | default('') | length >= 8
+    fail_msg: Invalid legacy MinIO instance. Use a safe data path, immutable image, environment, and Vault credentials.
+  loop: "{{ infrastructure_services_resolved.minio.instances }}"
+  loop_control:
+    label: "{{ item.environment | default('invalid instance') }}"
+  no_log: true
+
+- name: Require at most one legacy MinIO instance per environment
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_resolved.minio.instances | map(attribute='environment') | unique | length == infrastructure_services_resolved.minio.instances | length
+    fail_msg: Only one MinIO instance may be declared per environment.
+- name: Initialize normalized object-storage instances
+  ansible.builtin.set_fact:
+    infrastructure_services_object_storage_instances: []
+  when: foundry_services_resolved.object_storage.enabled
+
+- name: Normalize object-storage environments for the existing MinIO engine
+  ansible.builtin.set_fact:
+    infrastructure_services_object_storage_instances: >-
+      {{
+        infrastructure_services_object_storage_instances + [{
+          'environment': item,
+          'image': foundry_services_resolved.object_storage.image,
+          'data_path': (
+            foundry_services_resolved.object_storage.data_root + '/' + project.name + '/' + item
+            if foundry_services_resolved.object_storage.data_root | length > 0 else ''
+          ),
+          'root_user': foundry_services_resolved.object_storage.credentials.get(item, {}).get('root_user', 'foundryadmin'),
+          'root_password': foundry_services_resolved.object_storage.credentials.get(item, {}).get('root_password', '')
+        }]
+      }}
+  loop: "{{ infrastructure_services_object_storage_environments }}"
+  when: foundry_services_resolved.object_storage.enabled
+  no_log: true
+
+- name: Activate normalized object-storage configuration
+  ansible.builtin.set_fact:
+    infrastructure_services_resolved: >-
+      {{
+        infrastructure_services_resolved | combine({
+          'minio': {
+            'enabled': true,
+            'run_as_uid': foundry_services_resolved.object_storage.run_as_uid,
+            'run_as_gid': foundry_services_resolved.object_storage.run_as_gid,
+            'instances': infrastructure_services_object_storage_instances
+          }
+        }, recursive=true)
+      }}
+  when: foundry_services_resolved.object_storage.enabled
+  no_log: true

@@ -1,0 +1,116 @@
+---
+- name: Inspect desired network names before mutation
+  ansible.builtin.command:
+    argv: [docker, network, inspect, "{{ item.network_name }}"]
+  loop: "{{ networking_resolved_network_list }}"
+  loop_control:
+    label: "{{ item.environment }} -> {{ item.network_name }}"
+  register: networking_desired_network_inspections
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Refuse unowned or incompatible same-name networks
+  ansible.builtin.assert:
+    that:
+      - >-
+        item.rc != 0
+        or (
+          ((item.stdout | from_json | first).Labels | default({}, true)).get(networking_label_managed) == 'true'
+          and ((item.stdout | from_json | first).Labels | default({}, true)).get(networking_label_project) == project.name
+          and ((item.stdout | from_json | first).Labels | default({}, true)).get(networking_label_environment) == item.item.environment
+          and ((item.stdout | from_json | first).Labels | default({}, true)).get(networking_label_resource) == networking_resource_type
+          and (item.stdout | from_json | first).Driver == networking_network_driver
+          and (networking_network_driver != 'overlay' or (item.stdout | from_json | first).Attachable)
+          and (networking_network_driver != 'overlay' or (item.stdout | from_json | first).Scope == 'swarm')
+          and not (item.stdout | from_json | first).Internal
+        )
+        or (
+          networking_network_driver == 'overlay'
+          and networking_resolved.overlay_migration_approved
+          and ((item.stdout | from_json | first).Labels | default({}, true)).get(networking_label_managed) == 'true'
+          and ((item.stdout | from_json | first).Labels | default({}, true)).get(networking_label_project) == project.name
+          and ((item.stdout | from_json | first).Labels | default({}, true)).get(networking_label_environment) == item.item.environment
+          and ((item.stdout | from_json | first).Labels | default({}, true)).get(networking_label_resource) == networking_resource_type
+          and (item.stdout | from_json | first).Driver == 'bridge'
+          and ((item.stdout | from_json | first).Containers | default({}, true) | length == 0)
+        )
+    fail_msg: >-
+      Network "{{ item.item.network_name }}" already exists but is external,
+      owned by another Foundry resource, or incompatible. Refusing adoption,
+      mutation, or destructive recreation.
+  loop: "{{ networking_desired_network_inspections.results }}"
+  loop_control:
+    label: "{{ item.item.network_name }}"
+
+- name: Discover Foundry-owned network IDs for this project
+  ansible.builtin.command:
+    argv:
+      - docker
+      - network
+      - ls
+      - --quiet
+      - --filter
+      - "label={{ networking_label_managed }}=true"
+      - --filter
+      - "label={{ networking_label_project }}={{ project.name }}"
+      - --filter
+      - "label={{ networking_label_resource }}={{ networking_resource_type }}"
+  register: networking_owned_network_ids
+  changed_when: false
+  check_mode: false
+
+- name: Inspect all Foundry-owned project networks
+  ansible.builtin.command:
+    argv: "{{ ['docker', 'network', 'inspect'] + networking_owned_network_ids.stdout_lines }}"
+  register: networking_owned_network_inspection
+  changed_when: false
+  check_mode: false
+  when: networking_owned_network_ids.stdout_lines | length > 0
+
+- name: Resolve stale Foundry-owned networks
+  ansible.builtin.set_fact:
+    networking_owned_network_data: >-
+      {{
+        networking_owned_network_inspection.stdout | from_json
+        if networking_owned_network_ids.stdout_lines | length > 0 else []
+      }}
+    networking_stale_networks: >-
+      {{
+        (networking_owned_network_inspection.stdout | from_json
+         if networking_owned_network_ids.stdout_lines | length > 0 else [])
+        | rejectattr('Name', 'in', networking_resolved_network_list | map(attribute='network_name') | list)
+        | list
+      }}
+
+- name: Fail closed when stale-network policy forbids drift
+  ansible.builtin.assert:
+    that:
+      - networking_stale_networks | length == 0
+    fail_msg: >-
+      Stale Foundry-owned networks exist: {{ networking_stale_networks | map(attribute='Name') | join(', ') }}.
+      No network was changed.
+  when: networking_resolved.stale_network_policy == 'fail'
+
+- name: Refuse automatic removal of stale networks with attached containers
+  ansible.builtin.assert:
+    that:
+      - item.Containers | default({}, true) | length == 0
+    fail_msg: >-
+      Stale network {{ item.Name }} still has attached containers. Foundry will
+      not disconnect workloads or force-delete the network.
+  loop: "{{ networking_stale_networks }}"
+  loop_control:
+    label: "{{ item.Name }}"
+  when: networking_resolved.stale_network_policy == 'remove_unused'
+
+- name: Report stale Foundry-owned networks without mutating them
+  ansible.builtin.debug:
+    msg: >-
+      Stale Foundry network {{ item.Name }} has
+      {{ item.Containers | default({}, true) | length }} attached container(s).
+      Policy=report leaves it untouched.
+  loop: "{{ networking_stale_networks }}"
+  loop_control:
+    label: "{{ item.Name }}"
+  when: networking_resolved.stale_network_policy == 'report'

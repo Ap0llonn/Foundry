@@ -1,0 +1,15 @@
+---
+identity:
+  default_admin_sudo:
+    mode: passwordless
+  groups: []
+  users:
+    - name: alice
+      state: present
+      admin: true
+      groups: []
+      # Valid Base64 characters, but not an encoded OpenSSH Ed25519 key.
+      ssh_keys:
+        - "ssh-ed25519 AAAA malformed@acceptance.invalid"
+      sudo:
+        mode: inherit

@@ -1,0 +1,175 @@
+---
+- name: Ensure trusted Dokploy and Traefik directories exist
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+    follow: false
+  loop:
+    - {path: "{{ infrastructure_services_dokploy_directory }}", mode: "0750"}
+    - {path: "{{ infrastructure_services_traefik_directory }}", mode: "0750"}
+    - {path: "{{ infrastructure_services_traefik_dynamic_directory }}", mode: "0750"}
+
+- name: Inspect trusted Traefik configuration paths
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop:
+    - "{{ infrastructure_services_traefik_directory }}"
+    - "{{ infrastructure_services_traefik_dynamic_directory }}"
+    - "{{ infrastructure_services_traefik_directory }}/traefik.yml"
+  register: infrastructure_services_traefik_path_checks
+
+- name: Refuse unsafe Traefik symlink paths
+  ansible.builtin.assert:
+    that:
+      - not item.stat.islnk | default(false)
+      - not item.stat.exists or item.stat.pw_name == 'root'
+    fail_msg: "Unsafe or non-root-owned Traefik path: {{ item.item }}"
+  loop: "{{ infrastructure_services_traefik_path_checks.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Render Traefik configuration candidate outside the active path
+  ansible.builtin.template:
+    src: traefik.yml.j2
+    dest: "{{ infrastructure_services_traefik_candidate }}"
+    owner: root
+    group: root
+    mode: "0600"
+  register: infrastructure_services_traefik_candidate_change
+
+- name: Prepare ACME state when TLS is enabled
+  ansible.builtin.file:
+    path: "{{ infrastructure_services_traefik_dynamic_directory }}/acme.json"
+    state: touch
+    owner: root
+    group: root
+    mode: "0600"
+    access_time: preserve
+    modification_time: preserve
+  when: foundry_platform_resolved.traefik.tls.enabled
+
+- name: Validate Traefik configuration with the pinned image
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --volume
+      - "{{ infrastructure_services_traefik_candidate }}:/etc/traefik/traefik.yml:ro"
+      - --volume
+      - "{{ infrastructure_services_traefik_dynamic_directory }}:{{ infrastructure_services_traefik_dynamic_directory }}:ro"
+      - "{{ foundry_platform_resolved.traefik.image }}"
+      - check-config
+      - --configFile=/etc/traefik/traefik.yml
+  register: infrastructure_services_traefik_config_validation
+  changed_when: false
+
+- name: Activate only the validated Traefik candidate
+  ansible.builtin.copy:
+    src: "{{ infrastructure_services_traefik_candidate }}"
+    dest: "{{ infrastructure_services_traefik_directory }}/traefik.yml"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0640"
+  register: infrastructure_services_traefik_config_change
+
+- name: Resolve immutable Traefik container contract fingerprint
+  ansible.builtin.set_fact:
+    infrastructure_services_traefik_config_hash: >-
+      {{ {
+        'image': foundry_platform_resolved.traefik.image,
+        'network': foundry_platform_resolved.traefik.ingress_network,
+        'http_port': foundry_platform_resolved.traefik.http_port,
+        'https_port': (foundry_platform_resolved.traefik.https_port if foundry_platform_resolved.traefik.tls.enabled else none),
+        'management_port': (foundry_platform_resolved.dokploy.management_port if foundry_platform_resolved.dokploy.enabled and not infrastructure_services_domain_enabled else none),
+        'tls': foundry_platform_resolved.traefik.tls.enabled
+      } | to_json | hash('sha256') }}
+
+- name: Inspect desired Traefik container
+  ansible.builtin.command:
+    argv: [docker, container, inspect, "{{ infrastructure_services_traefik_container_name }}"]
+  register: infrastructure_services_traefik_inspect
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Refuse external or incompatible Traefik collision
+  ansible.builtin.assert:
+    that:
+      - >-
+        infrastructure_services_traefik_inspect.rc != 0
+        or (
+          ((infrastructure_services_traefik_inspect.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.managed') == 'true'
+          and ((infrastructure_services_traefik_inspect.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.project') == project.name
+          and ((infrastructure_services_traefik_inspect.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.service') == 'traefik'
+        )
+    fail_msg: Same-name Traefik is external; refusing adoption/replacement.
+
+- name: Resolve Traefik immutable-container reconciliation
+  ansible.builtin.set_fact:
+    infrastructure_services_traefik_recreate: >-
+      {{
+        infrastructure_services_traefik_inspect.rc == 0
+        and ((infrastructure_services_traefik_inspect.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.config-sha256')
+            != infrastructure_services_traefik_config_hash
+      }}
+
+- name: Recreate drifted owned Traefik without deleting persistent state
+  ansible.builtin.command:
+    argv: [docker, container, rm, --force, "{{ infrastructure_services_traefik_container_name }}"]
+  when: infrastructure_services_traefik_recreate
+
+- name: Create missing pinned Traefik container
+  ansible.builtin.command:
+    argv: >-
+      {{
+        ['docker', 'run', '--detach', '--name', infrastructure_services_traefik_container_name,
+         '--restart', 'unless-stopped', '--network', foundry_platform_resolved.traefik.ingress_network,
+         '--label', 'foundry.managed=true', '--label', 'foundry.project=' + project.name,
+         '--label', 'foundry.service=traefik',
+         '--label', 'foundry.config-sha256=' + infrastructure_services_traefik_config_hash,
+         '--health-cmd', 'traefik healthcheck --ping', '--health-interval', '10s',
+         '--health-timeout', '3s', '--health-retries', '6',
+         '--volume', infrastructure_services_traefik_directory + '/traefik.yml:/etc/traefik/traefik.yml:ro',
+         '--volume', infrastructure_services_traefik_dynamic_directory + ':/etc/dokploy/traefik/dynamic',
+         '--volume', '/var/run/docker.sock:/var/run/docker.sock:ro',
+         '--publish', (foundry_platform_resolved.traefik.http_port | string) + ':80/tcp']
+        + (['--publish', (foundry_platform_resolved.dokploy.management_port | string) + ':3000/tcp']
+           if foundry_platform_resolved.dokploy.enabled and not infrastructure_services_domain_enabled else [])
+        + ([
+          '--publish', (foundry_platform_resolved.traefik.https_port | string) + ':443/tcp',
+          '--publish', (foundry_platform_resolved.traefik.https_port | string) + ':443/udp'
+        ] if foundry_platform_resolved.traefik.tls.enabled else [])
+        + [foundry_platform_resolved.traefik.image]
+      }}
+  when: infrastructure_services_traefik_inspect.rc != 0 or infrastructure_services_traefik_recreate
+
+- name: Restart Traefik only after owned configuration changes
+  ansible.builtin.command:
+    argv: [docker, container, restart, "{{ infrastructure_services_traefik_container_name }}"]
+  when:
+    - infrastructure_services_traefik_inspect.rc == 0
+    - not infrastructure_services_traefik_recreate
+    - infrastructure_services_traefik_config_change.changed
+
+- name: Start stopped compatible Traefik container
+  ansible.builtin.command:
+    argv: [docker, container, start, "{{ infrastructure_services_traefik_container_name }}"]
+  when:
+    - infrastructure_services_traefik_inspect.rc == 0
+    - not infrastructure_services_traefik_recreate
+    - not (infrastructure_services_traefik_inspect.stdout | from_json | first).State.Running
+
+- name: Wait for Traefik application health
+  ansible.builtin.command:
+    argv: [docker, container, inspect, --format, "{{ '{{.State.Health.Status}}' }}", "{{ infrastructure_services_traefik_container_name }}"]
+  register: infrastructure_services_traefik_health
+  changed_when: false
+  retries: "{{ infrastructure_services_health_retries }}"
+  delay: "{{ infrastructure_services_health_delay }}"
+  until: infrastructure_services_traefik_health.stdout == 'healthy'

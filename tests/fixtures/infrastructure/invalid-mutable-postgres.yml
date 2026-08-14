@@ -1,0 +1,11 @@
+---
+project:
+  name: fixture-project
+environments:
+  - name: dev
+services:
+  postgres:
+    enabled: true
+    image: postgres:latest
+network:
+  exposure: []

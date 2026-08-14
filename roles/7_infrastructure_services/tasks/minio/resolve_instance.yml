@@ -1,0 +1,21 @@
+---
+- name: Append resolved MinIO instance
+  ansible.builtin.set_fact:
+    infrastructure_services_minio_instances: >-
+      {{
+        infrastructure_services_minio_instances + [{
+          'environment': minio_instance.environment,
+          'network_name': infrastructure_services_network_state.resolved_networks[minio_instance.environment],
+          'container_name': 'foundry-' + project.name + '-' + minio_instance.environment + '-minio',
+          'image': minio_instance.image,
+          'data_path': minio_instance.data_path | default(
+            infrastructure_services_minio_state_directory + '/' + project.name + '/' + minio_instance.environment + '/data', true
+          ),
+          'environment_file': infrastructure_services_minio_state_directory + '/' + project.name + '/' + minio_instance.environment + '/minio.env',
+          'root_user_file': infrastructure_services_minio_state_directory + '/' + project.name + '/' + minio_instance.environment + '/root-user',
+          'root_password_file': infrastructure_services_minio_state_directory + '/' + project.name + '/' + minio_instance.environment + '/root-password',
+          'run_as_uid': infrastructure_services_resolved.minio.run_as_uid | int,
+          'run_as_gid': infrastructure_services_resolved.minio.run_as_gid | int
+        }]
+      }}
+  no_log: true

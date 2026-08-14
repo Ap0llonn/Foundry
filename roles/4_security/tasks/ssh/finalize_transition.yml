@@ -1,0 +1,35 @@
+---
+- name: Remove temporary firewall endpoint after final SSH reload
+  ansible.builtin.import_tasks: ../firewall/finalize_ssh_transition.yml
+
+- name: Verify previous SSH endpoint no longer accepts connections
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host | default(inventory_hostname) }}"
+    port: "{{ security_active_management_port | int }}"
+    state: stopped
+    connect_timeout: 2
+    timeout: "{{ security_ssh_probe_timeout }}"
+  delegate_to: localhost
+  become: false
+  check_mode: false
+  when:
+    - not ansible_check_mode
+    - security_active_management_port | int != security_resolved.ssh.port | int
+
+- name: Create controller connection-state directory
+  ansible.builtin.file:
+    path: "{{ security_controller_state_directory }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+
+- name: Persist validated SSH management endpoint
+  ansible.builtin.copy:
+    dest: "{{ security_controller_state_file }}"
+    mode: "0600"
+    content: |
+      ---
+      current_port: {{ security_resolved.ssh.port | int }}
+  delegate_to: localhost
+  become: false

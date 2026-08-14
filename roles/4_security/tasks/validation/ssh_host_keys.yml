@@ -1,0 +1,48 @@
+---
+- name: Find final public SSH host keys
+  ansible.builtin.find:
+    paths: /etc/ssh
+    patterns: ssh_host_*_key.pub
+    file_type: file
+    recurse: false
+  register: security_validation_host_key_files
+
+- name: Read final SSH host-key fingerprints
+  ansible.builtin.command:
+    argv: [ssh-keygen, -lf, "{{ item.path }}", -E, sha256]
+  loop: "{{ security_validation_host_key_files.files | sort(attribute='path') }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: security_validation_host_key_commands
+  changed_when: false
+  check_mode: false
+
+- name: Initialize final host-key fingerprint inventory
+  ansible.builtin.set_fact:
+    security_validation_host_key_fingerprints: []
+
+- name: Collect final host-key fingerprints
+  ansible.builtin.set_fact:
+    security_validation_host_key_fingerprints: >-
+      {{ (security_validation_host_key_fingerprints + [item.stdout.split()[1]]) | sort }}
+  loop: "{{ security_validation_host_key_commands.results }}"
+  loop_control:
+    label: "{{ item.item.path }}"
+
+- name: Read approved SSH host-key inventory
+  ansible.builtin.slurp:
+    path: "{{ security_ssh_host_key_state_file }}"
+  register: security_validation_host_key_state
+
+- name: Validate SSH host-key preservation
+  ansible.builtin.assert:
+    that:
+      - security_validation_host_key_files.matched | int > 0
+      - >-
+        security_validation_host_key_fingerprints
+        == (security_validation_host_key_state.content | b64decode | from_yaml).fingerprints
+    fail_msg: SSH host-key identity differs from the approved Foundry inventory.
+
+- name: Report final public host-key fingerprints
+  ansible.builtin.debug:
+    msg: "SSH host-key fingerprints: {{ security_validation_host_key_fingerprints | join(', ') }}"

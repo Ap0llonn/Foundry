@@ -1,0 +1,95 @@
+---
+- name: Initialize MinIO credential-reload plan
+  ansible.builtin.set_fact:
+    infrastructure_services_minio_restart_required: []
+    infrastructure_services_minio_existing_names: >-
+      {{
+        infrastructure_services_minio_existing.results
+        | selectattr('rc', 'equalto', 0)
+        | map(attribute='item.container_name') | list
+      }}
+
+- name: Prepare MinIO state and data paths
+  ansible.builtin.include_tasks: prepare_instance.yml
+  loop: "{{ infrastructure_services_minio_instances }}"
+  loop_control:
+    loop_var: minio_resolved_instance
+    label: "{{ minio_resolved_instance.environment }}"
+
+- name: Install root-only MinIO credential files
+  ansible.builtin.copy:
+    dest: "{{ item.environment_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      MINIO_ROOT_USER_FILE=/run/secrets/minio-root-user
+      MINIO_ROOT_PASSWORD_FILE=/run/secrets/minio-root-password
+  loop: "{{ infrastructure_services_minio_instances }}"
+  loop_control:
+    label: "{{ item.environment }}"
+  no_log: true
+
+- name: Create missing isolated MinIO S3 containers
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --detach
+      - --name
+      - "{{ item.0.container_name }}"
+      - --restart
+      - unless-stopped
+      - --user
+      - "{{ item.0.run_as_uid }}:{{ item.0.run_as_gid }}"
+      - --network
+      - "{{ item.0.network_name }}"
+      - --network-alias
+      - minio
+      - --label
+      - foundry.managed=true
+      - --label
+      - "foundry.project={{ project.name }}"
+      - --label
+      - "foundry.environment={{ item.0.environment }}"
+      - --label
+      - "foundry.resource={{ infrastructure_services_minio_label_resource }}"
+      - --env-file
+      - "{{ item.0.environment_file }}"
+      - --volume
+      - "{{ item.0.root_user_file }}:/run/secrets/minio-root-user:ro"
+      - --volume
+      - "{{ item.0.root_password_file }}:/run/secrets/minio-root-password:ro"
+      - --volume
+      - "{{ item.0.data_path }}:/data"
+      - "{{ item.0.image }}"
+      - server
+      - /data
+      - --console-address
+      - ":{{ infrastructure_services_minio_console_port }}"
+  loop: >-
+    {{ infrastructure_services_minio_instances | zip(infrastructure_services_minio_existing.results) | list }}
+  loop_control:
+    label: "{{ item.0.environment }} -> {{ item.0.container_name }}"
+  when: item.1.rc != 0
+  no_log: true
+
+- name: Start stopped compatible MinIO containers
+  ansible.builtin.command:
+    argv: [docker, container, start, "{{ item.0.container_name }}"]
+  loop: >-
+    {{ infrastructure_services_minio_instances | zip(infrastructure_services_minio_existing.results) | list }}
+  loop_control:
+    label: "{{ item.0.container_name }}"
+  when:
+    - item.1.rc == 0
+    - item.0.container_name not in infrastructure_services_minio_restart_required | default([])
+    - not (item.1.stdout | from_json | first).State.Running
+
+- name: Restart MinIO when a mounted credential file changed
+  ansible.builtin.command:
+    argv: [docker, container, restart, "{{ item }}"]
+  loop: "{{ infrastructure_services_minio_restart_required | default([]) | unique }}"
+  loop_control:
+    label: "{{ item }}"
+  no_log: true

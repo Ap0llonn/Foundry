@@ -1,4 +1,31 @@
 ---
-# Role: 5 - Networking
-# Placeholder — ne fait rien pour le moment.
-[]
+# Layer 5 consumes the Docker Engine contract published by layer 6 Runtime and
+# owns only environment-network resources.
+- name: 5.1 Validate and resolve environment network intent
+  ansible.builtin.import_tasks: 01_validate.yml
+  tags: [always, networking_validation]
+
+- name: 5.2 Require the certified Docker runtime
+  ansible.builtin.import_tasks: 02_docker_dependency.yml
+  become: true
+  tags: [networking, networking_dependency]
+
+- name: 5.3 Discover desired, colliding, and stale networks
+  ansible.builtin.import_tasks: discovery/main.yml
+  become: true
+  tags: [networking, networking_discovery]
+
+- name: 5.4 Converge only Foundry-owned environment networks
+  ansible.builtin.import_tasks: networks/main.yml
+  become: true
+  tags: [networking, networking_networks]
+
+- name: 5.5 Publish the authoritative environment network mapping
+  ansible.builtin.import_tasks: 04_publish.yml
+  become: true
+  tags: [networking, networking_state]
+
+- name: 5.6 Validate environment isolation and ownership
+  ansible.builtin.import_tasks: validation/main.yml
+  become: true
+  tags: [networking, networking_result]

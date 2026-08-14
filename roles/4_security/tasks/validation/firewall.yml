@@ -1,0 +1,113 @@
+---
+- name: Resolve declared firewall state for standalone validation
+  ansible.builtin.import_tasks: ../firewall/resolve.yml
+
+- name: Read verbose numbered UFW state
+  ansible.builtin.command:
+    argv: [ufw, status, numbered]
+  environment:
+    LC_ALL: C
+  register: security_ufw_numbered_status
+  changed_when: false
+  check_mode: false
+
+- name: Read verbose UFW policy state
+  ansible.builtin.command:
+    argv: [ufw, status, verbose]
+  environment:
+    LC_ALL: C
+  register: security_ufw_status
+  changed_when: false
+  check_mode: false
+
+- name: Validate default-deny firewall policy
+  ansible.builtin.assert:
+    that:
+      - security_ufw_status.stdout is search('(?m)^Status:\s+active$')
+      - security_ufw_status.stdout is search('(?m)^Default:\s+deny \(incoming\), ' + security_resolved.firewall.default_outgoing + ' \(outgoing\)')
+    fail_msg: UFW is not active with the declared default-deny policy.
+  when: security_resolved.firewall.enabled
+
+- name: Validate exact Foundry ownership comments are active
+  ansible.builtin.assert:
+    that:
+      - item.comment in security_ufw_numbered_status.stdout
+      - (item.port | string) + '/' + item.protocol in security_ufw_numbered_status.stdout
+      - item.source == 'any' or item.source in security_ufw_numbered_status.stdout
+      - >-
+        not security_resolved.firewall.ipv6
+        or item.source != 'any'
+        or security_ufw_numbered_status.stdout is search(
+             (item.port | string) + '/' + item.protocol + ' \(v6\)'
+           )
+    fail_msg: "Missing effective Foundry firewall rule {{ item.comment }}."
+  loop: "{{ security_firewall_rules }}"
+  loop_control:
+    label: "{{ item.comment }}"
+  when:
+    - security_resolved.firewall.enabled
+    - not ansible_check_mode or security_active_management_port | int == security_resolved.ssh.port | int
+
+- name: Read configured UFW IPv6 mode
+  ansible.builtin.command:
+    argv: [awk, -F=, '/^IPV6=/{print $2}', /etc/default/ufw]
+  register: security_ufw_ipv6_mode
+  changed_when: false
+  check_mode: false
+  when: security_resolved.firewall.enabled
+
+- name: Validate UFW IPv4 and IPv6 parity policy
+  ansible.builtin.assert:
+    that:
+      - security_ufw_ipv6_mode.stdout == (security_resolved.firewall.ipv6 | ternary('yes', 'no'))
+    fail_msg: UFW IPv6 mode does not match the declared parity policy.
+  when: security_resolved.firewall.enabled
+
+- name: Read wildcard network listeners
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail && ss -H -lntup |
+      awk '$5 ~ /^(\*|0\.0\.0\.0|\[::\]):/ {
+        address=$5; sub(/^.*:/, "", address); protocol=$1;
+        sub(/[0-9]+$/, "", protocol); print protocol "|" address
+      }' | sort -u
+    executable: /bin/bash
+  register: security_public_listeners
+  changed_when: false
+  check_mode: false
+
+- name: Resolve declared exposure socket identities
+  ansible.builtin.set_fact:
+    security_declared_listener_ids: >-
+      {{
+        security_network_exposure_config
+        | map(attribute='protocol')
+        | zip(security_network_exposure_config | map(attribute='port') | map('string'))
+        | map('join', '|') | list | unique | sort
+      }}
+    security_unexpected_listener_ids: >-
+      {{
+        security_public_listeners.stdout_lines
+        | difference(
+            security_network_exposure_config
+            | map(attribute='protocol')
+            | zip(security_network_exposure_config | map(attribute='port') | map('string'))
+            | map('join', '|') | list
+          ) | sort
+      }}
+
+- name: Fail on unexpected public listeners when policy requires it
+  ansible.builtin.assert:
+    that:
+      - security_unexpected_listener_ids | length == 0
+    fail_msg: "Unexpected wildcard listeners: {{ security_unexpected_listener_ids | join(', ') }}"
+  when: security_resolved.firewall.unexpected_listener_policy == 'fail'
+
+- name: Warn about unexpected public listeners
+  ansible.builtin.debug:
+    msg: >-
+      SECURITY WARNING: wildcard listeners are not declared in network.exposure:
+      {{ security_unexpected_listener_ids | join(', ') }}
+  when:
+    - security_resolved.firewall.unexpected_listener_policy == 'warn'
+    - security_unexpected_listener_ids | length > 0

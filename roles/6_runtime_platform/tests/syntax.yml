@@ -1,0 +1,6 @@
+---
+- name: Parse the Foundry Runtime role
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - role: 6_runtime_platform

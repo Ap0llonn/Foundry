@@ -1,0 +1,35 @@
+---
+- name: Initialize desired Foundry firewall rules
+  ansible.builtin.set_fact:
+    security_firewall_rules: []
+    security_firewall_rule_ids: []
+
+- name: Expand declared exposure entries
+  ansible.builtin.include_tasks: expand_exposure.yml
+  loop: "{{ security_network_exposure_config }}"
+  loop_control:
+    loop_var: security_firewall_exposure
+    label: "{{ security_firewall_exposure.name }}"
+  when: security_resolved.firewall.enabled
+
+- name: Resolve temporary management sources for SSH migration
+  ansible.builtin.set_fact:
+    security_firewall_transition_sources: >-
+      {{ security_management_allowed_cidrs if security_management_restrict_by_cidr else ['any'] }}
+
+- name: Add temporary old-port SSH migration rules
+  ansible.builtin.include_tasks: append_rule.yml
+  vars:
+    security_firewall_exposure:
+      name: ssh-transition
+      port: "{{ security_active_management_port | int }}"
+      protocol: tcp
+      scope: management
+  loop: "{{ security_firewall_transition_sources }}"
+  loop_control:
+    loop_var: security_firewall_source
+    label: "{{ security_firewall_source }} -> {{ security_active_management_port }}/tcp"
+  when:
+    - security_resolved.firewall.enabled
+    - security_resolved.ssh.enabled
+    - security_active_management_port | int != security_resolved.ssh.port | int

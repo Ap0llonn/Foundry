@@ -1,0 +1,12 @@
+---
+- name: Enable and start AppArmor platform service
+  ansible.builtin.systemd_service:
+    name: apparmor.service
+    enabled: true
+    state: started
+  when: security_resolved.apparmor.enabled
+
+- name: Preserve externally managed AppArmor state when disabled in Foundry
+  ansible.builtin.debug:
+    msg: Foundry AppArmor ownership is disabled; existing platform state is untouched.
+  when: not security_resolved.apparmor.enabled

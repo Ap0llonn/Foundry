@@ -1,0 +1,15 @@
+---
+- name: Validate resolved PostgreSQL instances
+  ansible.builtin.import_tasks: validate_inputs.yml
+
+- name: Discover PostgreSQL networks and owned resources
+  ansible.builtin.import_tasks: discovery.yml
+
+- name: Converge PostgreSQL containers and volumes
+  ansible.builtin.import_tasks: converge.yml
+
+- name: Validate PostgreSQL health and isolation
+  ansible.builtin.import_tasks: validate.yml
+
+- name: Publish non-secret PostgreSQL outputs
+  ansible.builtin.import_tasks: publish.yml

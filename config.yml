@@ -2,6 +2,50 @@
 # Configuration globale de l'infrastructure.
 vm_ip: 149.56.96.110
 
+# Project/environment identity drives deterministic workload isolation. Docker
+# network names resolve to foundry-<project>-<environment> unless explicitly
+# overridden on an environment.
+project:
+  name: my-project
+
+environments:
+  - name: dev
+  - name: prod
+    # network:
+    #   name: custom-prod-network
+
+networking:
+  # report: preserve and report stale owned networks
+  # fail: reject any stale owned network before mutation
+  # remove_unused: remove stale owned networks only when no container is attached
+  stale_network_policy: report
+  # One-time bridge -> overlay migration is allowed only for empty Foundry-owned
+  # networks. Attached networks always fail and require an explicit workload migration.
+  overlay_migration_approved: false
+
+# Optional DNS naming policy. Leave base empty for domainless operation.
+# hyphen: dev-api.example.com (works with a normal *.example.com wildcard)
+# nested: dev.api.example.com (requires deeper DNS/certificate coverage)
+domains:
+  base: ""
+  environment_style: hyphen
+  dokploy_label: dokploy
+  service_names:
+    - api
+
+# Runtime owns Docker installation and host-level daemon policy. This executes
+# after Security and before Networking. Temporarily set the migration approval
+# to true only when replacing the docker.io package installed by an earlier
+# Foundry iteration; return it to false after that one-time migration succeeds.
+runtime:
+  docker:
+    enabled: true
+    legacy_package_migration_approved: false
+    logging:
+      driver: json-file
+      max_size: 10m
+      max_files: 3
+
 # OS package lifecycle. The default bootstrap mode installs and validates the
 # baseline but never runs a distribution upgrade, autoremove, purge, or reboot.
 os_base_operation_mode: bootstrap
@@ -77,33 +121,137 @@ identity:
     #     commands:
     #       - /usr/bin/systemctl restart foundry.service
 
+network:
+  # Global desired exposure manifest. Workload roles contribute requirements
+  # before the Security phase and must never edit UFW directly.
+  exposure:
+    - name: ssh
+      port: 22
+      protocol: tcp
+      scope: management
+
+management:
+  # Dokploy requires this to be true and at least one CIDR before it can start;
+  # this prevents an unauthorised visitor from claiming the first admin account.
+  restrict_by_cidr: false
+  allowed_cidrs: []
+
 security:
   ssh:
     enabled: true
     # Desired management port only. Foundry discovers and migrates from the
     # current port automatically; a new VM starts from the standard port 22.
     port: 22
-    permit_root_login: false
+    root_login: false
     password_authentication: false
     public_key_authentication: true
+    empty_passwords: false
+    forwarding:
+      agent: false
+      tcp: false
+      x11: false
     max_auth_tries: 4
     login_grace_time: 60
+    max_sessions: 10
+    max_startups: "10:30:60"
+    allow_groups: []
+    accept_host_key_change: false
 
   firewall:
     enabled: true
     default_incoming: deny
     default_outgoing: allow
-    automatic_rules: true
-    # Example: {name: custom-api, port: 8080, protocol: tcp, source: 10.0.0.0/24}
-    additional_rules: []
+    ipv6: true
+    unexpected_listener_policy: fail
 
   fail2ban:
     enabled: true
     ssh:
       enabled: true
-      max_retries: 5
-      ban_time: 3600
+      maxretry: 5
+      findtime: 10m
+      bantime: 1h
+    backend: systemd
+    banaction: ufw
+    ignore: []
 
   updates:
     automatic_security_updates: true
     automatic_reboot: false
+    validate_dry_run: false
+
+  apparmor:
+    enabled: true
+
+  logging:
+    persistent_journal: true
+
+# High-level application infrastructure. Empty environment lists mean every
+# declared environment. PostgreSQL and Redis use tested digest-pinned defaults.
+# Omitted credentials are generated once on the VM; Vault values may be used
+# for externally controlled credentials without enabling SSH password login.
+services:
+  postgres:
+    enabled: false
+    environments: []
+    major: 17
+    credentials: {}
+    resources:
+      memory: ""
+      cpus: ""
+
+  redis:
+    enabled: false
+    environments: []
+    version: "8.2"
+    credentials: {}
+    persistence: true
+    maxmemory: ""
+    maxmemory_policy: allkeys-lru
+    resources:
+      memory: ""
+      cpus: ""
+
+  object_storage:
+    enabled: false
+    provider: minio
+    environments: []
+    # MinIO has no maintained safe default image in Foundry. Supply an approved
+    # immutable image digest when enabling this service.
+    image: ""
+    credentials: {}
+    # Optional external storage root. Only /srv/foundry/... is accepted.
+    data_root: ""
+
+# Dokploy requires a narrowly owned single-manager Swarm. Enabling Dokploy
+# automatically enables that dependency and the one Dokploy-compatible Traefik.
+# Foundry never executes Dokploy's destructive installation script.
+platform:
+  swarm:
+    enabled: false
+    advertise_address: ""
+    default_address_pool: 10.240.0.0/16
+    subnet_size: 24
+
+  traefik:
+    enabled: false
+    http_port: 80
+    https_port: 443
+    tls:
+      enabled: false
+      email: ""
+
+  dokploy:
+    enabled: false
+    management_port: 3000
+    credentials: {}
+    secret_version: v1
+
+# Legacy compatibility for the earlier MinIO-only interface. Do not enable it
+# together with services.object_storage.
+infrastructure_services:
+  minio:
+    enabled: false
+    run_as_uid: 1000
+    run_as_gid: 1000
+    instances: []

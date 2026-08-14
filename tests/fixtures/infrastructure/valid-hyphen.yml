@@ -1,0 +1,36 @@
+---
+project:
+  name: fixture-project
+environments:
+  - name: dev
+  - name: prod
+services:
+  postgres:
+    enabled: true
+  redis:
+    enabled: true
+    persistence: true
+    maxmemory: 256m
+    resources:
+      memory: 512m
+platform:
+  dokploy:
+    enabled: true
+domains:
+  base: example.com
+  environment_style: hyphen
+  dokploy_label: dokploy
+  service_names: [api]
+management:
+  restrict_by_cidr: true
+  allowed_cidrs: [192.0.2.0/24]
+network:
+  exposure:
+    - {name: traefik-http, port: 80, protocol: tcp, scope: public}
+expected_resolved_domains:
+  dev:
+    api: dev-api.example.com
+  prod:
+    api: prod-api.example.com
+expected_dokploy_endpoint: http://dokploy.example.com
+

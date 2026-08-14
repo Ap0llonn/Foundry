@@ -64,6 +64,40 @@ collection directory. To validate without connecting to or modifying a VM:
 make check
 ```
 
+The central [acceptance-test suite](tests/README.md) adds negative configuration
+fixtures, read-only VM stability checks, and explicitly gated disposable-VM
+convergence tests:
+
+```bash
+make test-static
+make test-live
+```
+
+The acceptance suite fails when a V1 requirement is not implemented; an
+unexpectedly accepted negative fixture is never treated as a pass.
+
+## Runtime, networking, and infrastructure services
+
+`project.name` plus `environments` resolves deterministic Docker networks such
+as `foundry-my-project-dev`. They are bridges normally and attachable overlays
+when Dokploy's single-manager Swarm is enabled. Role 5 owns only networks carrying
+the complete Foundry label set, preserves external networks, and refuses to
+remove an attached stale network. See the
+[networking guide](roles/5_networking/Doc.MD).
+
+Role 7 consumes those networks to provide private per-environment PostgreSQL,
+Redis, and MinIO, plus one Traefik ingress and Dokploy platform. The global
+config supports `dev-api.example.com`, `dev.api.example.com`, or domainless
+operation. Stateful data ports are private by default and enabling Dokploy
+requires a management CIDR allowlist. See the
+[Infrastructure Services guide](roles/7_infrastructure_services/Doc.MD).
+
+Role 6 installs Docker from its official repository, pins and validates the
+runtime, and executes before role 5. When Dokploy is requested, Runtime also
+owns the narrowly scoped single-manager Swarm; it never adopts or force-leaves
+an external cluster. Infrastructure Services consumes both contracts and never
+installs Docker.
+
 ## OS lifecycle modes
 
 The OS role has three explicit modes configured in `config.yml`:

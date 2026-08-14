@@ -1,0 +1,10 @@
+---
+project:
+  name: test-project
+environments:
+  - name: dev
+  - name: prod
+    network:
+      name: custom-prod-network
+networking:
+  stale_network_policy: report

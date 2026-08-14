@@ -1,0 +1,20 @@
+---
+- name: Initialize object-storage credential resolution
+  ansible.builtin.set_fact:
+    infrastructure_services_object_storage_instances_with_credentials: []
+
+- name: Resolve stable credentials for each object-storage environment
+  ansible.builtin.include_tasks: common/prepare_object_storage_instance.yml
+  loop: "{{ infrastructure_services_resolved.minio.instances }}"
+  loop_control:
+    loop_var: infrastructure_services_object_storage_instance
+    label: "{{ infrastructure_services_object_storage_instance.environment }}"
+  no_log: true
+
+- name: Publish stable object-storage credentials to the MinIO engine
+  ansible.builtin.set_fact:
+    infrastructure_services_resolved: >-
+      {{ infrastructure_services_resolved | combine({
+        'minio': {'instances': infrastructure_services_object_storage_instances_with_credentials}
+      }, recursive=true) }}
+  no_log: true

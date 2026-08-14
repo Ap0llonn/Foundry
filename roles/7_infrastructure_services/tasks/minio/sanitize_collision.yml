@@ -1,0 +1,32 @@
+---
+- name: Resolve sanitized MinIO collision compatibility
+  ansible.builtin.set_fact:
+    infrastructure_services_minio_collision_state: >-
+      {{
+        infrastructure_services_minio_collision_state + [{
+          'container_name': minio_collision_result.item.container_name,
+          'exists': minio_collision_result.rc == 0,
+          'compatible': (
+            minio_collision_result.rc != 0
+            or (
+              ((minio_collision_result.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.managed') == 'true'
+              and ((minio_collision_result.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.project') == project.name
+              and ((minio_collision_result.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.environment') == minio_collision_result.item.environment
+              and ((minio_collision_result.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.resource') == infrastructure_services_minio_label_resource
+              and (minio_collision_result.stdout | from_json | first).Config.Image == minio_collision_result.item.image
+              and (minio_collision_result.stdout | from_json | first).Config.User
+                  == ((minio_collision_result.item.run_as_uid | string) + ':' + (minio_collision_result.item.run_as_gid | string))
+              and (minio_collision_result.stdout | from_json | first).HostConfig.NetworkMode == minio_collision_result.item.network_name
+              and (minio_collision_result.stdout | from_json | first).Mounts
+                  | selectattr('Destination', 'equalto', '/data')
+                  | selectattr('Source', 'equalto', minio_collision_result.item.data_path)
+                  | list | length == 1
+              and 'MINIO_ROOT_USER_FILE=/run/secrets/minio-root-user'
+                  in (minio_collision_result.stdout | from_json | first).Config.Env
+              and 'MINIO_ROOT_PASSWORD_FILE=/run/secrets/minio-root-password'
+                  in (minio_collision_result.stdout | from_json | first).Config.Env
+            )
+          )
+        }]
+      }}
+  no_log: true

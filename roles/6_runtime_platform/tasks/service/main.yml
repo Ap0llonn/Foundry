@@ -1,0 +1,108 @@
+---
+- name: Reconcile containerd service drift
+  ansible.builtin.systemd_service:
+    name: "{{ runtime_containerd_service }}"
+    enabled: true
+    state: started
+
+- name: Reconcile Docker service drift
+  ansible.builtin.systemd_service:
+    name: "{{ runtime_docker_service }}"
+    enabled: true
+    state: started
+
+- name: Read persistent service states
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - show
+      - "{{ item }}"
+      - --property=ActiveState
+      - --property=UnitFileState
+  loop:
+    - "{{ runtime_containerd_service }}"
+    - "{{ runtime_docker_service }}"
+  register: runtime_docker_service_states
+  changed_when: false
+  check_mode: false
+
+- name: Require active and enabled runtime services
+  ansible.builtin.assert:
+    that:
+      - item.stdout is search('(?m)^ActiveState=active$')
+      - item.stdout is search('(?m)^UnitFileState=enabled$')
+    fail_msg: "{{ item.item }} is not both active and enabled."
+  loop: "{{ runtime_docker_service_states.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Gather Docker group state
+  ansible.builtin.getent:
+    database: group
+    key: docker
+
+- name: Enforce the V1 Docker privilege boundary
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.getent_group.docker is defined
+      - ansible_facts.getent_group.docker[2] | default('') | trim | length == 0
+    fail_msg: >-
+      Docker group membership is root-equivalent and is not managed in Runtime V1.
+      Remove undeclared members and use explicit sudo for Docker administration.
+
+- name: Detect users with Docker as their primary group
+  ansible.builtin.shell:
+    cmd: >-
+      getent passwd |
+      awk -F: -v gid='{{ ansible_facts.getent_group.docker[1] }}'
+      '$4 == gid { print $1 }'
+    executable: /bin/bash
+  register: runtime_docker_primary_group_users
+  changed_when: false
+  check_mode: false
+
+- name: Reject primary-group Docker privilege delegation
+  ansible.builtin.assert:
+    that:
+      - runtime_docker_primary_group_users.stdout_lines | length == 0
+    fail_msg: >-
+      Docker is the primary group of one or more users. Docker access is
+      root-equivalent and Runtime V1 does not delegate it.
+
+- name: Inspect Docker socket metadata
+  ansible.builtin.stat:
+    path: "{{ runtime_docker_socket }}"
+  register: runtime_docker_socket_state
+
+- name: Validate privileged Unix socket ownership and mode
+  ansible.builtin.assert:
+    that:
+      - runtime_docker_socket_state.stat.exists
+      - runtime_docker_socket_state.stat.issock
+      - runtime_docker_socket_state.stat.pw_name == 'root'
+      - runtime_docker_socket_state.stat.gr_name == 'docker'
+      - runtime_docker_socket_state.stat.mode == '0660'
+    fail_msg: Docker Unix socket ownership, type, or mode is unsafe.
+
+- name: Inspect active TCP listeners for Docker daemon exposure
+  ansible.builtin.command:
+    argv: [ss, --tcp, --listening, --numeric, --process]
+  register: runtime_docker_tcp_listeners
+  changed_when: false
+  check_mode: false
+
+- name: Inspect the effective Docker systemd unit
+  ansible.builtin.command:
+    argv: [systemctl, cat, "{{ runtime_docker_service }}"]
+  register: runtime_docker_systemd_unit
+  changed_when: false
+  check_mode: false
+
+- name: Reject Docker remote TCP API exposure
+  ansible.builtin.assert:
+    that:
+      - runtime_docker_tcp_listeners.stdout is not search('dockerd')
+      - runtime_docker_systemd_unit.stdout is not search('tcp://')
+    fail_msg: >-
+      Docker is listening on or configured for a TCP API. Runtime V1 permits only
+      the privileged local Unix socket.

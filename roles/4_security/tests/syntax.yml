@@ -1,0 +1,32 @@
+---
+- name: Parse complete modular Security role
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - role: 4_security
+
+- name: Parse dynamically selected Security helpers
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Parse SSH policy transaction
+      ansible.builtin.import_role:
+        name: 4_security
+        tasks_from: ssh/apply_policy
+
+    - name: Parse SSH connection migration
+      ansible.builtin.import_role:
+        name: 4_security
+        tasks_from: ssh/migrate_connection
+
+    - name: Parse firewall exposure expansion
+      ansible.builtin.import_role:
+        name: 4_security
+        tasks_from: firewall/expand_exposure
+
+    - name: Parse firewall rule normalization
+      ansible.builtin.import_role:
+        name: 4_security
+        tasks_from: firewall/append_rule

@@ -1,0 +1,17 @@
+---
+- name: Resolve sources for exposure
+  ansible.builtin.set_fact:
+    security_firewall_exposure_sources: >-
+      {{
+        security_management_allowed_cidrs
+        if security_firewall_exposure.scope == 'management'
+           and security_management_restrict_by_cidr
+        else ['any']
+      }}
+
+- name: Expand exposure into owned UFW rules
+  ansible.builtin.include_tasks: append_rule.yml
+  loop: "{{ security_firewall_exposure_sources }}"
+  loop_control:
+    loop_var: security_firewall_source
+    label: "{{ security_firewall_source }} -> {{ security_firewall_exposure.port }}/{{ security_firewall_exposure.protocol }}"

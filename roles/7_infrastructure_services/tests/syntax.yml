@@ -1,0 +1,37 @@
+---
+- name: Parse infrastructure-services role task graph
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars:
+    project:
+      name: syntax-project
+    infrastructure_services:
+      minio:
+        enabled: false
+        instances: []
+  roles:
+    - role: 7_infrastructure_services
+
+- name: Parse infrastructure-services post-reboot validation graph
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars:
+    foundry_services_resolved:
+      postgres:
+        enabled: false
+      redis:
+        enabled: false
+    infrastructure_services_resolved:
+      minio:
+        enabled: false
+    infrastructure_services_traefik_enabled: false
+    foundry_platform_resolved:
+      dokploy:
+        enabled: false
+  tasks:
+    - name: Include infrastructure-services validation graph
+      ansible.builtin.include_role:
+        name: 7_infrastructure_services
+        tasks_from: validation/main

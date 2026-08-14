@@ -1,0 +1,18 @@
+---
+project:
+  name: fixture-project
+environments:
+  - name: dev
+services: {}
+platform:
+  dokploy:
+    enabled: true
+domains:
+  base: example.com
+management:
+  restrict_by_cidr: false
+  allowed_cidrs: []
+network:
+  exposure:
+    - {name: traefik-http, port: 80, protocol: tcp, scope: public}
+

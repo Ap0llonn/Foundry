@@ -1,0 +1,142 @@
+---
+- name: Inspect authoritative Redis environment networks
+  ansible.builtin.command:
+    argv: [docker, network, inspect, "{{ item.network_name }}"]
+  loop: "{{ infrastructure_services_redis_instances }}"
+  register: infrastructure_services_redis_network_inspections
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Require owned Redis environment networks
+  ansible.builtin.assert:
+    that:
+      - item.rc == 0
+      - (item.stdout | from_json | first).Driver in ['bridge', 'overlay']
+      - (item.stdout | from_json | first).Driver != 'overlay' or (item.stdout | from_json | first).Attachable
+      - ((item.stdout | from_json | first).Labels | default({}, true)).get('foundry.managed') == 'true'
+      - ((item.stdout | from_json | first).Labels | default({}, true)).get('foundry.project') == project.name
+      - ((item.stdout | from_json | first).Labels | default({}, true)).get('foundry.environment') == item.item.environment
+      - ((item.stdout | from_json | first).Labels | default({}, true)).get('foundry.resource') == 'environment-network'
+    fail_msg: Redis requires its exact Foundry-owned environment network.
+  loop: "{{ infrastructure_services_redis_network_inspections.results }}"
+  no_log: true
+
+- name: Inspect desired persistent Redis volume names
+  ansible.builtin.command:
+    argv: [docker, volume, inspect, "{{ item.volume_name }}"]
+  loop: "{{ infrastructure_services_redis_instances | selectattr('persistence') | list }}"
+  register: infrastructure_services_redis_volume_inspections
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Refuse unowned persistent Redis volume collisions
+  ansible.builtin.assert:
+    that:
+      - >-
+        item.rc != 0 or (
+          (item.stdout | from_json | first).Driver == 'local'
+          and
+          ((item.stdout | from_json | first).Labels | default({}, true)).get('foundry.managed') == 'true'
+          and ((item.stdout | from_json | first).Labels | default({}, true)).get('foundry.project') == project.name
+          and ((item.stdout | from_json | first).Labels | default({}, true)).get('foundry.environment') == item.item.environment
+          and ((item.stdout | from_json | first).Labels | default({}, true)).get('foundry.service') == 'redis'
+          and ((item.stdout | from_json | first).Labels | default({}, true)).get('foundry.resource') == 'redis-data'
+        )
+    fail_msg: A Redis volume name collides with external or incompatible state; Foundry refuses adoption.
+  loop: "{{ infrastructure_services_redis_volume_inspections.results }}"
+  no_log: true
+
+- name: Inspect desired Redis container names
+  ansible.builtin.command:
+    argv: [docker, container, inspect, "{{ item.container_name }}"]
+  loop: "{{ infrastructure_services_redis_instances }}"
+  register: infrastructure_services_redis_container_inspections
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Initialize Redis container reconciliation state
+  ansible.builtin.set_fact:
+    infrastructure_services_redis_container_state: []
+
+- name: Sanitize Redis container collision state
+  ansible.builtin.include_tasks: sanitize_container.yml
+  loop: "{{ infrastructure_services_redis_container_inspections.results }}"
+  loop_control:
+    loop_var: redis_inspection
+  no_log: true
+
+- name: Refuse unowned Redis container collisions
+  ansible.builtin.assert:
+    that:
+      - not item.exists or item.owned
+    fail_msg: Redis container {{ item.container_name }} is not owned by Foundry; refusing adoption or removal.
+  loop: "{{ infrastructure_services_redis_container_state }}"
+  loop_control:
+    label: "{{ item.container_name }}"
+
+- name: Resolve Redis container reconciliation sets
+  ansible.builtin.set_fact:
+    infrastructure_services_redis_existing_names: >-
+      {{ infrastructure_services_redis_container_state | selectattr('exists') | map(attribute='container_name') | list }}
+    infrastructure_services_redis_recreate_names: >-
+      {{ infrastructure_services_redis_container_state | selectattr('exists') | selectattr('owned') | rejectattr('compatible') | map(attribute='container_name') | list }}
+
+- name: Discover project-owned Redis containers
+  ansible.builtin.command:
+    argv:
+      - docker
+      - container
+      - ls
+      - --all
+      - --format
+      - "{% raw %}{{.Names}}{% endraw %}"
+      - --filter
+      - label=foundry.managed=true
+      - --filter
+      - "label=foundry.project={{ project.name }}"
+      - --filter
+      - label=foundry.service=redis
+  register: infrastructure_services_redis_owned_containers
+  changed_when: false
+  check_mode: false
+
+- name: Report stale Redis containers without mutation
+  ansible.builtin.debug:
+    msg: >-
+      Stale Foundry Redis container {{ item }} remains untouched. Use an
+      explicit stateful-service lifecycle workflow to remove it.
+  loop: >-
+    {{ infrastructure_services_redis_owned_containers.stdout_lines
+       | difference(infrastructure_services_redis_instances | map(attribute='container_name') | list) }}
+
+- name: Discover project-owned Redis volumes
+  ansible.builtin.command:
+    argv:
+      - docker
+      - volume
+      - ls
+      - --quiet
+      - --filter
+      - label=foundry.managed=true
+      - --filter
+      - "label=foundry.project={{ project.name }}"
+      - --filter
+      - label=foundry.service=redis
+  register: infrastructure_services_redis_owned_volumes
+  changed_when: false
+  check_mode: false
+
+- name: Report stale Redis volumes without deleting data
+  ansible.builtin.debug:
+    msg: >-
+      Stale Redis data volume {{ item }} is preserved. Data destruction
+      requires a separate explicit operation.
+  loop: >-
+    {{ infrastructure_services_redis_owned_volumes.stdout_lines
+       | difference(infrastructure_services_redis_instances | selectattr('persistence') | map(attribute='volume_name') | list) }}

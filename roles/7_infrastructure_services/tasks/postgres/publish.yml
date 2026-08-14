@@ -1,0 +1,16 @@
+---
+- name: Initialize resolved infrastructure service outputs
+  ansible.builtin.set_fact:
+    foundry_resolved_services: "{{ foundry_resolved_services | default({}) }}"
+    infrastructure_services_backup_targets: >-
+      {{
+        infrastructure_services_backup_targets | default([])
+        | rejectattr('service', 'equalto', 'postgres') | list
+      }}
+
+- name: Publish each non-secret PostgreSQL service contract
+  ansible.builtin.include_tasks: publish_instance.yml
+  loop: "{{ infrastructure_services_postgres_instances }}"
+  loop_control:
+    loop_var: postgres_instance
+  no_log: true

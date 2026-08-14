@@ -1,0 +1,45 @@
+---
+- name: Remove only explicitly approved empty Foundry bridges before overlay creation
+  ansible.builtin.command:
+    argv: [docker, network, rm, "{{ item.item.network_name }}"]
+  loop: "{{ networking_desired_network_inspections.results }}"
+  loop_control:
+    label: "{{ item.item.environment }} -> {{ item.item.network_name }}"
+  when:
+    - item.rc == 0
+    - networking_network_driver == 'overlay'
+    - networking_resolved.overlay_migration_approved
+    - (item.stdout | from_json | first).Driver == 'bridge'
+    - (item.stdout | from_json | first).Containers | default({}, true) | length == 0
+
+- name: Create missing Foundry environment networks
+  ansible.builtin.command:
+    argv: >-
+      {{
+        ['docker', 'network', 'create', '--driver', networking_network_driver]
+        + (['--attachable'] if networking_network_driver == 'overlay' else [])
+        + [
+          '--label', networking_label_managed + '=true',
+          '--label', networking_label_project + '=' + project.name,
+          '--label', networking_label_environment + '=' + item.0.environment,
+          '--label', networking_label_resource + '=' + networking_resource_type,
+          item.0.network_name
+        ]
+      }}
+  loop: >-
+    {{ networking_resolved_network_list | zip(networking_desired_network_inspections.results) | list }}
+  loop_control:
+    label: "{{ item.0.environment }} -> {{ item.0.network_name }}"
+  when: >-
+    item.1.rc != 0
+    or (networking_network_driver == 'overlay'
+        and networking_resolved.overlay_migration_approved
+        and (item.1.stdout | from_json | first).Driver == 'bridge')
+
+- name: Remove only unused stale Foundry-owned networks when approved
+  ansible.builtin.command:
+    argv: [docker, network, rm, "{{ item.Name }}"]
+  loop: "{{ networking_stale_networks }}"
+  loop_control:
+    label: "{{ item.Name }}"
+  when: networking_resolved.stale_network_policy == 'remove_unused'

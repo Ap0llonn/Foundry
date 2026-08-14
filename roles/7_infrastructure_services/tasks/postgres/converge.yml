@@ -1,0 +1,96 @@
+---
+- name: Inspect immutable PostgreSQL images before container mutation
+  ansible.builtin.command:
+    argv: [docker, image, inspect, "{{ item }}"]
+  loop: "{{ infrastructure_services_postgres_instances | map(attribute='image') | unique | list }}"
+  register: infrastructure_services_postgres_image_inspections
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Pull missing immutable PostgreSQL images before replacement
+  ansible.builtin.command:
+    argv: [docker, image, pull, "{{ item.item }}"]
+  loop: "{{ infrastructure_services_postgres_image_inspections.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.rc != 0
+
+- name: Verify the tested PostgreSQL major before stateful mutation
+  ansible.builtin.command:
+    argv: [docker, run, --rm, "{{ item }}", postgres, --version]
+  loop: "{{ infrastructure_services_postgres_instances | map(attribute='image') | unique | list }}"
+  register: infrastructure_services_postgres_version_checks
+  changed_when: false
+  failed_when: >-
+    infrastructure_services_postgres_version_checks.rc != 0
+    or infrastructure_services_postgres_version_checks.stdout is not search('PostgreSQL 17[.]')
+
+- name: Create missing Foundry-owned PostgreSQL volumes
+  ansible.builtin.command:
+    argv:
+      - docker
+      - volume
+      - create
+      - --label
+      - foundry.managed=true
+      - --label
+      - "foundry.project={{ project.name }}"
+      - --label
+      - "foundry.environment={{ item.0.environment }}"
+      - --label
+      - foundry.service=postgres
+      - --label
+      - foundry.resource=postgres-data
+      - "{{ item.0.volume_name }}"
+  loop: "{{ infrastructure_services_postgres_instances | zip(infrastructure_services_postgres_volume_inspections.results) | list }}"
+  when: item.1.rc != 0
+  no_log: true
+
+- name: Remove drifted Foundry-owned PostgreSQL containers while preserving volumes
+  ansible.builtin.command:
+    argv: [docker, container, rm, --force, "{{ item }}"]
+  loop: "{{ infrastructure_services_postgres_recreate_names }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Create missing or drifted PostgreSQL containers
+  ansible.builtin.command:
+    argv: >-
+      {{
+        ['docker', 'run', '--detach', '--name', item.container_name,
+         '--restart', 'unless-stopped',
+         '--network', item.network_name, '--network-alias', 'postgres',
+         '--label', 'foundry.managed=true',
+         '--label', 'foundry.project=' + project.name,
+         '--label', 'foundry.environment=' + item.environment,
+         '--label', 'foundry.service=postgres',
+         '--label', 'foundry.resource=postgres',
+         '--env', 'POSTGRES_USER=' + item.user,
+         '--env', 'POSTGRES_DB=' + item.database,
+         '--env', 'POSTGRES_PASSWORD_FILE=/run/secrets/postgres-password',
+         '--env', 'PGDATA=/var/lib/postgresql/data/pgdata',
+         '--health-cmd', 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"',
+         '--health-interval', '10s', '--health-timeout', '5s',
+         '--health-retries', '12', '--health-start-period', '20s',
+         '--volume', item.volume_name + ':/var/lib/postgresql/data',
+         '--volume', item.password_file + ':/run/secrets/postgres-password:ro']
+        + (['--memory', item.resources.memory] if item.resources.memory | default('') | length > 0 else [])
+        + (['--cpus', item.resources.cpus | string] if item.resources.cpus | default('') | string | length > 0 else [])
+        + [item.image]
+      }}
+  loop: "{{ infrastructure_services_postgres_instances }}"
+  when: >-
+    item.container_name not in infrastructure_services_postgres_existing_names
+    or item.container_name in infrastructure_services_postgres_recreate_names
+  no_log: true
+
+- name: Start stopped compatible PostgreSQL containers
+  ansible.builtin.command:
+    argv: [docker, container, start, "{{ item.item.container_name }}"]
+  loop: "{{ infrastructure_services_postgres_container_inspections.results }}"
+  when:
+    - item.rc == 0
+    - item.item.container_name not in infrastructure_services_postgres_recreate_names
+    - not (item.stdout | from_json | first).State.Running
+  no_log: true

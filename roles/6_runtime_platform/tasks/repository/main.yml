@@ -1,0 +1,73 @@
+---
+- name: Gather package state before taking Runtime ownership
+  ansible.builtin.package_facts:
+    manager: auto
+
+- name: Inspect prior Runtime ownership state
+  ansible.builtin.stat:
+    path: "{{ runtime_docker_ownership_manifest }}"
+  register: runtime_docker_ownership_state
+
+- name: Inspect the Foundry Docker repository definition
+  ansible.builtin.stat:
+    path: "{{ runtime_docker_repository_file }}"
+  register: runtime_docker_repository_state
+
+- name: Resolve installed Docker package ownership
+  ansible.builtin.set_fact:
+    runtime_installed_official_packages: >-
+      {{ runtime_docker_official_package_names | intersect(ansible_facts.packages.keys()) | sort }}
+    runtime_installed_conflicting_packages: >-
+      {{ runtime_docker_conflicting_packages | intersect(ansible_facts.packages.keys()) | sort }}
+
+- name: Refuse to adopt an externally installed official Docker runtime
+  ansible.builtin.assert:
+    that:
+      - >-
+        runtime_installed_official_packages | length == 0
+        or runtime_docker_ownership_state.stat.exists
+        or runtime_docker_repository_state.stat.exists
+    fail_msg: >-
+      Official Docker packages already exist without Foundry Runtime ownership.
+      Foundry will not silently adopt or overwrite an externally managed runtime.
+
+- name: Ensure the trusted keyring directory exists
+  ansible.builtin.file:
+    path: "{{ runtime_docker_keyring | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the checksum-pinned Docker repository signing key
+  ansible.builtin.get_url:
+    url: "{{ runtime_docker_key_url }}"
+    dest: "{{ runtime_docker_keyring }}"
+    checksum: "{{ runtime_docker_key_checksum }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Configure the Foundry-owned official Docker repository
+  ansible.builtin.deb822_repository:
+    name: "{{ runtime_docker_repository_name }}"
+    types: [deb]
+    uris: ["{{ runtime_docker_repository_url }}"]
+    suites: ["{{ runtime_docker_repository_suite }}"]
+    components: "{{ runtime_docker_repository_components }}"
+    architectures: [amd64]
+    signed_by: "{{ runtime_docker_keyring }}"
+    state: present
+    install_python_debian: false
+    mode: "0644"
+  register: runtime_docker_repository_result
+
+- name: Refresh APT metadata after repository changes
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+    lock_timeout: "{{ runtime_docker_apt_lock_timeout }}"
+  register: runtime_docker_apt_cache_result
+  retries: "{{ runtime_docker_apt_retries }}"
+  delay: "{{ runtime_docker_apt_retry_delay }}"
+  until: runtime_docker_apt_cache_result is succeeded

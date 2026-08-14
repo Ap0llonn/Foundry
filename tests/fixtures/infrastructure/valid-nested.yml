@@ -1,0 +1,23 @@
+---
+project:
+  name: fixture-project
+environments:
+  - name: dev
+  - name: prod
+domains:
+  base: example.com
+  environment_style: nested
+  dokploy_label: dokploy
+  service_names: [api]
+services:
+  postgres:
+    enabled: true
+network:
+  exposure: []
+expected_resolved_domains:
+  dev:
+    api: dev.api.example.com
+  prod:
+    api: prod.api.example.com
+expected_dokploy_endpoint: http://dokploy.example.com
+

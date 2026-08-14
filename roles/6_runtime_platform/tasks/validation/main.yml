@@ -1,0 +1,216 @@
+---
+- name: Collect Docker information for standalone validation
+  ansible.builtin.command:
+    argv: [docker, info, --format, "{% raw %}{{json .}}{% endraw %}"]
+  register: runtime_docker_validation_info_json
+  changed_when: false
+  check_mode: false
+
+- name: Resolve standalone Docker information
+  ansible.builtin.set_fact:
+    runtime_docker_info: "{{ runtime_docker_validation_info_json.stdout | from_json }}"
+
+- name: Collect standalone runtime service states
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - show
+      - "{{ item }}"
+      - --property=ActiveState
+      - --property=UnitFileState
+  loop:
+    - "{{ runtime_containerd_service }}"
+    - "{{ runtime_docker_service }}"
+  register: runtime_docker_validation_service_states
+  changed_when: false
+  check_mode: false
+
+- name: Validate standalone runtime service states
+  ansible.builtin.assert:
+    that:
+      - item.stdout is search('(?m)^ActiveState=active$')
+      - item.stdout is search('(?m)^UnitFileState=enabled$')
+    fail_msg: "{{ item.item }} failed standalone Runtime validation."
+  loop: "{{ runtime_docker_validation_service_states.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Collect standalone Docker socket state
+  ansible.builtin.stat:
+    path: "{{ runtime_docker_socket }}"
+  register: runtime_docker_validation_socket
+
+- name: Validate standalone Docker socket security
+  ansible.builtin.assert:
+    that:
+      - runtime_docker_validation_socket.stat.issock
+      - runtime_docker_validation_socket.stat.pw_name == 'root'
+      - runtime_docker_validation_socket.stat.gr_name == 'docker'
+      - runtime_docker_validation_socket.stat.mode == '0660'
+    fail_msg: Docker socket failed standalone Runtime security validation.
+
+- name: Collect standalone Docker group state
+  ansible.builtin.getent:
+    database: group
+    key: docker
+
+- name: Detect standalone primary-group Docker delegation
+  ansible.builtin.shell:
+    cmd: >-
+      getent passwd |
+      awk -F: -v gid='{{ ansible_facts.getent_group.docker[1] }}'
+      '$4 == gid { print $1 }'
+    executable: /bin/bash
+  register: runtime_docker_validation_primary_group_users
+  changed_when: false
+  check_mode: false
+
+- name: Validate standalone Docker group privilege boundary
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.getent_group.docker[2] | default('') | trim | length == 0
+      - runtime_docker_validation_primary_group_users.stdout_lines | length == 0
+    fail_msg: Runtime detected undeclared root-equivalent Docker group access.
+
+- name: Collect standalone Docker TCP listener state
+  ansible.builtin.command:
+    argv: [ss, --tcp, --listening, --numeric, --process]
+  register: runtime_docker_validation_tcp_listeners
+  changed_when: false
+  check_mode: false
+
+- name: Validate standalone Docker API exposure
+  ansible.builtin.assert:
+    that:
+      - runtime_docker_validation_tcp_listeners.stdout is not search('dockerd')
+    fail_msg: Docker exposes an unexpected TCP API listener.
+
+- name: Collect standalone Docker root capacity
+  ansible.builtin.command:
+    argv: [df, --output=pcent, "{{ runtime_docker_info.DockerRootDir }}"]
+  register: runtime_docker_validation_capacity
+  changed_when: false
+  check_mode: false
+
+- name: Collect standalone Docker root inode capacity
+  ansible.builtin.command:
+    argv: [df, --output=ipcent, "{{ runtime_docker_info.DockerRootDir }}"]
+  register: runtime_docker_validation_inode_capacity
+  changed_when: false
+  check_mode: false
+
+- name: Resolve standalone Docker free capacity
+  ansible.builtin.set_fact:
+    runtime_docker_free_percent: >-
+      {{ 100 - (runtime_docker_validation_capacity.stdout_lines[-1] | trim | regex_replace('%$', '') | int) }}
+    runtime_docker_free_inodes_percent: >-
+      {{ 100 - (runtime_docker_validation_inode_capacity.stdout_lines[-1] | trim | regex_replace('%$', '') | int) }}
+
+- name: Read Docker Engine and API versions
+  ansible.builtin.command:
+    argv: [docker, version, --format, "{% raw %}{{json .}}{% endraw %}"]
+  register: runtime_docker_version_json
+  changed_when: false
+  check_mode: false
+
+- name: Read Docker Compose plugin version
+  ansible.builtin.command:
+    argv: [docker, compose, version, --short]
+  register: runtime_docker_compose_version
+  changed_when: false
+  check_mode: false
+
+- name: Read containerd version
+  ansible.builtin.command:
+    argv: [containerd, --version]
+  register: runtime_containerd_version
+  changed_when: false
+  check_mode: false
+
+- name: Read exact installed Docker package versions
+  ansible.builtin.command:
+    argv: [dpkg-query, --show, "--showformat=${Version}", "{{ item.key }}"]
+  loop: "{{ runtime_docker_packages | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  register: runtime_docker_package_versions
+  changed_when: false
+  check_mode: false
+
+- name: Resolve reported Docker versions
+  ansible.builtin.set_fact:
+    runtime_docker_version: "{{ runtime_docker_version_json.stdout | from_json }}"
+
+- name: Validate package and runtime version contract
+  ansible.builtin.assert:
+    that:
+      - item.stdout == item.item.value
+    fail_msg: >-
+      {{ item.item.key }} is {{ item.stdout }}, expected the certified version
+      {{ item.item.value }}.
+  loop: "{{ runtime_docker_package_versions.results }}"
+  loop_control:
+    label: "{{ item.item.key }}"
+
+- name: Validate effective Docker engine contract
+  ansible.builtin.assert:
+    that:
+      - runtime_docker_version.Server.Version is match(runtime_docker_supported_engine_pattern)
+      - runtime_docker_version.Server.ApiVersion is match(runtime_docker_supported_api_pattern)
+      - runtime_docker_compose_version.stdout | trim | length > 0
+      - runtime_containerd_version.stdout is search('containerd')
+      - runtime_docker_info.LoggingDriver == runtime_resolved.docker.logging.driver
+      - runtime_docker_info.DockerRootDir == runtime_resolved.docker.data_root
+      - runtime_docker_info.Driver in runtime_docker_allowed_storage_drivers
+      - runtime_docker_free_percent | int >= runtime_docker_min_free_percent | int
+      - runtime_docker_free_inodes_percent | int >= runtime_docker_min_free_inodes_percent | int
+    fail_msg: Docker Engine, API, Compose, containerd, logging, or storage validation failed.
+
+- name: Read effective daemon configuration
+  ansible.builtin.slurp:
+    path: "{{ runtime_docker_daemon_config }}"
+  register: runtime_docker_effective_daemon
+
+- name: Validate exact Foundry-owned daemon configuration
+  ansible.builtin.assert:
+    that:
+      - runtime_docker_effective_daemon.content | b64decode | from_json == runtime_docker_daemon_document
+    fail_msg: Docker daemon configuration drift remains after convergence.
+
+- name: Publish Runtime ownership and certification metadata
+  ansible.builtin.copy:
+    dest: "{{ runtime_docker_ownership_manifest }}"
+    owner: root
+    group: root
+    mode: "0600"
+    content: >-
+      {{
+        {
+          'version': 1,
+          'provider': 'docker-ce',
+          'repository': runtime_docker_repository_url,
+          'keyring': runtime_docker_keyring,
+          'packages': runtime_docker_packages,
+          'daemon_config': runtime_docker_daemon_config,
+          'daemon_config_sha256': (runtime_docker_effective_daemon.content | b64decode | hash('sha256')),
+          'engine_version': runtime_docker_version.Server.Version,
+          'api_version': runtime_docker_version.Server.ApiVersion,
+          'compose_version': runtime_docker_compose_version.stdout | trim,
+          'containerd_version': runtime_containerd_version.stdout | trim,
+          'storage_driver': runtime_docker_info.Driver,
+          'data_root': runtime_docker_info.DockerRootDir
+        }
+        | to_nice_yaml(indent=2, sort_keys=true)
+      }}
+
+- name: Report the certified Runtime contract
+  ansible.builtin.debug:
+    msg:
+      docker_engine: "{{ runtime_docker_version.Server.Version }}"
+      docker_api: "{{ runtime_docker_version.Server.ApiVersion }}"
+      docker_compose: "{{ runtime_docker_compose_version.stdout | trim }}"
+      containerd: "{{ runtime_containerd_version.stdout | trim }}"
+      storage_driver: "{{ runtime_docker_info.Driver }}"
+      data_root: "{{ runtime_docker_info.DockerRootDir }}"
+      free_percent: "{{ runtime_docker_free_percent }}"
+      free_inodes_percent: "{{ runtime_docker_free_inodes_percent }}"

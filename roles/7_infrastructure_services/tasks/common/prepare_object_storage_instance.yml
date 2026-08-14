@@ -1,0 +1,75 @@
+---
+- name: Validate object-storage secret directory before writing
+  ansible.builtin.include_tasks: common/validate_directory_path.yml
+  vars:
+    infrastructure_services_checked_directory: >-
+      {{ infrastructure_services_secret_directory }}/{{ project.name }}/{{ infrastructure_services_object_storage_instance.environment }}/minio
+
+- name: Ensure object-storage secret directory exists
+  ansible.builtin.file:
+    path: "{{ infrastructure_services_secret_directory }}/{{ project.name }}/{{ infrastructure_services_object_storage_instance.environment }}/minio"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+    follow: false
+
+- name: Inspect stable object-storage password
+  ansible.builtin.stat:
+    path: "{{ infrastructure_services_secret_directory }}/{{ project.name }}/{{ infrastructure_services_object_storage_instance.environment }}/minio/root-password"
+    follow: false
+  register: infrastructure_services_object_storage_password_check
+
+- name: Refuse unsafe existing object-storage password path
+  ansible.builtin.assert:
+    that:
+      - not infrastructure_services_object_storage_password_check.stat.islnk | default(false)
+      - not infrastructure_services_object_storage_password_check.stat.exists or infrastructure_services_object_storage_password_check.stat.isreg
+      - not infrastructure_services_object_storage_password_check.stat.exists or infrastructure_services_object_storage_password_check.stat.pw_name == 'root'
+      - not infrastructure_services_object_storage_password_check.stat.exists or infrastructure_services_object_storage_password_check.stat.mode == '0600'
+    fail_msg: Existing object-storage password path is unsafe; refusing to read or overwrite it.
+  no_log: true
+
+- name: Generate missing object-storage password
+  ansible.builtin.command:
+    argv: [openssl, rand, -base64, "36"]
+  register: infrastructure_services_object_storage_generated_password
+  changed_when: true
+  when:
+    - not infrastructure_services_object_storage_password_check.stat.exists
+    - infrastructure_services_object_storage_instance.root_password | length == 0
+  no_log: true
+
+- name: Install object-storage password from Vault or first-run generation
+  ansible.builtin.copy:
+    dest: "{{ infrastructure_services_secret_directory }}/{{ project.name }}/{{ infrastructure_services_object_storage_instance.environment }}/minio/root-password"
+    owner: root
+    group: root
+    mode: "0600"
+    content: >-
+      {{
+        infrastructure_services_object_storage_instance.root_password + '\n'
+        if infrastructure_services_object_storage_instance.root_password | length > 0
+        else infrastructure_services_object_storage_generated_password.stdout + '\n'
+      }}
+    force: "{{ infrastructure_services_object_storage_instance.root_password | length > 0 }}"
+  when: >-
+    not infrastructure_services_object_storage_password_check.stat.exists
+    or infrastructure_services_object_storage_instance.root_password | length > 0
+  no_log: true
+
+- name: Read stable object-storage password
+  ansible.builtin.slurp:
+    path: "{{ infrastructure_services_secret_directory }}/{{ project.name }}/{{ infrastructure_services_object_storage_instance.environment }}/minio/root-password"
+  register: infrastructure_services_object_storage_password_raw
+  no_log: true
+
+- name: Append credential-complete object-storage instance
+  ansible.builtin.set_fact:
+    infrastructure_services_object_storage_instances_with_credentials: >-
+      {{ infrastructure_services_object_storage_instances_with_credentials + [
+        infrastructure_services_object_storage_instance | combine({
+          'root_password': infrastructure_services_object_storage_password_raw.content | b64decode | trim
+        })
+      ] }}
+  no_log: true

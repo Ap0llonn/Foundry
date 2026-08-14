@@ -1,0 +1,120 @@
+---
+- name: Inspect authoritative MinIO environment networks
+  ansible.builtin.command:
+    argv: [docker, network, inspect, "{{ item.network_name }}"]
+  loop: "{{ infrastructure_services_minio_instances }}"
+  loop_control:
+    label: "{{ item.environment }} -> {{ item.network_name }}"
+  register: infrastructure_services_minio_networks_raw
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Require every resolved MinIO environment network to exist
+  ansible.builtin.assert:
+    that:
+      - item.rc == 0
+    fail_msg: >-
+      MinIO environment {{ item.item.environment }} is missing authoritative
+      network {{ item.item.network_name }}. Run role 5 successfully first.
+  loop: "{{ infrastructure_services_minio_networks_raw.results }}"
+  loop_control:
+    label: "{{ item.item.network_name }}"
+
+- name: Require matching role-5 network ownership before MinIO mutation
+  ansible.builtin.assert:
+    that:
+      - (item.stdout | from_json | first).Driver in ['bridge', 'overlay']
+      - (item.stdout | from_json | first).Driver != 'overlay' or (item.stdout | from_json | first).Attachable
+      - not (item.stdout | from_json | first).Internal
+      - ((item.stdout | from_json | first).Labels | default({}, true)).get('foundry.managed') == 'true'
+      - ((item.stdout | from_json | first).Labels | default({}, true)).get('foundry.project') == project.name
+      - ((item.stdout | from_json | first).Labels | default({}, true)).get('foundry.environment') == item.item.environment
+      - ((item.stdout | from_json | first).Labels | default({}, true)).get('foundry.resource') == 'environment-network'
+    fail_msg: >-
+      MinIO environment {{ item.item.environment }} does not have its exact
+      authoritative role-5 network. Run networking successfully first.
+  loop: "{{ infrastructure_services_minio_networks_raw.results }}"
+  loop_control:
+    label: "{{ item.item.network_name }}"
+
+- name: Inspect desired MinIO container names before mutation
+  ansible.builtin.command:
+    argv: [docker, container, inspect, "{{ item.container_name }}"]
+  loop: "{{ infrastructure_services_minio_instances }}"
+  loop_control:
+    label: "{{ item.environment }} -> {{ item.container_name }}"
+  register: infrastructure_services_minio_existing
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Initialize sanitized MinIO collision state
+  ansible.builtin.set_fact:
+    infrastructure_services_minio_collision_state: []
+
+- name: Sanitize desired MinIO inspection results
+  ansible.builtin.include_tasks: sanitize_collision.yml
+  loop: "{{ infrastructure_services_minio_existing.results }}"
+  loop_control:
+    loop_var: minio_collision_result
+    label: "{{ minio_collision_result.item.container_name }}"
+
+- name: Refuse unowned or incompatible MinIO container collisions
+  ansible.builtin.assert:
+    that:
+      - not item.exists or item.compatible
+    fail_msg: >-
+      MinIO container {{ item.container_name }} collides with external or
+      incompatible state. Foundry refuses adoption or destructive recreation.
+  loop: "{{ infrastructure_services_minio_collision_state }}"
+  loop_control:
+    label: "{{ item.container_name }}"
+
+- name: Discover all Foundry-owned MinIO containers for this project
+  ansible.builtin.command:
+    argv:
+      - docker
+      - container
+      - ls
+      - --all
+      - --quiet
+      - --filter
+      - label=foundry.managed=true
+      - --filter
+      - "label=foundry.project={{ project.name }}"
+      - --filter
+      - "label=foundry.resource={{ infrastructure_services_minio_label_resource }}"
+  register: infrastructure_services_minio_owned_ids
+  changed_when: false
+  check_mode: false
+
+- name: Inspect all Foundry-owned MinIO containers
+  ansible.builtin.command:
+    argv: "{{ ['docker', 'container', 'inspect'] + infrastructure_services_minio_owned_ids.stdout_lines }}"
+  register: infrastructure_services_minio_owned_raw
+  changed_when: false
+  check_mode: false
+  no_log: true
+  when: infrastructure_services_minio_owned_ids.stdout_lines | length > 0
+
+- name: Resolve stale Foundry-owned MinIO instances
+  ansible.builtin.set_fact:
+    infrastructure_services_minio_stale_names: >-
+      {{
+        (infrastructure_services_minio_owned_raw.stdout | from_json
+         if infrastructure_services_minio_owned_ids.stdout_lines | length > 0 else [])
+        | rejectattr('Name', 'in', infrastructure_services_minio_instances | map(attribute='container_name') | map('regex_replace', '^', '/') | list)
+        | map(attribute='Name') | map('regex_replace', '^/', '') | list
+      }}
+  no_log: true
+
+- name: Report stale MinIO without deleting data or containers
+  ansible.builtin.debug:
+    msg: >-
+      Stale Foundry MinIO container {{ item }}
+      remains untouched. Migrate or remove it through an explicit data lifecycle workflow.
+  loop: "{{ infrastructure_services_minio_stale_names }}"
+  loop_control:
+    label: "{{ item }}"

@@ -1,0 +1,90 @@
+---
+- name: Validate networking input container types
+  ansible.builtin.assert:
+    that:
+      - project | default({}) is mapping
+      - environments | default([]) is sequence
+      - environments | default([]) is not string
+      - networking | default({}) is mapping
+    fail_msg: project and networking must be mappings; environments must be a list.
+
+- name: Resolve networking policy
+  ansible.builtin.set_fact:
+    networking_resolved: >-
+      {{ networking_defaults | combine(networking | default({}), recursive=true) }}
+
+- name: Validate project and networking option names
+  ansible.builtin.assert:
+    that:
+      - project.name | default('') is string
+      - project.name | default('') is match(networking_identifier_pattern)
+      - project.keys() | difference(networking_allowed_project_keys) | length == 0
+      - networking_resolved.keys() | difference(networking_allowed_root_keys) | length == 0
+      - networking_resolved.stale_network_policy in networking_allowed_stale_network_policies
+      - networking_resolved.overlay_migration_approved is boolean
+      - environments | length > 0
+    fail_msg: >-
+      project.name is required and must be a lowercase unambiguous identifier;
+      networking contains an unknown option or environments is empty.
+
+- name: Validate every environment is a mapping
+  ansible.builtin.assert:
+    that:
+      - item is mapping
+    fail_msg: Every environments entry must be a mapping.
+  loop: "{{ environments }}"
+  loop_control:
+    label: "{{ item.name | default('invalid environment') if item is mapping else 'invalid environment' }}"
+
+- name: Validate environment declarations
+  ansible.builtin.assert:
+    that:
+      - item.keys() | difference(networking_allowed_environment_keys) | length == 0
+      - item.name | default('') is string
+      - item.name | default('') is match(networking_identifier_pattern)
+      - item.network | default({}) is mapping
+      - (item.network | default({})).keys() | difference(networking_allowed_environment_network_keys) | length == 0
+      - (item.network | default({})).name | default('') is string
+      - >-
+        (item.network | default({})).name | default('') | length == 0
+        or (item.network | default({})).name
+           is match(networking_explicit_network_name_pattern)
+      - >-
+        (item.network | default({})).name | default('')
+        not in networking_reserved_network_names
+    fail_msg: "Invalid environment or Docker network declaration for {{ item.name | default('unknown') }}."
+  loop: "{{ environments }}"
+  loop_control:
+    label: "{{ item.name | default('invalid environment') }}"
+
+- name: Require unique environment names
+  ansible.builtin.assert:
+    that:
+      - environments | map(attribute='name') | unique | length == environments | length
+    fail_msg: Environment names must be unique.
+
+- name: Initialize authoritative environment network resolution
+  ansible.builtin.set_fact:
+    foundry_resolved_networks: {}
+    networking_resolved_network_list: []
+
+- name: Resolve each environment network once
+  ansible.builtin.include_tasks: resolve_environment.yml
+  loop: "{{ environments }}"
+  loop_control:
+    loop_var: networking_environment
+    label: "{{ networking_environment.name }}"
+
+- name: Reject resolved network-name collisions and reserved Foundry usage
+  ansible.builtin.assert:
+    that:
+      - >-
+        networking_resolved_network_list | map(attribute='network_name')
+        | unique | length == networking_resolved_network_list | length
+      - >-
+        networking_resolved_network_list
+        | selectattr('invalid_foundry_override', 'equalto', true)
+        | list | length == 0
+    fail_msg: >-
+      Two environments resolve to the same Docker network, or an explicit
+      network incorrectly claims Foundry's reserved naming namespace.

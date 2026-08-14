@@ -1,0 +1,27 @@
+---
+- name: Resolve deterministic environment network name
+  ansible.builtin.set_fact:
+    networking_default_network_name: >-
+      foundry-{{ project.name }}-{{ networking_environment.name }}
+    networking_resolved_network_name: >-
+      {{
+        (networking_environment.network | default({})).name
+        | default('foundry-' + project.name + '-' + networking_environment.name, true)
+      }}
+
+- name: Append authoritative environment network resolution
+  ansible.builtin.set_fact:
+    foundry_resolved_networks: >-
+      {{ foundry_resolved_networks | combine({networking_environment.name: networking_resolved_network_name}) }}
+    networking_resolved_network_list: >-
+      {{
+        networking_resolved_network_list + [{
+          'environment': networking_environment.name,
+          'network_name': networking_resolved_network_name,
+          'default_network_name': networking_default_network_name,
+          'invalid_foundry_override': (
+            networking_resolved_network_name is match('^foundry-')
+            and networking_resolved_network_name != networking_default_network_name
+          )
+        }]
+      }}

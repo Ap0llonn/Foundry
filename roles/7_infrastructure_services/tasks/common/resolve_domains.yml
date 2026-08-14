@@ -1,0 +1,67 @@
+---
+- name: Initialize resolved domain map
+  ansible.builtin.set_fact:
+    foundry_resolved_domains: {}
+    infrastructure_services_resolved_domain_values: []
+
+- name: Resolve domains for every environment
+  ansible.builtin.include_tasks: common/resolve_domain_environment.yml
+  loop: "{{ infrastructure_services_environment_names }}"
+  loop_control:
+    loop_var: infrastructure_services_domain_environment
+    label: "{{ infrastructure_services_domain_environment }}"
+
+- name: Validate resolved hostnames are unique and DNS-safe
+  ansible.builtin.assert:
+    that:
+      - item | length <= 253
+      - item is match(infrastructure_services_domain_pattern)
+      - infrastructure_services_resolved_domain_values | select('equalto', item) | list | length == 1
+    fail_msg: "Resolved hostname is invalid or collides with another environment service: {{ item }}"
+  loop: "{{ infrastructure_services_resolved_domain_values | reject('equalto', '') | list }}"
+  when: infrastructure_services_domain_enabled
+
+- name: Resolve Dokploy management endpoints
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_hosts: >-
+      {{ [foundry_domains_resolved.dokploy_label + '.' + foundry_domains_resolved.base]
+         if infrastructure_services_domain_enabled else [] }}
+    infrastructure_services_dokploy_endpoint: >-
+      {{
+        ('https://' if foundry_platform_resolved.traefik.tls.enabled else 'http://')
+        + foundry_domains_resolved.dokploy_label + '.' + foundry_domains_resolved.base
+        if infrastructure_services_domain_enabled
+        else 'http://' + (
+          '[' + (vm_ip | default(ansible_host | default(inventory_hostname)) | string) + ']'
+          if ':' in (vm_ip | default(ansible_host | default(inventory_hostname)) | string)
+          else (vm_ip | default(ansible_host | default(inventory_hostname)) | string)
+        ) + ':' + (foundry_platform_resolved.dokploy.management_port | string)
+      }}
+
+- name: Validate the global Dokploy hostname does not collide with environment names
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_dokploy_hosts | first not in infrastructure_services_resolved_domain_values
+    fail_msg: Dokploy's global hostname collides with an environment service hostname.
+  when: infrastructure_services_domain_enabled
+
+- name: Resolve Dokploy DNS before enabling ACME routing
+  ansible.builtin.command:
+    argv: [getent, ahosts, "{{ infrastructure_services_dokploy_hosts | first }}"]
+  register: infrastructure_services_dokploy_dns
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when:
+    - foundry_platform_resolved.dokploy.enabled
+    - foundry_platform_resolved.traefik.tls.enabled
+
+- name: Require Dokploy DNS to point at the declared VM before ACME
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_dokploy_dns.rc == 0
+      - infrastructure_services_dokploy_dns.stdout is search((vm_ip | string) | regex_escape)
+    fail_msg: Dokploy DNS must resolve to vm_ip before TLS/ACME is enabled.
+  when:
+    - foundry_platform_resolved.dokploy.enabled
+    - foundry_platform_resolved.traefik.tls.enabled

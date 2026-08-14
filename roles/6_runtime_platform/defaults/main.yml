@@ -1,0 +1,84 @@
+---
+runtime_defaults:
+  docker:
+    enabled: false
+    data_root: /var/lib/docker
+    logging:
+      driver: json-file
+      max_size: 10m
+      max_files: 3
+    daemon_config_adoption: refuse
+    legacy_package_migration_approved: false
+    restart:
+      approved: false
+      maintenance_window: ""
+    smoke_test:
+      enabled: true
+      image: "hello-world@sha256:5dd0d3e6e255913fc30f90b9f2b1d359cc2cbdb48090cc4b65f1676e203243cc"
+    privileged_users: []
+
+runtime_allowed_root_keys: [docker]
+runtime_allowed_docker_keys:
+  - enabled
+  - data_root
+  - logging
+  - daemon_config_adoption
+  - legacy_package_migration_approved
+  - restart
+  - smoke_test
+  - privileged_users
+runtime_allowed_logging_keys: [driver, max_size, max_files]
+runtime_allowed_restart_keys: [approved, maintenance_window]
+runtime_allowed_smoke_test_keys: [enabled, image]
+runtime_allowed_daemon_config_adoption: [refuse, matching]
+runtime_allowed_log_drivers: [json-file, local]
+
+# V1 is deliberately an exact, tested package set. Changing these values is a
+# dependency update and must be certified before rollout.
+runtime_docker_packages:
+  docker-ce: "5:29.7.2-1~ubuntu.26.04~resolute"
+  docker-ce-cli: "5:29.7.2-1~ubuntu.26.04~resolute"
+  containerd.io: "2.3.3-1~ubuntu.26.04~resolute"
+  docker-buildx-plugin: "0.36.1-1~ubuntu.26.04~resolute"
+  docker-compose-plugin: "5.4.0-1~ubuntu.26.04~resolute"
+runtime_docker_supported_engine_pattern: '^29\.7\.[0-9]+$'
+runtime_docker_supported_api_pattern: '^1\.[0-9]+$'
+runtime_docker_allowed_storage_drivers: [overlay2, overlayfs]
+
+runtime_docker_repository_url: https://download.docker.com/linux/ubuntu
+runtime_docker_repository_suite: resolute
+runtime_docker_repository_components: [stable]
+runtime_docker_key_url: https://download.docker.com/linux/ubuntu/gpg
+runtime_docker_key_checksum: sha256:1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570
+runtime_docker_keyring: /usr/share/keyrings/foundry-docker.asc
+runtime_docker_repository_name: foundry-docker
+runtime_docker_repository_file: /etc/apt/sources.list.d/foundry-docker.sources
+
+runtime_docker_conflicting_packages:
+  - docker.io
+  - docker-compose
+  - docker-compose-v2
+  - docker-doc
+  - docker-buildx
+  - podman-docker
+  - containerd
+  - runc
+runtime_docker_official_package_names: "{{ runtime_docker_packages.keys() | list }}"
+runtime_docker_apt_lock_timeout: 120
+runtime_docker_apt_retries: 5
+runtime_docker_apt_retry_delay: 10
+
+runtime_docker_service: docker.service
+runtime_containerd_service: containerd.service
+runtime_docker_socket: /var/run/docker.sock
+runtime_docker_daemon_config: /etc/docker/daemon.json
+runtime_state_directory: /var/lib/foundry/runtime
+runtime_docker_candidate_config: /var/lib/foundry/runtime/daemon.json.candidate
+runtime_docker_previous_config: /var/lib/foundry/runtime/daemon.json.previous
+runtime_docker_ownership_manifest: /var/lib/foundry/runtime/docker-ownership.yml
+runtime_docker_smoke_container: foundry-runtime-certification
+runtime_docker_min_free_percent: 10
+runtime_docker_min_free_inodes_percent: 5
+runtime_swarm_state_file: /var/lib/foundry/runtime/swarm-ownership.yml
+runtime_swarm_default_address_pool: 10.240.0.0/16
+runtime_swarm_default_subnet_size: 24

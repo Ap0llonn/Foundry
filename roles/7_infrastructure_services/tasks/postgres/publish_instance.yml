@@ -1,0 +1,32 @@
+---
+- name: Add PostgreSQL endpoint and backup metadata
+  ansible.builtin.set_fact:
+    foundry_resolved_services: >-
+      {{
+        foundry_resolved_services | combine({
+          postgres_instance.environment: {
+            'postgres': {
+              'host': 'postgres',
+              'port': 5432,
+              'database': postgres_instance.database,
+              'user': postgres_instance.user,
+              'container_name': postgres_instance.container_name,
+              'network_name': postgres_instance.network_name,
+              'volume_name': postgres_instance.volume_name
+            }
+          }
+        }, recursive=true)
+      }}
+    infrastructure_services_backup_targets: >-
+      {{
+        infrastructure_services_backup_targets + [{
+          'project': project.name,
+          'environment': postgres_instance.environment,
+          'service': 'postgres',
+          'container_name': postgres_instance.container_name,
+          'volume_name': postgres_instance.volume_name,
+          'mount_path': '/var/lib/postgresql/data',
+          'database': postgres_instance.database
+        }]
+      }}
+  no_log: true

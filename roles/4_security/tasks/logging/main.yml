@@ -1,0 +1,35 @@
+---
+- name: Ensure journald drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: security_resolved.logging.persistent_journal
+
+- name: Ensure persistent journal storage exists
+  ansible.builtin.file:
+    path: /var/log/journal
+    state: directory
+    owner: root
+    group: systemd-journal
+    mode: "2755"
+  when: security_resolved.logging.persistent_journal
+
+- name: Configure persistent system journal
+  ansible.builtin.template:
+    src: foundry-journald.conf.j2
+    dest: "{{ security_journald_dropin }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart persistent journal
+  when: security_resolved.logging.persistent_journal
+
+- name: Remove Foundry journald policy when persistent ownership is disabled
+  ansible.builtin.file:
+    path: "{{ security_journald_dropin }}"
+    state: absent
+  notify: Restart persistent journal
+  when: not security_resolved.logging.persistent_journal

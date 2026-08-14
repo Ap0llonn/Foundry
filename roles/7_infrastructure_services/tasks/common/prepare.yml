@@ -1,0 +1,47 @@
+---
+- name: Validate Infrastructure Services state roots before writing
+  ansible.builtin.include_tasks: common/validate_directory_path.yml
+  vars:
+    infrastructure_services_checked_directory: "{{ item.path }}"
+  loop:
+    - {path: "{{ infrastructure_services_state_directory }}"}
+    - {path: "{{ infrastructure_services_secret_directory }}"}
+    - {path: "{{ infrastructure_services_secret_directory }}/{{ project.name }}"}
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Ensure Infrastructure Services state roots exist
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+    follow: false
+  loop:
+    - {path: "{{ infrastructure_services_state_directory }}", mode: "0750"}
+    - {path: "{{ infrastructure_services_secret_directory }}", mode: "0700"}
+    - {path: "{{ infrastructure_services_secret_directory }}/{{ project.name }}", mode: "0700"}
+
+- name: Initialize resolved PostgreSQL and Redis instances
+  ansible.builtin.set_fact:
+    infrastructure_services_postgres_instances: []
+    infrastructure_services_redis_instances: []
+
+- name: Resolve PostgreSQL instances and stable credentials
+  ansible.builtin.include_tasks: common/resolve_postgres_instance.yml
+  loop: "{{ infrastructure_services_postgres_environments }}"
+  loop_control:
+    loop_var: infrastructure_services_instance_environment
+    label: "{{ infrastructure_services_instance_environment }}"
+  when: foundry_services_resolved.postgres.enabled
+  no_log: true
+
+- name: Resolve Redis instances and stable credentials
+  ansible.builtin.include_tasks: common/resolve_redis_instance.yml
+  loop: "{{ infrastructure_services_redis_environments }}"
+  loop_control:
+    loop_var: infrastructure_services_instance_environment
+    label: "{{ infrastructure_services_instance_environment }}"
+  when: foundry_services_resolved.redis.enabled
+  no_log: true

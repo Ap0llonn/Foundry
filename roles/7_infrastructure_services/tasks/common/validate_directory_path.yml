@@ -1,0 +1,23 @@
+---
+- name: Inspect trusted directory path {{ infrastructure_services_checked_directory }}
+  ansible.builtin.stat:
+    path: "{{ infrastructure_services_checked_directory }}"
+    follow: false
+  register: infrastructure_services_checked_directory_stat
+
+- name: Canonicalize trusted directory path {{ infrastructure_services_checked_directory }}
+  ansible.builtin.command:
+    argv: [realpath, --canonicalize-missing, --, "{{ infrastructure_services_checked_directory }}"]
+  register: infrastructure_services_checked_directory_realpath
+  changed_when: false
+  check_mode: false
+
+- name: Refuse unsafe trusted directory path {{ infrastructure_services_checked_directory }}
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_checked_directory_realpath.stdout == infrastructure_services_checked_directory
+      - not infrastructure_services_checked_directory_stat.stat.islnk | default(false)
+      - not infrastructure_services_checked_directory_stat.stat.exists or infrastructure_services_checked_directory_stat.stat.isdir
+      - not infrastructure_services_checked_directory_stat.stat.exists or infrastructure_services_checked_directory_stat.stat.pw_name == 'root'
+    fail_msg: Foundry state directory is symlinked, non-directory, non-canonical, or not root-owned.
+

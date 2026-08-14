@@ -1,0 +1,30 @@
+---
+vm_ip: 192.0.2.25
+project:
+  name: fixture-project
+environments:
+  - name: dev
+domains:
+  base: ""
+  environment_style: hyphen
+  dokploy_label: dokploy
+  service_names: [api]
+services:
+  redis:
+    enabled: true
+platform:
+  dokploy:
+    enabled: true
+    management_port: 3000
+management:
+  restrict_by_cidr: true
+  allowed_cidrs: [192.0.2.0/24]
+network:
+  exposure:
+    - {name: traefik-http, port: 80, protocol: tcp, scope: public}
+    - {name: dokploy-management, port: 3000, protocol: tcp, scope: management}
+expected_resolved_domains:
+  dev:
+    api: ""
+expected_dokploy_endpoint: http://192.0.2.25:3000
+

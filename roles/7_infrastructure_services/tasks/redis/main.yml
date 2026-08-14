@@ -1,0 +1,15 @@
+---
+- name: Validate resolved Redis instances
+  ansible.builtin.import_tasks: validate_inputs.yml
+
+- name: Discover Redis networks and owned resources
+  ansible.builtin.import_tasks: discovery.yml
+
+- name: Converge Redis containers and persistent volumes
+  ansible.builtin.import_tasks: converge.yml
+
+- name: Validate authenticated Redis health and isolation
+  ansible.builtin.import_tasks: validate.yml
+
+- name: Publish non-secret Redis outputs
+  ansible.builtin.import_tasks: publish.yml

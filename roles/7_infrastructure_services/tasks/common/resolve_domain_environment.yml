@@ -1,0 +1,33 @@
+---
+- name: Initialize domain entries for {{ infrastructure_services_domain_environment }}
+  ansible.builtin.set_fact:
+    infrastructure_services_domain_entries: {}
+
+- name: Resolve service hostnames for {{ infrastructure_services_domain_environment }}
+  ansible.builtin.set_fact:
+    infrastructure_services_domain_entries: >-
+      {{
+        infrastructure_services_domain_entries | combine({
+          item: (
+            infrastructure_services_domain_environment + '-' + item + '.' + foundry_domains_resolved.base
+            if foundry_domains_resolved.environment_style == 'hyphen'
+            else infrastructure_services_domain_environment + '.' + item + '.' + foundry_domains_resolved.base
+          ) if infrastructure_services_domain_enabled else ''
+        })
+      }}
+    infrastructure_services_resolved_domain_values: >-
+      {{
+        infrastructure_services_resolved_domain_values + [
+          (
+            infrastructure_services_domain_environment + '-' + item + '.' + foundry_domains_resolved.base
+            if foundry_domains_resolved.environment_style == 'hyphen'
+            else infrastructure_services_domain_environment + '.' + item + '.' + foundry_domains_resolved.base
+          ) if infrastructure_services_domain_enabled else ''
+        ]
+      }}
+  loop: "{{ foundry_domains_resolved.service_names }}"
+
+- name: Publish resolved domain entries for {{ infrastructure_services_domain_environment }}
+  ansible.builtin.set_fact:
+    foundry_resolved_domains: >-
+      {{ foundry_resolved_domains | combine({infrastructure_services_domain_environment: infrastructure_services_domain_entries}) }}

@@ -1,0 +1,41 @@
+---
+- name: Validate SSH daemon syntax
+  ansible.builtin.command:
+    argv: ["{{ security_sshd_binary }}", -t]
+  changed_when: false
+  check_mode: false
+  when: security_resolved.ssh.enabled
+
+- name: Read effective SSH daemon configuration
+  ansible.builtin.command:
+    argv: ["{{ security_sshd_binary }}", -T]
+  register: security_sshd_effective_configuration
+  changed_when: false
+  check_mode: false
+  when: security_resolved.ssh.enabled
+
+- name: Validate complete effective SSH V1 policy
+  ansible.builtin.assert:
+    that:
+      - (security_ssh_service + '.service') in ansible_facts.services
+      - ansible_facts.services[security_ssh_service + '.service'].state == 'running'
+      - ('port ' + (security_resolved.ssh.port | string)) in security_sshd_effective_configuration.stdout_lines
+      - ('permitrootlogin ' + (security_resolved.ssh.root_login | ternary('yes', 'no'))) in security_sshd_effective_configuration.stdout_lines
+      - ('passwordauthentication ' + (security_resolved.ssh.password_authentication | ternary('yes', 'no'))) in security_sshd_effective_configuration.stdout_lines
+      - ('permitemptypasswords ' + (security_resolved.ssh.empty_passwords | ternary('yes', 'no'))) in security_sshd_effective_configuration.stdout_lines
+      - ('pubkeyauthentication ' + (security_resolved.ssh.public_key_authentication | ternary('yes', 'no'))) in security_sshd_effective_configuration.stdout_lines
+      - ('allowagentforwarding ' + (security_resolved.ssh.forwarding.agent | ternary('yes', 'no'))) in security_sshd_effective_configuration.stdout_lines
+      - ('allowtcpforwarding ' + (security_resolved.ssh.forwarding.tcp | ternary('yes', 'no'))) in security_sshd_effective_configuration.stdout_lines
+      - ('x11forwarding ' + (security_resolved.ssh.forwarding.x11 | ternary('yes', 'no'))) in security_sshd_effective_configuration.stdout_lines
+      - ('maxauthtries ' + (security_resolved.ssh.max_auth_tries | string)) in security_sshd_effective_configuration.stdout_lines
+      - ('logingracetime ' + (security_resolved.ssh.login_grace_time | string)) in security_sshd_effective_configuration.stdout_lines
+      - ('maxsessions ' + (security_resolved.ssh.max_sessions | string)) in security_sshd_effective_configuration.stdout_lines
+      - ('maxstartups ' + security_resolved.ssh.max_startups) in security_sshd_effective_configuration.stdout_lines
+      - >-
+        security_resolved.ssh.allow_groups | length == 0
+        or ('allowgroups ' + (security_resolved.ssh.allow_groups | join(' ')))
+           in security_sshd_effective_configuration.stdout_lines
+    fail_msg: Effective SSH daemon policy does not match the complete V1 contract.
+  when:
+    - security_resolved.ssh.enabled
+    - not ansible_check_mode or security_active_management_port | int == security_resolved.ssh.port | int

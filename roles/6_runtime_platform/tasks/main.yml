@@ -1,4 +1,58 @@
 ---
-# Role: 6 - Runtime / platform
-# Placeholder — ne fait rien pour le moment.
-[]
+- name: 6.1 Validate and resolve runtime intent
+  ansible.builtin.import_tasks: 01_validate.yml
+  tags: [always, runtime_validation]
+
+- name: 6.2 Configure the trusted Docker repository
+  ansible.builtin.import_tasks: repository/main.yml
+  become: true
+  when: runtime_resolved.docker.enabled | bool
+  tags: [runtime, runtime_repository]
+
+- name: 6.3 Install the pinned Docker runtime
+  ansible.builtin.import_tasks: install/main.yml
+  become: true
+  when: runtime_resolved.docker.enabled | bool
+  tags: [runtime, runtime_install]
+
+- name: 6.4 Converge the owned Docker daemon configuration
+  ansible.builtin.import_tasks: configuration/main.yml
+  become: true
+  when: runtime_resolved.docker.enabled | bool
+  tags: [runtime, runtime_configuration]
+
+- name: 6.5 Validate Docker services and privileged access
+  ansible.builtin.import_tasks: service/main.yml
+  become: true
+  when: runtime_resolved.docker.enabled | bool
+  tags: [runtime, runtime_service]
+
+- name: 6.6 Validate Docker storage health
+  ansible.builtin.import_tasks: storage/main.yml
+  become: true
+  when: runtime_resolved.docker.enabled | bool
+  tags: [runtime, runtime_storage]
+
+- name: 6.7 Initialize and validate the Dokploy single-manager Swarm
+  ansible.builtin.import_tasks: swarm/main.yml
+  become: true
+  when:
+    - runtime_resolved.docker.enabled | bool
+    - >-
+      (platform | default({})).get('swarm', {}).get('enabled', false) | bool
+      or (platform | default({})).get('dokploy', {}).get('enabled', false) | bool
+  tags: [runtime, runtime_swarm]
+
+- name: 6.8 Run the disposable runtime smoke test
+  ansible.builtin.import_tasks: smoke/main.yml
+  become: true
+  when:
+    - runtime_resolved.docker.enabled | bool
+    - runtime_resolved.docker.smoke_test.enabled | bool
+  tags: [runtime, runtime_smoke]
+
+- name: 6.9 Validate and publish the complete runtime contract
+  ansible.builtin.import_tasks: validation/main.yml
+  become: true
+  when: runtime_resolved.docker.enabled | bool
+  tags: [runtime, runtime_result]

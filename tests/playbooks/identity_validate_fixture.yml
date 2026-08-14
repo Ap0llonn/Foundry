@@ -1,0 +1,23 @@
+---
+- name: Validate an Identity and Access acceptance fixture
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  pre_tasks:
+    - name: Require an explicit fixture path
+      ansible.builtin.assert:
+        that:
+          - fixture_file is defined
+          - fixture_file | length > 0
+        fail_msg: Pass fixture_file as an extra variable.
+
+    - name: Load the acceptance fixture
+      ansible.builtin.include_vars:
+        file: "{{ fixture_file }}"
+
+  tasks:
+    - name: Run Identity and Access configuration validation only
+      ansible.builtin.include_role:
+        name: 3_identity_access
+        tasks_from: 01_validate

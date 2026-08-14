@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  role_name: runtime_platform
+  author: Foundry
+  description: Deterministic Docker Engine runtime for Foundry V1
+  min_ansible_version: "2.20"
+  platforms:
+    - name: Ubuntu
+      versions: [resolute]
+dependencies: []

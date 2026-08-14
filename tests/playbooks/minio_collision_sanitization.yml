@@ -1,0 +1,51 @@
+---
+- name: Validate secret-safe MinIO collision projection
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars:
+    project:
+      name: test-project
+    infrastructure_services_minio_label_resource: minio
+    infrastructure_services_minio_collision_state: []
+    minio_expected:
+      environment: dev
+      container_name: foundry-test-project-dev-minio
+      image: registry.example/minio@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      network_name: foundry-test-project-dev
+      data_path: /srv/foundry/minio/dev
+      run_as_uid: 1000
+      run_as_gid: 1000
+    minio_inspect:
+      Config:
+        Image: registry.example/minio@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        User: "1000:1000"
+        Env:
+          - MINIO_ROOT_USER_FILE=/run/secrets/minio-root-user
+          - MINIO_ROOT_PASSWORD_FILE=/run/secrets/minio-root-password
+        Labels:
+          foundry.managed: "true"
+          foundry.project: test-project
+          foundry.environment: dev
+          foundry.resource: minio
+      HostConfig:
+        NetworkMode: foundry-test-project-dev
+      Mounts:
+        - Source: /srv/foundry/minio/dev
+          Destination: /data
+    minio_collision_result:
+      rc: 0
+      item: "{{ minio_expected }}"
+      stdout: "{{ [minio_inspect] | to_json }}"
+  tasks:
+    - name: Run sanitized compatibility projection
+      ansible.builtin.include_role:
+        name: 7_infrastructure_services
+        tasks_from: minio/sanitize_collision
+
+    - name: Require compatible sanitized result
+      ansible.builtin.assert:
+        that:
+          - infrastructure_services_minio_collision_state | length == 1
+          - infrastructure_services_minio_collision_state[0].compatible
+          - infrastructure_services_minio_collision_state[0].keys() | sort == ['compatible', 'container_name', 'exists']

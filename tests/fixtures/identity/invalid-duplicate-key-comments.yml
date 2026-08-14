@@ -1,0 +1,22 @@
+---
+identity:
+  default_admin_sudo:
+    mode: passwordless
+  groups: []
+  users:
+    - name: alice
+      state: present
+      admin: true
+      groups: []
+      ssh_keys:
+        - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f alice@acceptance.invalid"
+      sudo:
+        mode: inherit
+
+    - name: bob
+      state: present
+      admin: false
+      groups: []
+      # Same key blob as Alice, with a different comment.
+      ssh_keys:
+        - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f bob@acceptance.invalid"

@@ -1,0 +1,71 @@
+---
+- name: Configure periodic automatic security updates
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "{{ security_resolved.updates.automatic_security_updates | ternary('1', '0') }}";
+      APT::Periodic::Unattended-Upgrade "{{ security_resolved.updates.automatic_security_updates | ternary('1', '0') }}";
+      APT::Periodic::AutocleanInterval "7";
+
+- name: Configure unattended-upgrades reboot policy
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/52foundry-unattended-upgrades
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      // Managed by Foundry. Reboots use the final health-gated OS phase only.
+      Unattended-Upgrade::Automatic-Reboot "false";
+      Unattended-Upgrade::Automatic-Reboot-Time "{{ security_unattended_reboot_time }}";
+  when: security_resolved.updates.automatic_security_updates
+
+- name: Remove Foundry unattended-upgrades policy when disabled
+  ansible.builtin.file:
+    path: /etc/apt/apt.conf.d/52foundry-unattended-upgrades
+    state: absent
+  when: not security_resolved.updates.automatic_security_updates
+
+- name: Enable automatic update service and timers
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - unattended-upgrades.service
+    - apt-daily.timer
+    - apt-daily-upgrade.timer
+  when: security_resolved.updates.automatic_security_updates
+
+- name: Disable unattended-upgrades service when policy is disabled
+  ansible.builtin.systemd_service:
+    name: unattended-upgrades.service
+    enabled: false
+    state: stopped
+  when:
+    - not security_resolved.updates.automatic_security_updates
+    - "'unattended-upgrades' in ansible_facts.packages"
+
+- name: Exercise unattended-upgrades dry-run when explicitly requested
+  ansible.builtin.command:
+    argv: [unattended-upgrade, --dry-run]
+  register: security_unattended_upgrade_dry_run
+  changed_when: false
+  when:
+    - security_resolved.updates.automatic_security_updates
+    - security_resolved.updates.validate_dry_run
+    - not ansible_check_mode
+
+- name: Detect pending reboot state
+  ansible.builtin.stat:
+    path: "{{ security_reboot_required_file }}"
+  register: security_reboot_required
+
+- name: Report pending reboot without authorizing one
+  ansible.builtin.debug:
+    msg: >-
+      A reboot is pending. Security does not reboot automatically; use the
+      separately approved final os_reboot phase.
+  when: security_reboot_required.stat.exists

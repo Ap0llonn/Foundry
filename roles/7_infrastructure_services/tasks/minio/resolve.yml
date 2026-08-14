@@ -1,0 +1,54 @@
+---
+- name: Inspect persisted networking resolver state when role fact is unavailable
+  ansible.builtin.stat:
+    path: "{{ infrastructure_services_network_state_file }}"
+  register: infrastructure_services_network_state_check
+  when: foundry_resolved_networks is not defined
+
+- name: Require authoritative role-5 networking state
+  ansible.builtin.assert:
+    that:
+      - foundry_resolved_networks is defined or infrastructure_services_network_state_check.stat.exists
+    fail_msg: >-
+      MinIO requires role 5's authoritative environment network mapping. Run
+      the networking slice successfully before infrastructure services.
+
+- name: Read persisted networking resolver state
+  ansible.builtin.slurp:
+    path: "{{ infrastructure_services_network_state_file }}"
+  register: infrastructure_services_network_state_raw
+  when: foundry_resolved_networks is not defined
+
+- name: Resolve authoritative MinIO network mapping
+  ansible.builtin.set_fact:
+    infrastructure_services_network_state: >-
+      {{
+        (infrastructure_services_network_state_raw.content | b64decode | from_yaml)
+        if foundry_resolved_networks is not defined
+        else {'project': project.name, 'resolved_networks': foundry_resolved_networks}
+      }}
+
+- name: Validate networking state belongs to the current project
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_network_state is mapping
+      - infrastructure_services_network_state.project == project.name
+      - infrastructure_services_network_state.resolved_networks is mapping
+      - >-
+        infrastructure_services_resolved.minio.instances
+        | map(attribute='environment')
+        | difference(infrastructure_services_network_state.resolved_networks.keys())
+        | length == 0
+    fail_msg: MinIO references an environment absent from the current role-5 network mapping.
+
+- name: Initialize resolved MinIO instances
+  ansible.builtin.set_fact:
+    infrastructure_services_minio_instances: []
+
+- name: Resolve each MinIO instance without rebuilding network naming rules
+  ansible.builtin.include_tasks: resolve_instance.yml
+  loop: "{{ infrastructure_services_resolved.minio.instances }}"
+  loop_control:
+    loop_var: minio_instance
+    label: "{{ minio_instance.environment }}"
+  no_log: true

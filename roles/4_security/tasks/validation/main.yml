@@ -1,0 +1,48 @@
+---
+- name: Gather final security service facts
+  ansible.builtin.service_facts:
+
+- name: Validate final SSH state
+  ansible.builtin.import_tasks: ssh.yml
+
+- name: Validate preserved SSH host-key identity
+  ansible.builtin.import_tasks: ssh_host_keys.yml
+  when: security_resolved.ssh.enabled
+
+- name: Validate final firewall and exposure state
+  ansible.builtin.import_tasks: firewall.yml
+
+- name: Validate final Fail2ban state
+  ansible.builtin.import_tasks: fail2ban.yml
+
+- name: Validate final security-update state
+  ansible.builtin.import_tasks: updates.yml
+
+- name: Validate final AppArmor state
+  ansible.builtin.import_tasks: apparmor.yml
+
+- name: Validate final persistent logging state
+  ansible.builtin.import_tasks: logging.yml
+
+- name: Report security implementation status
+  ansible.builtin.debug:
+    msg:
+      - "Host security validation: OK"
+      - "SSH management port: {{ security_resolved.ssh.port }}"
+      - "Declared exposure count: {{ security_network_exposure_config | length }}"
+      - "Fail2ban enabled: {{ security_resolved.fail2ban.enabled }}"
+      - "Automatic security updates: {{ security_resolved.updates.automatic_security_updates }}"
+      - "Security V1: implemented; disposable-VM certification pending"
+  when: >-
+    not ansible_check_mode
+    or security_active_management_port | int == security_resolved.ssh.port | int
+
+- name: Report planned SSH migration in check mode
+  ansible.builtin.debug:
+    msg: >-
+      Planned SSH migration {{ security_active_management_port }} ->
+      {{ security_resolved.ssh.port }} requires a normal run for connection,
+      rollback, retirement, and final-state evidence.
+  when:
+    - ansible_check_mode
+    - security_active_management_port | int != security_resolved.ssh.port | int

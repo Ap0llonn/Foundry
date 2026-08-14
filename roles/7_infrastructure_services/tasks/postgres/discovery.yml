@@ -1,0 +1,142 @@
+---
+- name: Inspect authoritative PostgreSQL environment networks
+  ansible.builtin.command:
+    argv: [docker, network, inspect, "{{ item.network_name }}"]
+  loop: "{{ infrastructure_services_postgres_instances }}"
+  register: infrastructure_services_postgres_network_inspections
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Require owned PostgreSQL environment networks
+  ansible.builtin.assert:
+    that:
+      - item.rc == 0
+      - (item.stdout | from_json | first).Driver in ['bridge', 'overlay']
+      - (item.stdout | from_json | first).Driver != 'overlay' or (item.stdout | from_json | first).Attachable
+      - ((item.stdout | from_json | first).Labels | default({}, true)).get('foundry.managed') == 'true'
+      - ((item.stdout | from_json | first).Labels | default({}, true)).get('foundry.project') == project.name
+      - ((item.stdout | from_json | first).Labels | default({}, true)).get('foundry.environment') == item.item.environment
+      - ((item.stdout | from_json | first).Labels | default({}, true)).get('foundry.resource') == 'environment-network'
+    fail_msg: PostgreSQL requires its exact Foundry-owned environment network.
+  loop: "{{ infrastructure_services_postgres_network_inspections.results }}"
+  no_log: true
+
+- name: Inspect desired PostgreSQL volume names
+  ansible.builtin.command:
+    argv: [docker, volume, inspect, "{{ item.volume_name }}"]
+  loop: "{{ infrastructure_services_postgres_instances }}"
+  register: infrastructure_services_postgres_volume_inspections
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Refuse unowned PostgreSQL volume collisions
+  ansible.builtin.assert:
+    that:
+      - >-
+        item.rc != 0 or (
+          (item.stdout | from_json | first).Driver == 'local'
+          and
+          ((item.stdout | from_json | first).Labels | default({}, true)).get('foundry.managed') == 'true'
+          and ((item.stdout | from_json | first).Labels | default({}, true)).get('foundry.project') == project.name
+          and ((item.stdout | from_json | first).Labels | default({}, true)).get('foundry.environment') == item.item.environment
+          and ((item.stdout | from_json | first).Labels | default({}, true)).get('foundry.service') == 'postgres'
+          and ((item.stdout | from_json | first).Labels | default({}, true)).get('foundry.resource') == 'postgres-data'
+        )
+    fail_msg: A PostgreSQL volume name collides with external or incompatible state; Foundry refuses adoption.
+  loop: "{{ infrastructure_services_postgres_volume_inspections.results }}"
+  no_log: true
+
+- name: Inspect desired PostgreSQL container names
+  ansible.builtin.command:
+    argv: [docker, container, inspect, "{{ item.container_name }}"]
+  loop: "{{ infrastructure_services_postgres_instances }}"
+  register: infrastructure_services_postgres_container_inspections
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Initialize PostgreSQL container reconciliation state
+  ansible.builtin.set_fact:
+    infrastructure_services_postgres_container_state: []
+
+- name: Sanitize PostgreSQL container collision state
+  ansible.builtin.include_tasks: sanitize_container.yml
+  loop: "{{ infrastructure_services_postgres_container_inspections.results }}"
+  loop_control:
+    loop_var: postgres_inspection
+  no_log: true
+
+- name: Refuse unowned PostgreSQL container collisions
+  ansible.builtin.assert:
+    that:
+      - not item.exists or item.owned
+    fail_msg: PostgreSQL container {{ item.container_name }} is not owned by Foundry; refusing adoption or removal.
+  loop: "{{ infrastructure_services_postgres_container_state }}"
+  loop_control:
+    label: "{{ item.container_name }}"
+
+- name: Resolve PostgreSQL container reconciliation sets
+  ansible.builtin.set_fact:
+    infrastructure_services_postgres_existing_names: >-
+      {{ infrastructure_services_postgres_container_state | selectattr('exists') | map(attribute='container_name') | list }}
+    infrastructure_services_postgres_recreate_names: >-
+      {{ infrastructure_services_postgres_container_state | selectattr('exists') | selectattr('owned') | rejectattr('compatible') | map(attribute='container_name') | list }}
+
+- name: Discover project-owned PostgreSQL containers
+  ansible.builtin.command:
+    argv:
+      - docker
+      - container
+      - ls
+      - --all
+      - --format
+      - "{% raw %}{{.Names}}{% endraw %}"
+      - --filter
+      - label=foundry.managed=true
+      - --filter
+      - "label=foundry.project={{ project.name }}"
+      - --filter
+      - label=foundry.service=postgres
+  register: infrastructure_services_postgres_owned_containers
+  changed_when: false
+  check_mode: false
+
+- name: Report stale PostgreSQL containers without mutation
+  ansible.builtin.debug:
+    msg: >-
+      Stale Foundry PostgreSQL container {{ item }} remains untouched. Use an
+      explicit stateful-service lifecycle workflow to remove it.
+  loop: >-
+    {{ infrastructure_services_postgres_owned_containers.stdout_lines
+       | difference(infrastructure_services_postgres_instances | map(attribute='container_name') | list) }}
+
+- name: Discover project-owned PostgreSQL volumes
+  ansible.builtin.command:
+    argv:
+      - docker
+      - volume
+      - ls
+      - --quiet
+      - --filter
+      - label=foundry.managed=true
+      - --filter
+      - "label=foundry.project={{ project.name }}"
+      - --filter
+      - label=foundry.service=postgres
+  register: infrastructure_services_postgres_owned_volumes
+  changed_when: false
+  check_mode: false
+
+- name: Report stale PostgreSQL volumes without deleting data
+  ansible.builtin.debug:
+    msg: >-
+      Stale PostgreSQL data volume {{ item }} is preserved. Data destruction
+      requires a separate explicit operation.
+  loop: >-
+    {{ infrastructure_services_postgres_owned_volumes.stdout_lines
+       | difference(infrastructure_services_postgres_instances | map(attribute='volume_name') | list) }}

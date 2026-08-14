@@ -1,0 +1,12 @@
+---
+project:
+  name: fixture-project
+environments:
+  - name: dev
+services:
+  redis:
+    enabled: true
+    resources:
+      cpus: "0"
+network:
+  exposure: []

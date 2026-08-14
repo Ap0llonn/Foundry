@@ -1,0 +1,24 @@
+---
+- name: Revalidate PostgreSQL after host reboot
+  ansible.builtin.import_tasks: postgres/validate.yml
+  when: foundry_services_resolved.postgres.enabled
+
+- name: Revalidate Redis after host reboot
+  ansible.builtin.import_tasks: redis/validate.yml
+  when: foundry_services_resolved.redis.enabled
+
+- name: Revalidate MinIO after host reboot
+  ansible.builtin.import_tasks: minio/validate.yml
+  when: infrastructure_services_resolved.minio.enabled
+
+- name: Revalidate Traefik container health after host reboot
+  ansible.builtin.command:
+    argv: [docker, container, inspect, --format, "{{ '{{.State.Health.Status}}' }}", "{{ infrastructure_services_traefik_container_name }}"]
+  register: infrastructure_services_reboot_traefik_health
+  changed_when: false
+  failed_when: infrastructure_services_reboot_traefik_health.stdout != 'healthy'
+  when: infrastructure_services_traefik_enabled
+
+- name: Revalidate Dokploy after host reboot
+  ansible.builtin.import_tasks: dokploy/validate.yml
+  when: foundry_platform_resolved.dokploy.enabled

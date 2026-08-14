@@ -1,0 +1,9 @@
+---
+infrastructure_services:
+  minio:
+    enabled: true
+    instances:
+      - environment: dev
+        image: quay.io/minio/minio@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        root_user: synthetic-user
+        root_password: synthetic-password

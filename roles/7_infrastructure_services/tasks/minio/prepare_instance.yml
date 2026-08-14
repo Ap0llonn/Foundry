@@ -1,0 +1,99 @@
+---
+- name: Validate MinIO instance state directory before writing
+  ansible.builtin.include_tasks: common/validate_directory_path.yml
+  vars:
+    infrastructure_services_checked_directory: "{{ minio_resolved_instance.environment_file | dirname }}"
+
+- name: Create MinIO instance state directory
+  ansible.builtin.file:
+    path: "{{ minio_resolved_instance.environment_file | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Inspect MinIO managed files before writing
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop:
+    - "{{ minio_resolved_instance.environment_file }}"
+    - "{{ minio_resolved_instance.root_user_file }}"
+    - "{{ minio_resolved_instance.root_password_file }}"
+  register: minio_managed_file_checks
+
+- name: Refuse unsafe MinIO managed file paths
+  ansible.builtin.assert:
+    that:
+      - not item.stat.islnk | default(false)
+      - not item.stat.exists or item.stat.isreg
+    fail_msg: "MinIO managed path is symlinked or not a regular file: {{ item.item }}"
+  loop: "{{ minio_managed_file_checks.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Canonicalize the requested MinIO data path before mutation
+  ansible.builtin.command:
+    argv: [realpath, --canonicalize-missing, --, "{{ minio_resolved_instance.data_path }}"]
+  register: minio_data_path_canonical
+  changed_when: false
+  check_mode: false
+
+- name: Refuse symlink traversal or paths outside Foundry-owned roots
+  ansible.builtin.assert:
+    that:
+      - minio_data_path_canonical.stdout == minio_resolved_instance.data_path
+      - >-
+        minio_resolved_instance.data_path is match('^/var/lib/foundry/minio(?:/|$)')
+        or minio_resolved_instance.data_path is match('^/srv/foundry(?:/|$)')
+    fail_msg: MinIO data paths must be canonical and remain under a Foundry-owned storage root.
+
+- name: Create persistent MinIO data directory
+  ansible.builtin.file:
+    path: "{{ minio_resolved_instance.data_path }}"
+    state: directory
+    owner: "{{ minio_resolved_instance.run_as_uid }}"
+    group: "{{ minio_resolved_instance.run_as_gid }}"
+    mode: "0750"
+
+- name: Resolve secret source for this MinIO environment
+  ansible.builtin.set_fact:
+    minio_secret_source: >-
+      {{
+        infrastructure_services_resolved.minio.instances
+        | selectattr('environment', 'equalto', minio_resolved_instance.environment)
+        | first
+      }}
+  no_log: true
+
+- name: Install MinIO root-user secret file
+  ansible.builtin.copy:
+    dest: "{{ minio_resolved_instance.root_user_file }}"
+    owner: "{{ minio_resolved_instance.run_as_uid }}"
+    group: "{{ minio_resolved_instance.run_as_gid }}"
+    mode: "0400"
+    content: "{{ minio_secret_source.root_user }}"
+  register: minio_root_user_secret
+  no_log: true
+
+- name: Install MinIO root-password secret file
+  ansible.builtin.copy:
+    dest: "{{ minio_resolved_instance.root_password_file }}"
+    owner: "{{ minio_resolved_instance.run_as_uid }}"
+    group: "{{ minio_resolved_instance.run_as_gid }}"
+    mode: "0400"
+    content: "{{ minio_secret_source.root_password }}"
+  register: minio_root_password_secret
+  no_log: true
+
+- name: Record MinIO instances requiring credential reload
+  ansible.builtin.set_fact:
+    infrastructure_services_minio_restart_required: >-
+      {{
+        (infrastructure_services_minio_restart_required | default([]))
+        + [minio_resolved_instance.container_name]
+      }}
+  when:
+    - minio_resolved_instance.container_name in infrastructure_services_minio_existing_names
+    - minio_root_user_secret.changed or minio_root_password_secret.changed
+  no_log: true

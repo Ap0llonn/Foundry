@@ -1,0 +1,101 @@
+---
+- name: Validate PostgreSQL secret directory before writing
+  ansible.builtin.include_tasks: common/validate_directory_path.yml
+  vars:
+    infrastructure_services_checked_directory: >-
+      {{ infrastructure_services_secret_directory }}/{{ project.name }}/{{ infrastructure_services_instance_environment }}/postgres
+
+- name: Ensure PostgreSQL secret directory exists
+  ansible.builtin.file:
+    path: "{{ infrastructure_services_secret_directory }}/{{ project.name }}/{{ infrastructure_services_instance_environment }}/postgres"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+    follow: false
+
+- name: Inspect stable PostgreSQL password
+  ansible.builtin.stat:
+    path: "{{ infrastructure_services_secret_directory }}/{{ project.name }}/{{ infrastructure_services_instance_environment }}/postgres/password"
+    follow: false
+  register: infrastructure_services_postgres_password_check
+
+- name: Refuse unsafe existing PostgreSQL password path
+  ansible.builtin.assert:
+    that:
+      - not infrastructure_services_postgres_password_check.stat.islnk | default(false)
+      - not infrastructure_services_postgres_password_check.stat.exists or infrastructure_services_postgres_password_check.stat.isreg
+      - not infrastructure_services_postgres_password_check.stat.exists or infrastructure_services_postgres_password_check.stat.pw_name == 'root'
+      - not infrastructure_services_postgres_password_check.stat.exists or infrastructure_services_postgres_password_check.stat.mode == '0600'
+    fail_msg: Existing PostgreSQL password path is unsafe; refusing to read or overwrite it.
+  no_log: true
+
+- name: Generate missing PostgreSQL password
+  ansible.builtin.command:
+    argv: [openssl, rand, -base64, "36"]
+  register: infrastructure_services_postgres_generated_password
+  changed_when: true
+  when:
+    - not infrastructure_services_postgres_password_check.stat.exists
+    - foundry_services_resolved.postgres.credentials.get(infrastructure_services_instance_environment, {}).get('password', '') | length == 0
+  no_log: true
+
+- name: Read existing PostgreSQL password before accepting an override
+  ansible.builtin.slurp:
+    path: "{{ infrastructure_services_secret_directory }}/{{ project.name }}/{{ infrastructure_services_instance_environment }}/postgres/password"
+  register: infrastructure_services_postgres_existing_password_raw
+  when:
+    - infrastructure_services_postgres_password_check.stat.exists
+    - foundry_services_resolved.postgres.credentials.get(infrastructure_services_instance_environment, {}).get('password', '') | length > 0
+  no_log: true
+
+- name: Refuse implicit PostgreSQL credential rotation
+  ansible.builtin.assert:
+    that:
+      - >-
+        infrastructure_services_postgres_existing_password_raw.content | b64decode | trim
+        == foundry_services_resolved.postgres.credentials[infrastructure_services_instance_environment].password
+    fail_msg: PostgreSQL password rotation requires an explicit database-aware rotation workflow.
+  when:
+    - infrastructure_services_postgres_password_check.stat.exists
+    - foundry_services_resolved.postgres.credentials.get(infrastructure_services_instance_environment, {}).get('password', '') | length > 0
+  no_log: true
+
+- name: Install PostgreSQL password from Vault or first-run generation
+  ansible.builtin.copy:
+    dest: "{{ infrastructure_services_secret_directory }}/{{ project.name }}/{{ infrastructure_services_instance_environment }}/postgres/password"
+    owner: root
+    group: root
+    mode: "0600"
+    content: >-
+      {{
+        foundry_services_resolved.postgres.credentials.get(infrastructure_services_instance_environment, {}).get('password')
+        if foundry_services_resolved.postgres.credentials.get(infrastructure_services_instance_environment, {}).get('password', '') | length > 0
+        else infrastructure_services_postgres_generated_password.stdout + '\n'
+      }}
+    force: false
+  when: not infrastructure_services_postgres_password_check.stat.exists
+  no_log: true
+
+- name: Read stable PostgreSQL password
+  ansible.builtin.slurp:
+    path: "{{ infrastructure_services_secret_directory }}/{{ project.name }}/{{ infrastructure_services_instance_environment }}/postgres/password"
+  register: infrastructure_services_postgres_password_raw
+  no_log: true
+
+- name: Append resolved PostgreSQL instance
+  ansible.builtin.set_fact:
+    infrastructure_services_postgres_instances: >-
+      {{ infrastructure_services_postgres_instances + [{
+        'environment': infrastructure_services_instance_environment,
+        'network_name': infrastructure_services_network_state.resolved_networks[infrastructure_services_instance_environment],
+        'container_name': 'foundry-' + project.name + '-' + infrastructure_services_instance_environment + '-postgres',
+        'volume_name': 'foundry-' + project.name + '-' + infrastructure_services_instance_environment + '-postgres-data',
+        'image': foundry_services_resolved.postgres.image,
+        'user': foundry_services_resolved.postgres.user,
+        'database': foundry_services_resolved.postgres.database,
+        'password': infrastructure_services_postgres_password_raw.content | b64decode | trim,
+        'password_file': infrastructure_services_secret_directory + '/' + project.name + '/' + infrastructure_services_instance_environment + '/postgres/password',
+        'resources': foundry_services_resolved.postgres.resources
+      }] }}
+  no_log: true

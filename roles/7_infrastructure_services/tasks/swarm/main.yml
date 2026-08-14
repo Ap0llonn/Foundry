@@ -1,0 +1,31 @@
+---
+- name: Inspect Docker Swarm state required by Dokploy
+  ansible.builtin.command:
+    argv: [docker, info, --format, "{{ '{{json .Swarm}}' }}"]
+  register: infrastructure_services_swarm_info
+  changed_when: false
+  check_mode: false
+
+- name: Validate Runtime supplied the supported Swarm topology
+  ansible.builtin.assert:
+    that:
+      - (infrastructure_services_swarm_info.stdout | from_json).LocalNodeState == 'active'
+      - (infrastructure_services_swarm_info.stdout | from_json).ControlAvailable | bool
+    fail_msg: Runtime must establish Foundry's owned single-manager Swarm before Dokploy.
+
+- name: Inspect Swarm nodes
+  ansible.builtin.command:
+    argv: [docker, node, ls, --format, "{{ '{{json .}}' }}"]
+  register: infrastructure_services_swarm_nodes
+  changed_when: false
+  check_mode: false
+
+- name: Require exactly one healthy manager/leader
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_swarm_nodes.stdout_lines | length == 1
+      - (infrastructure_services_swarm_nodes.stdout_lines | first | from_json).Status == 'Ready'
+      - (infrastructure_services_swarm_nodes.stdout_lines | first | from_json).Availability == 'Active'
+      - (infrastructure_services_swarm_nodes.stdout_lines | first | from_json).ManagerStatus is search('Leader')
+    fail_msg: Multi-node/HA Swarm is outside Foundry V1; Dokploy requires one Ready manager/leader.
+

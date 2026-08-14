@@ -1,0 +1,30 @@
+---
+- name: Resolve temporary SSH transition rules
+  ansible.builtin.set_fact:
+    security_firewall_transition_rules: >-
+      {{ security_firewall_rules | selectattr('name', 'equalto', 'ssh-transition') | list }}
+    security_firewall_rules: >-
+      {{ security_firewall_rules | rejectattr('name', 'equalto', 'ssh-transition') | list }}
+
+- name: Remove exact Foundry-owned old-port rules
+  community.general.ufw:
+    rule: allow
+    to_port: "{{ item.port | string }}"
+    proto: "{{ item.protocol }}"
+    from_ip: "{{ item.source }}"
+    comment: "{{ item.comment }}"
+    delete: true
+  loop: "{{ security_firewall_transition_rules }}"
+  loop_control:
+    label: "{{ item.comment }}"
+  when:
+    - security_resolved.firewall.enabled
+    - security_active_management_port | int != security_resolved.ssh.port | int
+
+- name: Persist steady-state Foundry firewall ownership
+  ansible.builtin.copy:
+    dest: "{{ security_firewall_state_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+    content: "{{ security_firewall_rules | to_nice_yaml(indent=2) }}"

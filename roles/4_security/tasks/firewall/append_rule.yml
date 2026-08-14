@@ -1,0 +1,35 @@
+---
+- name: Append unique Foundry-owned firewall rule
+  ansible.builtin.set_fact:
+    security_firewall_rules: >-
+      {{
+        security_firewall_rules + [{
+          'name': security_firewall_exposure.name,
+          'comment': security_firewall_comment_prefix
+                     + security_firewall_exposure.scope + ':'
+                     + security_firewall_exposure.name,
+          'scope': security_firewall_exposure.scope,
+          'port': security_firewall_exposure.port | int,
+          'protocol': security_firewall_exposure.protocol,
+          'source': security_firewall_source
+        }]
+      }}
+    security_firewall_rule_ids: >-
+      {{
+        security_firewall_rule_ids + [
+          security_firewall_comment_prefix
+          + security_firewall_exposure.scope + ':'
+          + security_firewall_exposure.name + '|'
+          + security_firewall_source + '|'
+          + (security_firewall_exposure.port | string) + '|'
+          + security_firewall_exposure.protocol
+        ]
+      }}
+  when: >-
+    security_firewall_comment_prefix
+    + security_firewall_exposure.scope + ':'
+    + security_firewall_exposure.name + '|'
+    + security_firewall_source + '|'
+    + (security_firewall_exposure.port | string) + '|'
+    + security_firewall_exposure.protocol
+    not in security_firewall_rule_ids

@@ -1,0 +1,97 @@
+---
+- name: Validate runtime input container types
+  ansible.builtin.assert:
+    that:
+      - runtime | default({}) is mapping
+      - (runtime | default({})).get('docker', {}) is mapping
+    fail_msg: runtime and runtime.docker must be YAML mappings.
+
+- name: Resolve runtime policy
+  ansible.builtin.set_fact:
+    runtime_resolved: >-
+      {{ runtime_defaults | combine(runtime | default({}), recursive=true) }}
+
+- name: Resolve the complete Foundry-owned daemon configuration
+  ansible.builtin.set_fact:
+    runtime_docker_daemon_document:
+      data-root: "{{ runtime_resolved.docker.data_root }}"
+      log-driver: "{{ runtime_resolved.docker.logging.driver }}"
+      log-opts:
+        max-size: "{{ runtime_resolved.docker.logging.max_size }}"
+        max-file: "{{ runtime_resolved.docker.logging.max_files | string }}"
+      live-restore: true
+
+- name: Validate runtime option names and values
+  ansible.builtin.assert:
+    that:
+      - (runtime | default({})).keys() | difference(runtime_allowed_root_keys) | length == 0
+      - (runtime | default({})).get('docker', {}).keys() | difference(runtime_allowed_docker_keys) | length == 0
+      - runtime_resolved.docker.enabled is boolean
+      - runtime_resolved.docker.data_root is string
+      - runtime_resolved.docker.data_root is match('^/[^\x00]*$')
+      - runtime_resolved.docker.logging is mapping
+      - runtime_resolved.docker.logging.keys() | difference(runtime_allowed_logging_keys) | length == 0
+      - runtime_resolved.docker.logging.driver in runtime_allowed_log_drivers
+      - runtime_resolved.docker.logging.max_size is string
+      - runtime_resolved.docker.logging.max_size is match('^[1-9][0-9]*[kKmMgG]$')
+      - runtime_resolved.docker.logging.max_files | int >= 1
+      - runtime_resolved.docker.daemon_config_adoption in runtime_allowed_daemon_config_adoption
+      - runtime_resolved.docker.legacy_package_migration_approved is boolean
+      - runtime_resolved.docker.restart is mapping
+      - runtime_resolved.docker.restart.keys() | difference(runtime_allowed_restart_keys) | length == 0
+      - runtime_resolved.docker.restart.approved is boolean
+      - runtime_resolved.docker.restart.maintenance_window is string
+      - runtime_resolved.docker.smoke_test is mapping
+      - runtime_resolved.docker.smoke_test.keys() | difference(runtime_allowed_smoke_test_keys) | length == 0
+      - runtime_resolved.docker.smoke_test.enabled is boolean
+      - runtime_resolved.docker.smoke_test.image is string
+      - >-
+        not (runtime_resolved.docker.smoke_test.enabled | bool)
+        or runtime_resolved.docker.smoke_test.image
+           is match('^[^:@/]+(?:/[^:@]+)*@sha256:[a-f0-9]{64}$')
+      - runtime_resolved.docker.privileged_users is sequence
+      - runtime_resolved.docker.privileged_users is not string
+      - runtime_resolved.docker.privileged_users | length == 0
+    fail_msg: >-
+      Invalid Runtime V1 configuration. Docker group delegation is intentionally
+      unavailable in V1; administrators must use explicit sudo to run Docker.
+
+- name: Gather the runtime platform facts
+  ansible.builtin.setup:
+    gather_subset: [min]
+  when: runtime_resolved.docker.enabled | bool
+
+- name: Fail before mutation on an unsupported runtime platform
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.distribution == 'Ubuntu'
+      - ansible_facts.distribution_version == '26.04'
+      - ansible_facts.distribution_release == runtime_docker_repository_suite
+      - ansible_facts.architecture == 'x86_64'
+      - ansible_facts.pkg_mgr == 'apt'
+    fail_msg: >-
+      Runtime V1 supports only Ubuntu 26.04 (resolute) on x86_64 with APT.
+      No Docker mutation was attempted.
+  when: runtime_resolved.docker.enabled | bool
+
+- name: Inspect an explicitly customized Docker data root before mutation
+  become: true
+  ansible.builtin.stat:
+    path: "{{ runtime_resolved.docker.data_root }}"
+  register: runtime_docker_custom_data_root
+  when:
+    - runtime_resolved.docker.enabled | bool
+    - runtime_resolved.docker.data_root != '/var/lib/docker'
+
+- name: Require a safe pre-existing custom Docker data root
+  ansible.builtin.assert:
+    that:
+      - runtime_docker_custom_data_root.stat.exists
+      - runtime_docker_custom_data_root.stat.isdir
+      - not runtime_docker_custom_data_root.stat.islnk
+    fail_msg: >-
+      A custom Docker data_root must be a pre-existing real directory. Runtime
+      never creates storage mounts, follows storage symlinks, or migrates data.
+  when:
+    - runtime_resolved.docker.enabled | bool
+    - runtime_resolved.docker.data_root != '/var/lib/docker'

@@ -1,0 +1,19 @@
+---
+- name: Validate MinIO fixture without Docker access
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars:
+    project:
+      name: minio-test
+    environments:
+      - name: dev
+  tasks:
+    - name: Load fixture
+      ansible.builtin.include_vars:
+        file: "{{ fixture_file }}"
+
+    - name: Run MinIO validation only
+      ansible.builtin.include_role:
+        name: 7_infrastructure_services
+        tasks_from: 01_validate

@@ -1,0 +1,27 @@
+---
+- name: Validate Infrastructure Services fixture without Docker mutation
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  tasks:
+    - name: Load fixture
+      ansible.builtin.include_vars:
+        file: "{{ fixture_file }}"
+
+    - name: Run Infrastructure Services validation
+      ansible.builtin.include_role:
+        name: 7_infrastructure_services
+        tasks_from: 01_validate
+
+    - name: Resolve domain outputs
+      ansible.builtin.include_role:
+        name: 7_infrastructure_services
+        tasks_from: common/resolve_domains
+
+    - name: Assert exact expected domain resolution
+      ansible.builtin.assert:
+        that:
+          - foundry_resolved_domains == expected_resolved_domains
+          - infrastructure_services_dokploy_endpoint == expected_dokploy_endpoint
+      when: expected_resolved_domains is defined
+

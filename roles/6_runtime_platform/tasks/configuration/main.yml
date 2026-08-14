@@ -1,0 +1,186 @@
+---
+- name: Ensure Runtime state and Docker configuration directories exist
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ runtime_state_directory }}", mode: "0750"}
+    - {path: "{{ runtime_docker_daemon_config | dirname }}", mode: "0755"}
+
+- name: Render the stable daemon configuration candidate
+  ansible.builtin.copy:
+    dest: "{{ runtime_docker_candidate_config }}"
+    owner: root
+    group: root
+    mode: "0600"
+    content: "{{ runtime_docker_daemon_document | to_nice_json }}\n"
+
+- name: Validate the Docker daemon candidate before live mutation
+  ansible.builtin.command:
+    argv:
+      - dockerd
+      - --validate
+      - --config-file
+      - "{{ runtime_docker_candidate_config }}"
+  register: runtime_docker_candidate_validation
+  changed_when: false
+  check_mode: false
+
+- name: Inspect the live Docker daemon configuration
+  ansible.builtin.stat:
+    path: "{{ runtime_docker_daemon_config }}"
+    checksum_algorithm: sha256
+  register: runtime_docker_live_config_state
+
+- name: Inspect Runtime ownership before daemon adoption
+  ansible.builtin.stat:
+    path: "{{ runtime_docker_ownership_manifest }}"
+  register: runtime_docker_manifest_state
+
+- name: Inspect Foundry repository evidence for partial-run recovery
+  ansible.builtin.stat:
+    path: "{{ runtime_docker_repository_file }}"
+  register: runtime_docker_partial_repository_state
+
+- name: Inspect the desired candidate checksum
+  ansible.builtin.stat:
+    path: "{{ runtime_docker_candidate_config }}"
+    checksum_algorithm: sha256
+  register: runtime_docker_candidate_state
+
+- name: Refuse unsafe adoption of an external daemon configuration
+  ansible.builtin.assert:
+    that:
+      - >-
+        not runtime_docker_live_config_state.stat.exists
+        or runtime_docker_manifest_state.stat.exists
+        or (
+          runtime_docker_partial_repository_state.stat.exists
+          and runtime_docker_live_config_state.stat.checksum
+              == runtime_docker_candidate_state.stat.checksum
+        )
+        or (
+          runtime_resolved.docker.daemon_config_adoption == 'matching'
+          and runtime_docker_live_config_state.stat.checksum
+              == runtime_docker_candidate_state.stat.checksum
+        )
+    fail_msg: >-
+      {{ runtime_docker_daemon_config }} exists without Foundry ownership.
+      Foundry refused to overwrite it. Review it and explicitly select
+      daemon_config_adoption: matching only when it already matches the desired policy.
+
+- name: Identify running workloads before a daemon configuration change
+  ansible.builtin.command:
+    argv: [docker, ps, --quiet]
+  register: runtime_docker_running_workloads
+  changed_when: false
+  check_mode: false
+  when: >-
+    not runtime_docker_live_config_state.stat.exists
+    or runtime_docker_live_config_state.stat.checksum
+       != runtime_docker_candidate_state.stat.checksum
+
+- name: Read the current Docker data root before adopting a custom location
+  ansible.builtin.command:
+    argv: [docker, info, --format, "{% raw %}{{.DockerRootDir}}{% endraw %}"]
+  register: runtime_docker_current_data_root
+  changed_when: false
+  check_mode: false
+
+- name: Refuse implicit migration of an existing Docker data root
+  ansible.builtin.assert:
+    that:
+      - >-
+        runtime_installed_official_packages | length == 0
+        and runtime_installed_conflicting_packages | length == 0
+        or runtime_docker_current_data_root.stdout | trim
+           == runtime_resolved.docker.data_root
+    fail_msg: >-
+      Existing Docker data is rooted at {{ runtime_docker_current_data_root.stdout | trim }},
+      but configuration requests {{ runtime_resolved.docker.data_root }}. Runtime
+      will not migrate or abandon existing Docker data during convergence.
+
+- name: Gate disruptive daemon changes when workloads are running
+  ansible.builtin.assert:
+    that:
+      - >-
+        runtime_docker_running_workloads.stdout_lines | default([]) | length == 0
+        or (
+          runtime_resolved.docker.restart.approved | bool
+          and runtime_resolved.docker.restart.maintenance_window | trim | length > 0
+        )
+    fail_msg: >-
+      Docker daemon configuration drift requires a restart while workloads are
+      running. Set restart.approved and a maintenance_window only after coordinating
+      the interruption.
+  when: runtime_docker_running_workloads is not skipped
+
+- name: Preserve the previous daemon configuration for rollback
+  ansible.builtin.copy:
+    src: "{{ runtime_docker_daemon_config }}"
+    dest: "{{ runtime_docker_previous_config }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0600"
+  when:
+    - runtime_docker_live_config_state.stat.exists
+    - runtime_docker_live_config_state.stat.checksum != runtime_docker_candidate_state.stat.checksum
+
+- name: Apply validated daemon configuration transactionally
+  block:
+    - name: Install the validated Docker daemon configuration
+      ansible.builtin.copy:
+        src: "{{ runtime_docker_candidate_config }}"
+        dest: "{{ runtime_docker_daemon_config }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+      register: runtime_docker_daemon_apply
+
+    - name: Restart Docker only when owned configuration changed
+      ansible.builtin.systemd_service:
+        name: "{{ runtime_docker_service }}"
+        state: restarted
+      when: runtime_docker_daemon_apply.changed
+
+    - name: Wait for Docker after an approved configuration restart
+      ansible.builtin.command:
+        argv: [docker, info]
+      register: runtime_docker_restart_health
+      changed_when: false
+      retries: 12
+      delay: 5
+      until: runtime_docker_restart_health.rc == 0
+      when: runtime_docker_daemon_apply.changed
+  rescue:
+    - name: Restore the previous Docker daemon configuration
+      ansible.builtin.copy:
+        src: "{{ runtime_docker_previous_config }}"
+        dest: "{{ runtime_docker_daemon_config }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+      when: runtime_docker_live_config_state.stat.exists
+
+    - name: Remove failed first-bootstrap daemon configuration
+      ansible.builtin.file:
+        path: "{{ runtime_docker_daemon_config }}"
+        state: absent
+      when: not runtime_docker_live_config_state.stat.exists
+
+    - name: Restore Docker service availability after rollback
+      ansible.builtin.systemd_service:
+        name: "{{ runtime_docker_service }}"
+        state: restarted
+
+    - name: Fail after restoring the last recoverable Docker state
+      ansible.builtin.fail:
+        msg: >-
+          Docker rejected the validated configuration during activation. Foundry
+          restored the previous recoverable state; inspect Docker service logs.

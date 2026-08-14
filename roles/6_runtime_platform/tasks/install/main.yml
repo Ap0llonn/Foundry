@@ -1,0 +1,106 @@
+---
+- name: Inspect containers before a legacy runtime migration
+  ansible.builtin.command:
+    argv: [docker, ps, --quiet]
+  register: runtime_legacy_running_containers
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: runtime_installed_conflicting_packages | length > 0
+
+- name: Require explicit approval for legacy package migration
+  ansible.builtin.assert:
+    that:
+      - runtime_resolved.docker.legacy_package_migration_approved | bool
+      - >-
+        runtime_legacy_running_containers.stdout_lines | default([]) | length == 0
+        or (
+          runtime_resolved.docker.restart.approved | bool
+          and runtime_resolved.docker.restart.maintenance_window | trim | length > 0
+        )
+    fail_msg: >-
+      Conflicting Ubuntu Docker packages are installed
+      ({{ runtime_installed_conflicting_packages | join(', ') }}). Approve the
+      legacy package migration explicitly. Running workloads additionally require
+      a named, approved Docker maintenance window.
+  when: runtime_installed_conflicting_packages | length > 0
+
+- name: Release package holds before reconciling the pinned runtime
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: install
+  loop: "{{ runtime_docker_official_package_names }}"
+  when:
+    - item in ansible_facts.packages
+    - ansible_facts.packages[item][0].version != runtime_docker_packages[item]
+
+- name: Stage exact replacement packages before legacy runtime removal
+  ansible.builtin.apt:
+    name:
+      - "docker-ce={{ runtime_docker_packages['docker-ce'] }}"
+      - "docker-ce-cli={{ runtime_docker_packages['docker-ce-cli'] }}"
+      - "containerd.io={{ runtime_docker_packages['containerd.io'] }}"
+      - "docker-buildx-plugin={{ runtime_docker_packages['docker-buildx-plugin'] }}"
+      - "docker-compose-plugin={{ runtime_docker_packages['docker-compose-plugin'] }}"
+    state: present
+    download_only: true
+    lock_timeout: "{{ runtime_docker_apt_lock_timeout }}"
+  register: runtime_docker_staged_packages
+  retries: "{{ runtime_docker_apt_retries }}"
+  delay: "{{ runtime_docker_apt_retry_delay }}"
+  until: runtime_docker_staged_packages is succeeded
+  when: runtime_installed_conflicting_packages | length > 0
+
+- name: Remove only approved conflicting runtime packages
+  ansible.builtin.apt:
+    name: "{{ runtime_installed_conflicting_packages }}"
+    state: absent
+    purge: false
+    autoremove: false
+    lock_timeout: "{{ runtime_docker_apt_lock_timeout }}"
+  register: runtime_docker_legacy_removal
+  retries: "{{ runtime_docker_apt_retries }}"
+  delay: "{{ runtime_docker_apt_retry_delay }}"
+  until: runtime_docker_legacy_removal is succeeded
+  when: runtime_installed_conflicting_packages | length > 0
+
+- name: Install the exact certified Docker package set
+  ansible.builtin.apt:
+    name:
+      - "docker-ce={{ runtime_docker_packages['docker-ce'] }}"
+      - "docker-ce-cli={{ runtime_docker_packages['docker-ce-cli'] }}"
+      - "containerd.io={{ runtime_docker_packages['containerd.io'] }}"
+      - "docker-buildx-plugin={{ runtime_docker_packages['docker-buildx-plugin'] }}"
+      - "docker-compose-plugin={{ runtime_docker_packages['docker-compose-plugin'] }}"
+    state: present
+    allow_downgrade: false
+    update_cache: false
+    lock_timeout: "{{ runtime_docker_apt_lock_timeout }}"
+  register: runtime_docker_install_result
+  retries: "{{ runtime_docker_apt_retries }}"
+  delay: "{{ runtime_docker_apt_retry_delay }}"
+  until: runtime_docker_install_result is succeeded
+
+- name: Hold certified Docker packages against incidental upgrades
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop: "{{ runtime_docker_official_package_names }}"
+
+- name: Enable and start containerd
+  ansible.builtin.systemd_service:
+    name: "{{ runtime_containerd_service }}"
+    enabled: true
+    state: started
+
+- name: Enable and start Docker
+  ansible.builtin.systemd_service:
+    name: "{{ runtime_docker_service }}"
+    enabled: true
+    state: started
+
+- name: Wait for the Docker Unix socket
+  ansible.builtin.wait_for:
+    path: "{{ runtime_docker_socket }}"
+    state: present
+    timeout: 60

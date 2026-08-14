@@ -1,0 +1,26 @@
+---
+vm_ip: 2001:db8::25
+project:
+  name: fixture-project
+environments:
+  - name: dev
+domains:
+  base: ""
+  environment_style: hyphen
+  dokploy_label: dokploy
+  service_names: [api]
+platform:
+  dokploy:
+    enabled: true
+management:
+  restrict_by_cidr: true
+  allowed_cidrs: [2001:db8::/64]
+network:
+  exposure:
+    - {name: traefik-http, port: 80, protocol: tcp, scope: public}
+    - {name: dokploy-management, port: 3000, protocol: tcp, scope: management}
+expected_resolved_domains:
+  dev:
+    api: ""
+expected_dokploy_endpoint: http://[2001:db8::25]:3000
+

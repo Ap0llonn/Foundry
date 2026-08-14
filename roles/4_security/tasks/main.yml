@@ -1,56 +1,51 @@
 ---
-# Couche 4 - Security
-# L'ordre est volontaire: valider, ouvrir les accès firewall requis, puis
-# appliquer SSH et les autres politiques de sécurité.
-
-- name: 4.1 Validate resolved security policy
+# Couche 4 - Security. This file only orchestrates bounded security modules.
+- name: 4.1 Validate and resolve the security contract
   ansible.builtin.import_tasks: 01_validate.yml
-  # Pre-flight also runs when a Security sub-tag is selected directly.
   tags:
-    - security
+    - always
     - security_validation
-    - security_packages
-    - security_firewall
-    - security_ssh
-    - security_fail2ban
-    - security_updates
-    - security_result
 
-- name: 4.2 Install security components
+- name: 4.2 Install security platform packages
   ansible.builtin.import_tasks: 02_packages.yml
   become: true
-  tags: [security, security_packages, security_firewall, security_ssh]
+  tags: [security, security_packages]
 
-- name: 4.3 Prepare and enable host firewall
-  ansible.builtin.import_tasks: 03_firewall.yml
+- name: 4.3 Converge Foundry-owned firewall exposure
+  ansible.builtin.import_tasks: firewall/main.yml
   become: true
   tags: [security, security_firewall, security_ssh]
 
-- name: 4.4 Harden SSH server policy
-  ansible.builtin.import_tasks: 04_ssh.yml
+- name: 4.4 Apply transactional SSH security
+  ansible.builtin.import_tasks: ssh/main.yml
   become: true
   tags: [security, security_ssh]
 
-- name: 4.5 Retire the previous SSH management endpoint
-  ansible.builtin.import_tasks: 04b_finalize_ssh_transition.yml
-  become: true
-  tags: [security, security_ssh]
-
-- name: 4.6 Configure Fail2ban
-  ansible.builtin.import_tasks: 05_fail2ban.yml
+- name: 4.5 Configure SSH abuse protection
+  ansible.builtin.import_tasks: fail2ban/main.yml
   become: true
   tags: [security, security_fail2ban]
 
-- name: 4.7 Configure automatic security updates
-  ansible.builtin.import_tasks: 06_updates.yml
+- name: 4.6 Configure automatic security updates
+  ansible.builtin.import_tasks: updates/main.yml
   become: true
   tags: [security, security_updates]
 
+- name: 4.7 Ensure AppArmor platform capability
+  ansible.builtin.import_tasks: apparmor/main.yml
+  become: true
+  tags: [security, security_apparmor]
+
+- name: 4.8 Configure persistent system logging
+  ansible.builtin.import_tasks: logging/main.yml
+  become: true
+  tags: [security, security_logging]
+
 - name: Apply pending security service handlers
   ansible.builtin.meta: flush_handlers
-  tags: [security, security_fail2ban]
+  tags: [security, security_fail2ban, security_logging]
 
-- name: 4.8 Validate resulting host security state
-  ansible.builtin.import_tasks: 07_validation.yml
+- name: 4.9 Validate resulting host security state
+  ansible.builtin.import_tasks: validation/main.yml
   become: true
   tags: [security, security_result]

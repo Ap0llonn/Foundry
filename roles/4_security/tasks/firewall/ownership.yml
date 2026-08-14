@@ -1,0 +1,60 @@
+---
+- name: Create Foundry firewall ownership directory
+  ansible.builtin.file:
+    path: "{{ security_firewall_state_directory }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Inspect previous Foundry firewall state
+  ansible.builtin.stat:
+    path: "{{ security_firewall_state_file }}"
+  register: security_firewall_state_file_check
+
+- name: Read previous Foundry firewall state
+  ansible.builtin.slurp:
+    path: "{{ security_firewall_state_file }}"
+  register: security_firewall_previous_state_raw
+  when: security_firewall_state_file_check.stat.exists
+
+- name: Resolve raw previous Foundry-owned rules
+  ansible.builtin.set_fact:
+    security_firewall_previous_rules_raw: >-
+      {{
+        (security_firewall_previous_state_raw.content | b64decode | from_yaml)
+        if security_firewall_state_file_check.stat.exists else []
+      }}
+    security_firewall_previous_rules: []
+
+- name: Validate raw firewall ownership state before migration
+  ansible.builtin.assert:
+    that:
+      - security_firewall_previous_rules_raw is sequence
+      - security_firewall_previous_rules_raw is not string
+      - >-
+        security_firewall_previous_rules_raw
+        | rejectattr('name', 'defined') | list | length == 0
+      - >-
+        security_firewall_previous_rules_raw
+        | selectattr('name', 'match', '^foundry-') | list | length
+        == security_firewall_previous_rules_raw
+           | rejectattr('comment', 'defined') | list | length
+    fail_msg: Refusing to reconcile an invalid or non-Foundry firewall ownership manifest.
+
+- name: Normalize current and legacy Foundry ownership metadata
+  ansible.builtin.set_fact:
+    security_firewall_previous_rules: >-
+      {{
+        security_firewall_previous_rules + [{
+          'name': item.name,
+          'comment': item.comment | default(item.name),
+          'scope': item.scope | default('legacy'),
+          'port': item.port | int,
+          'protocol': item.protocol,
+          'source': item.source
+        }]
+      }}
+  loop: "{{ security_firewall_previous_rules_raw }}"
+  loop_control:
+    label: "{{ item.comment | default(item.name | default('invalid')) }}"

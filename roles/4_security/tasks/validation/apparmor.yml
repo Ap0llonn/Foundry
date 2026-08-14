@@ -1,0 +1,43 @@
+---
+- name: Validate AppArmor kernel capability
+  ansible.builtin.command:
+    argv: [aa-status, --enabled]
+  changed_when: false
+  check_mode: false
+  when: security_resolved.apparmor.enabled
+
+- name: Read AppArmor enforcement status
+  ansible.builtin.command:
+    argv: [aa-status]
+  register: security_apparmor_status
+  changed_when: false
+  check_mode: false
+  when: security_resolved.apparmor.enabled
+
+- name: Read AppArmor systemd activation state
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - show
+      - apparmor.service
+      - --property=ActiveState
+      - --property=UnitFileState
+  register: security_apparmor_systemd_status
+  changed_when: false
+  check_mode: false
+  when: security_resolved.apparmor.enabled
+
+- name: Validate AppArmor loaded and enforcing capability
+  ansible.builtin.assert:
+    that:
+      - "'apparmor.service' in ansible_facts.services"
+      # apparmor.service is a oneshot unit and is correctly active/exited after
+      # loading policy; service_facts can report that state as stopped.
+      - security_apparmor_systemd_status.stdout is search('(?m)^ActiveState=active$')
+      - security_apparmor_systemd_status.stdout is search('(?m)^UnitFileState=enabled$')
+      - security_apparmor_status.stdout is search('apparmor module is loaded')
+      - >-
+        security_apparmor_status.stdout
+        is search('(?m)^[1-9][0-9]* profiles are in enforce mode[.]$')
+    fail_msg: AppArmor is not installed, loaded, active, and enforcing.
+  when: security_resolved.apparmor.enabled

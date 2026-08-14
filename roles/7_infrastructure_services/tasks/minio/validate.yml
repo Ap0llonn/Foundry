@@ -1,0 +1,60 @@
+---
+- name: Inspect converged MinIO containers
+  ansible.builtin.command:
+    argv: >-
+      {{ ['docker', 'container', 'inspect'] + (infrastructure_services_minio_instances | map(attribute='container_name') | list) }}
+  register: infrastructure_services_minio_final_raw
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Resolve converged MinIO state
+  ansible.builtin.set_fact:
+    infrastructure_services_minio_final: "{{ infrastructure_services_minio_final_raw.stdout | from_json }}"
+  no_log: true
+
+- name: Validate MinIO ownership, persistence, and network isolation
+  ansible.builtin.assert:
+    that:
+      - item.0.State.Running
+      - item.0.Config.User == ((item.1.run_as_uid | string) + ':' + (item.1.run_as_gid | string))
+      - item.0.HostConfig.RestartPolicy.Name == 'unless-stopped'
+      - item.0.HostConfig.PortBindings | default({}, true) | length == 0
+      - item.0.NetworkSettings.Networks.keys() | list == [item.1.network_name]
+      - (item.0.Config.Labels | default({}, true)).get('foundry.managed') == 'true'
+      - (item.0.Config.Labels | default({}, true)).get('foundry.project') == project.name
+      - (item.0.Config.Labels | default({}, true)).get('foundry.environment') == item.1.environment
+      - (item.0.Config.Labels | default({}, true)).get('foundry.resource') == infrastructure_services_minio_label_resource
+      - >-
+        item.0.Mounts | selectattr('Destination', 'equalto', '/data')
+        | selectattr('Source', 'equalto', item.1.data_path) | list | length == 1
+      - "'MINIO_ROOT_USER_FILE=/run/secrets/minio-root-user' in item.0.Config.Env"
+      - "'MINIO_ROOT_PASSWORD_FILE=/run/secrets/minio-root-password' in item.0.Config.Env"
+    fail_msg: MinIO does not match its owned isolated S3 contract.
+  loop: "{{ infrastructure_services_minio_final | zip(infrastructure_services_minio_instances) | list }}"
+  loop_control:
+    label: "{{ item.1.environment }} -> {{ item.1.container_name }}"
+  no_log: true
+
+- name: Wait for each MinIO S3 health endpoint from the Docker host
+  ansible.builtin.uri:
+    url: >-
+      http://{{ item.0.NetworkSettings.Networks[item.1.network_name].IPAddress }}:{{ infrastructure_services_minio_api_port }}/minio/health/live
+    method: GET
+    status_code: 200
+  register: infrastructure_services_minio_health
+  retries: "{{ infrastructure_services_minio_health_retries }}"
+  delay: "{{ infrastructure_services_minio_health_delay }}"
+  until: infrastructure_services_minio_health.status == 200
+  loop: "{{ infrastructure_services_minio_final | zip(infrastructure_services_minio_instances) | list }}"
+  loop_control:
+    label: "{{ item.1.environment }}"
+
+- name: Report internal S3 endpoints
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.environment }} S3 endpoint: http://minio:{{ infrastructure_services_minio_api_port }}
+      on {{ item.network_name }} (not published to the host).
+  loop: "{{ infrastructure_services_minio_instances }}"
+  loop_control:
+    label: "{{ item.environment }}"

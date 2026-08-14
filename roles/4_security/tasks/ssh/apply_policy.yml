@@ -1,0 +1,68 @@
+---
+- name: "Inspect active SSH policy before {{ security_ssh_policy_phase }} update"
+  ansible.builtin.stat:
+    path: "{{ security_sshd_dropin }}"
+  register: security_ssh_previous_policy_check
+
+- name: "Back up active SSH policy before {{ security_ssh_policy_phase }} update"
+  ansible.builtin.slurp:
+    path: "{{ security_sshd_dropin }}"
+  register: security_ssh_previous_policy
+  when: security_ssh_previous_policy_check.stat.exists
+
+- name: "Apply validated {{ security_ssh_policy_phase }} SSH policy"
+  block:
+    - name: "Install {{ security_ssh_policy_phase }} SSH policy candidate"
+      ansible.builtin.template:
+        src: foundry-sshd.conf.j2
+        dest: "{{ security_sshd_dropin }}"
+        owner: root
+        group: root
+        mode: "0600"
+        validate: "{{ security_sshd_binary }} -t -f %s"
+      register: security_ssh_policy_install
+
+    - name: Validate complete merged SSH daemon configuration
+      ansible.builtin.command:
+        argv: ["{{ security_sshd_binary }}", -t]
+      changed_when: false
+      check_mode: false
+
+    - name: Reload SSH after validated policy change
+      ansible.builtin.systemd_service:
+        name: "{{ security_ssh_service }}"
+        state: reloaded
+      when: security_ssh_policy_install.changed
+
+  rescue:
+    - name: Restore previous SSH policy content
+      ansible.builtin.copy:
+        dest: "{{ security_sshd_dropin }}"
+        owner: root
+        group: root
+        mode: "0600"
+        content: "{{ security_ssh_previous_policy.content | b64decode }}"
+      when: security_ssh_previous_policy_check.stat.exists
+
+    - name: Remove failed SSH policy when no previous policy existed
+      ansible.builtin.file:
+        path: "{{ security_sshd_dropin }}"
+        state: absent
+      when: not security_ssh_previous_policy_check.stat.exists
+
+    - name: Validate restored SSH daemon configuration
+      ansible.builtin.command:
+        argv: ["{{ security_sshd_binary }}", -t]
+      changed_when: false
+      check_mode: false
+
+    - name: Reload restored SSH daemon configuration
+      ansible.builtin.systemd_service:
+        name: "{{ security_ssh_service }}"
+        state: reloaded
+
+    - name: Report safe SSH policy rollback
+      ansible.builtin.fail:
+        msg: >-
+          The {{ security_ssh_policy_phase }} SSH policy failed validation or
+          reload. Foundry restored and reloaded the previous valid policy.

@@ -1,0 +1,68 @@
+---
+- name: Wait for Docker Redis health checks
+  ansible.builtin.command:
+    argv:
+      - docker
+      - container
+      - inspect
+      - --format
+      - "{% raw %}{{.State.Health.Status}}{% endraw %}"
+      - "{{ item.container_name }}"
+  register: infrastructure_services_redis_health
+  changed_when: false
+  retries: 20
+  delay: 3
+  until: infrastructure_services_redis_health.stdout == 'healthy'
+  loop: "{{ infrastructure_services_redis_instances }}"
+  no_log: true
+
+- name: Prove Redis responds to an authenticated PING
+  ansible.builtin.command:
+    argv:
+      - docker
+      - container
+      - exec
+      - "{{ item.container_name }}"
+      - sh
+      - -ec
+      - >-
+        REDISCLI_AUTH="$(awk '$1 == "requirepass" {print $2}' /usr/local/etc/redis/redis.conf)"
+        exec redis-cli ping
+  register: infrastructure_services_redis_ping
+  changed_when: false
+  failed_when: infrastructure_services_redis_ping.rc != 0 or infrastructure_services_redis_ping.stdout != 'PONG'
+  loop: "{{ infrastructure_services_redis_instances }}"
+  no_log: true
+
+- name: Inspect final Redis runtime contracts
+  ansible.builtin.command:
+    argv: [docker, container, inspect, "{{ item.container_name }}"]
+  register: infrastructure_services_redis_final_inspections
+  changed_when: false
+  loop: "{{ infrastructure_services_redis_instances }}"
+  no_log: true
+
+- name: Validate Redis ownership, persistence policy, and private attachment
+  ansible.builtin.assert:
+    that:
+      - (item.stdout | from_json | first).State.Running
+      - (item.stdout | from_json | first).State.Health.Status == 'healthy'
+      - (item.stdout | from_json | first).Config.Image == item.item.image
+      - (item.stdout | from_json | first).HostConfig.RestartPolicy.Name == 'unless-stopped'
+      - (item.stdout | from_json | first).HostConfig.PortBindings | default({}, true) | length == 0
+      - (item.stdout | from_json | first).NetworkSettings.Networks.keys() | list == [item.item.network_name]
+      - ((item.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.managed') == 'true'
+      - ((item.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.project') == project.name
+      - ((item.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.environment') == item.item.environment
+      - ((item.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.service') == 'redis'
+      - ((item.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.resource') == 'redis'
+      - >-
+        (item.item.persistence and
+         (item.stdout | from_json | first).Mounts | selectattr('Name', 'equalto', item.item.volume_name)
+         | selectattr('Destination', 'equalto', '/data') | list | length == 1)
+        or (not item.item.persistence and
+            (item.stdout | from_json | first).Mounts
+            | selectattr('Destination', 'equalto', '/data') | list | length == 0)
+    fail_msg: Redis failed its ownership, persistence, or network-isolation contract.
+  loop: "{{ infrastructure_services_redis_final_inspections.results }}"
+  no_log: true

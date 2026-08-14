@@ -76,7 +76,9 @@ require("/dev/stdin" in task_text["05_time.yml"], "Chrony candidate validation w
 require("NTS key establishment" in task_text["validate_time.yml"], "NTS cryptographic state is not asserted")
 
 security_validation = (ROOT / "roles" / "4_security" / "tasks" / "01_validate.yml").read_text()
-security_updates = (ROOT / "roles" / "4_security" / "tasks" / "06_updates.yml").read_text()
+security_updates = (
+    ROOT / "roles" / "4_security" / "tasks" / "updates" / "main.yml"
+).read_text()
 require("not security_resolved.updates.automatic_reboot" in security_validation, "security can bypass reboot gates")
 require('Automatic-Reboot "false"' in security_updates, "unattended upgrades can reboot")
 

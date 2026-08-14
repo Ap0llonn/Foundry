@@ -1,0 +1,92 @@
+---
+- name: Initialize complete non-secret Infrastructure Services outputs
+  ansible.builtin.set_fact:
+    foundry_resolved_services: "{{ foundry_resolved_services | default({}) }}"
+    infrastructure_services_backup_targets: "{{ infrastructure_services_backup_targets | default([]) }}"
+
+- name: Publish MinIO endpoints and backup integration metadata
+  ansible.builtin.include_tasks: output/publish_minio.yml
+  loop: "{{ infrastructure_services_minio_instances | default([]) }}"
+  loop_control:
+    loop_var: infrastructure_services_output_minio
+    label: "{{ infrastructure_services_output_minio.environment }}"
+
+- name: Publish Dokploy backup integration metadata
+  ansible.builtin.set_fact:
+    infrastructure_services_backup_targets: >-
+      {{ infrastructure_services_backup_targets + [
+        {
+          'project': project.name,
+          'service': 'dokploy-postgres',
+          'volume_name': 'dokploy-postgres',
+          'mount_path': '/var/lib/postgresql/data'
+        },
+        {
+          'project': project.name,
+          'service': 'dokploy',
+          'volume_name': 'dokploy',
+          'mount_path': '/root/.docker'
+        },
+        {
+          'project': project.name,
+          'service': 'dokploy',
+          'data_path': infrastructure_services_dokploy_directory,
+          'mount_path': '/etc/dokploy'
+        },
+        {
+          'project': project.name,
+          'service': 'dokploy-secrets',
+          'data_path': infrastructure_services_secret_directory + '/' + project.name + '/dokploy',
+          'sensitivity': 'secret-recovery-material'
+        },
+        {
+          'project': project.name,
+          'service': 'swarm-control-plane',
+          'data_path': runtime_swarm_state_file | default('/var/lib/foundry/runtime/swarm-ownership.yml'),
+          'sensitivity': 'control-plane-metadata'
+        }
+      ] }}
+  when: foundry_platform_resolved.dokploy.enabled
+
+- name: Resolve complete Infrastructure Services output document
+  ansible.builtin.set_fact:
+    infrastructure_services_output:
+      project: "{{ project.name }}"
+      services: "{{ foundry_resolved_services }}"
+      domains:
+        enabled: "{{ infrastructure_services_domain_enabled }}"
+        base: "{{ foundry_domains_resolved.base }}"
+        environment_style: "{{ foundry_domains_resolved.environment_style }}"
+        resolved: "{{ foundry_resolved_domains }}"
+      platform:
+        traefik:
+          enabled: "{{ infrastructure_services_traefik_enabled }}"
+          ingress_network: "{{ foundry_platform_resolved.traefik.ingress_network if infrastructure_services_traefik_enabled else none }}"
+          http_port: "{{ foundry_platform_resolved.traefik.http_port if infrastructure_services_traefik_enabled else none }}"
+          https_port: "{{ foundry_platform_resolved.traefik.https_port if infrastructure_services_traefik_enabled and foundry_platform_resolved.traefik.tls.enabled else none }}"
+        dokploy:
+          enabled: "{{ foundry_platform_resolved.dokploy.enabled }}"
+          endpoint: "{{ infrastructure_services_dokploy_endpoint if foundry_platform_resolved.dokploy.enabled else none }}"
+          onboarding_required: >-
+            {{ infrastructure_services_dokploy_onboarding_required | default(true)
+               if foundry_platform_resolved.dokploy.enabled else none }}
+        swarm:
+          enabled: "{{ infrastructure_services_swarm_enabled }}"
+          topology: "{{ 'single-manager' if infrastructure_services_swarm_enabled else none }}"
+
+- name: Persist non-secret resolved infrastructure map
+  ansible.builtin.copy:
+    dest: "{{ infrastructure_services_state_file }}"
+    owner: root
+    group: root
+    mode: "0640"
+    content: "{{ infrastructure_services_output | to_nice_yaml(indent=2) }}"
+
+- name: Persist backup integration points without credentials
+  ansible.builtin.copy:
+    dest: "{{ infrastructure_services_backup_file }}"
+    owner: root
+    group: root
+    mode: "0640"
+    content: >-
+      {{ {'project': project.name, 'targets': infrastructure_services_backup_targets} | to_nice_yaml(indent=2) }}

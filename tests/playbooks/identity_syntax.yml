@@ -1,0 +1,17 @@
+---
+- name: Parse the complete Identity and Access role
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - role: 3_identity_access
+
+- name: Parse the dynamically included group reconciliation helper
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Import group reconciliation helper
+      ansible.builtin.import_role:
+        name: 3_identity_access
+        tasks_from: reconcile_user_groups

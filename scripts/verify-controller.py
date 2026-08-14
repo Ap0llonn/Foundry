@@ -82,13 +82,54 @@ subprocess.run(
         "--syntax-check",
         "-i",
         "localhost,",
-        "roles/2_os_base_system/tests/syntax.yml",
+        "roles/4_security/tests/syntax.yml",
     ],
     check=True,
     cwd=ROOT,
 )
 subprocess.run(
+    [
+        str(ansible_playbook),
+        "--syntax-check",
+        "-i",
+        "localhost,",
+        "roles/2_os_base_system/tests/syntax.yml",
+    ],
+    check=True,
+    cwd=ROOT,
+)
+for role_syntax_playbook in [
+    "roles/5_networking/tests/syntax.yml",
+    "roles/7_infrastructure_services/tests/syntax.yml",
+]:
+    subprocess.run(
+        [
+            str(ansible_playbook),
+            "--syntax-check",
+            "-i",
+            "localhost,",
+            role_syntax_playbook,
+        ],
+        check=True,
+        cwd=ROOT,
+    )
+subprocess.run(
+    [sys.executable, "scripts/verify-security-role-policy.py"],
+    check=True,
+    cwd=ROOT,
+)
+subprocess.run(
     [sys.executable, "scripts/verify-os-role-policy.py"],
+    check=True,
+    cwd=ROOT,
+)
+subprocess.run(
+    [sys.executable, "scripts/verify-networking-role-policy.py"],
+    check=True,
+    cwd=ROOT,
+)
+subprocess.run(
+    [sys.executable, "scripts/verify-infrastructure-services-role-policy.py"],
     check=True,
     cwd=ROOT,
 )

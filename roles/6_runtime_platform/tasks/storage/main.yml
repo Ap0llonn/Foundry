@@ -1,0 +1,50 @@
+---
+- name: Read structured Docker runtime information
+  ansible.builtin.command:
+    argv: [docker, info, --format, "{% raw %}{{json .}}{% endraw %}"]
+  register: runtime_docker_info_json
+  changed_when: false
+  check_mode: false
+
+- name: Resolve effective Docker information
+  ansible.builtin.set_fact:
+    runtime_docker_info: "{{ runtime_docker_info_json.stdout | from_json }}"
+
+- name: Inspect Docker root path safety
+  ansible.builtin.stat:
+    path: "{{ runtime_docker_info.DockerRootDir }}"
+  register: runtime_docker_root_state
+
+- name: Read Docker root filesystem capacity
+  ansible.builtin.command:
+    argv: [df, --output=pcent, "{{ runtime_docker_info.DockerRootDir }}"]
+  register: runtime_docker_capacity
+  changed_when: false
+  check_mode: false
+
+- name: Read Docker root filesystem inode usage
+  ansible.builtin.command:
+    argv: [df, --output=ipcent, "{{ runtime_docker_info.DockerRootDir }}"]
+  register: runtime_docker_inode_capacity
+  changed_when: false
+  check_mode: false
+
+- name: Resolve Docker root free capacity
+  ansible.builtin.set_fact:
+    runtime_docker_free_percent: >-
+      {{ 100 - (runtime_docker_capacity.stdout_lines[-1] | trim | regex_replace('%$', '') | int) }}
+    runtime_docker_free_inodes_percent: >-
+      {{ 100 - (runtime_docker_inode_capacity.stdout_lines[-1] | trim | regex_replace('%$', '') | int) }}
+
+- name: Validate Docker storage ownership and capacity
+  ansible.builtin.assert:
+    that:
+      - runtime_docker_info.DockerRootDir == runtime_resolved.docker.data_root
+      - runtime_docker_info.Driver in runtime_docker_allowed_storage_drivers
+      - runtime_docker_root_state.stat.isdir
+      - not runtime_docker_root_state.stat.islnk
+      - runtime_docker_free_percent | int >= runtime_docker_min_free_percent | int
+      - runtime_docker_free_inodes_percent | int >= runtime_docker_min_free_inodes_percent | int
+    fail_msg: >-
+      Docker storage is unhealthy or differs from the declared data root. Foundry
+      never migrates, formats, or removes Docker storage automatically.

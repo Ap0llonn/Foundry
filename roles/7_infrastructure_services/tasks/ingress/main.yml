@@ -1,0 +1,41 @@
+---
+- name: Resolve ingress network driver from platform topology
+  ansible.builtin.set_fact:
+    infrastructure_services_ingress_driver: >-
+      {{ 'overlay' if infrastructure_services_swarm_enabled else 'bridge' }}
+
+- name: Inspect desired Dokploy ingress network
+  ansible.builtin.command:
+    argv: [docker, network, inspect, "{{ foundry_platform_resolved.traefik.ingress_network }}"]
+  register: infrastructure_services_ingress_network_inspect
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Refuse external or incompatible ingress network collision
+  ansible.builtin.assert:
+    that:
+      - >-
+        infrastructure_services_ingress_network_inspect.rc != 0
+        or (
+          ((infrastructure_services_ingress_network_inspect.stdout | from_json | first).Labels | default({}, true)).get('foundry.managed') == 'true'
+          and ((infrastructure_services_ingress_network_inspect.stdout | from_json | first).Labels | default({}, true)).get('foundry.project') == project.name
+          and ((infrastructure_services_ingress_network_inspect.stdout | from_json | first).Labels | default({}, true)).get('foundry.resource') == infrastructure_services_swarm_network_label_resource
+          and (infrastructure_services_ingress_network_inspect.stdout | from_json | first).Driver == infrastructure_services_ingress_driver
+          and (infrastructure_services_ingress_driver != 'overlay' or (infrastructure_services_ingress_network_inspect.stdout | from_json | first).Scope == 'swarm')
+          and (infrastructure_services_ingress_driver != 'overlay' or (infrastructure_services_ingress_network_inspect.stdout | from_json | first).Attachable)
+        )
+    fail_msg: The requested ingress network exists but is external or incompatible; refusing adoption/deletion.
+
+- name: Create missing Foundry ingress network
+  ansible.builtin.command:
+    argv: >-
+      {{
+        ['docker', 'network', 'create', '--driver', infrastructure_services_ingress_driver]
+        + (['--attachable'] if infrastructure_services_ingress_driver == 'overlay' else [])
+        + ['--label', 'foundry.managed=true',
+           '--label', 'foundry.project=' + project.name,
+           '--label', 'foundry.resource=' + infrastructure_services_swarm_network_label_resource,
+           foundry_platform_resolved.traefik.ingress_network]
+      }}
+  when: infrastructure_services_ingress_network_inspect.rc != 0

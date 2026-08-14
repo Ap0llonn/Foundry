@@ -1,0 +1,14 @@
+---
+- name: Append environment attachment metadata
+  ansible.builtin.set_fact:
+    networking_foundry_attachments: >-
+      {{
+        networking_foundry_attachments + [{
+          'environment': networking_attachment_network.1.environment,
+          'network_name': networking_attachment_network.1.network_name,
+          'container_id': item.key
+        }]
+      }}
+  loop: "{{ networking_attachment_network.0.Containers | default({}, true) | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"

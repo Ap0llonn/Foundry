@@ -1,0 +1,177 @@
+---
+# Public configuration defaults. Secrets may be supplied through Ansible Vault;
+# when omitted, Foundry generates stable host-local credentials once.
+infrastructure_services_defaults:
+  minio:
+    enabled: false
+    run_as_uid: 1000
+    run_as_gid: 1000
+    instances: []
+
+services_defaults:
+  postgres:
+    enabled: false
+    environments: []
+    major: 17
+    image: "postgres@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94"
+    user: foundry
+    database: foundry
+    credentials: {}
+    resources:
+      memory: ""
+      cpus: ""
+  redis:
+    enabled: false
+    environments: []
+    version: "8.2"
+    image: "redis@sha256:987c376c727652f99625c7d205a1cba3cb2c53b92b0b62aade2bd48ee1593232"
+    credentials: {}
+    persistence: true
+    maxmemory: ""
+    maxmemory_policy: allkeys-lru
+    resources:
+      memory: ""
+      cpus: ""
+  object_storage:
+    enabled: false
+    provider: minio
+    environments: []
+    image: ""
+    credentials: {}
+    data_root: ""
+    run_as_uid: 1000
+    run_as_gid: 1000
+
+platform_defaults:
+  swarm:
+    enabled: false
+    advertise_address: ""
+    default_address_pool: 10.240.0.0/16
+    subnet_size: 24
+  traefik:
+    enabled: false
+    image: "traefik@sha256:a9890c898f379c1905ee5b28342f6b408dc863f08db2dab20e46c267d1ff463a"
+    ingress_network: dokploy-network
+    http_port: 80
+    https_port: 443
+    tls:
+      enabled: false
+      email: ""
+  dokploy:
+    enabled: false
+    image: "dokploy/dokploy@sha256:0061c6cb66a77fba26180db45281792dbd0a70d08e29dc19140b7433fed5ab14"
+    postgres_image: "postgres@sha256:11a9d238fbb48bab14599c57e41123254452b1a2d93c6c8595bce96f346bd082"
+    management_port: 3000
+    credentials: {}
+    secret_version: v1
+
+domains_defaults:
+  base: ""
+  environment_style: hyphen
+  dokploy_label: dokploy
+  service_names:
+    - api
+
+infrastructure_services_allowed_root_keys: [minio]
+infrastructure_services_allowed_minio_keys: [enabled, run_as_uid, run_as_gid, instances]
+infrastructure_services_allowed_minio_instance_keys:
+  - environment
+  - image
+  - data_path
+  - root_user
+  - root_password
+
+infrastructure_services_allowed_services_keys: [postgres, redis, object_storage]
+infrastructure_services_allowed_postgres_keys:
+  - enabled
+  - environments
+  - image
+  - major
+  - user
+  - database
+  - credentials
+  - resources
+infrastructure_services_allowed_redis_keys:
+  - enabled
+  - environments
+  - image
+  - version
+  - credentials
+  - persistence
+  - maxmemory
+  - maxmemory_policy
+  - resources
+infrastructure_services_allowed_object_storage_keys:
+  - enabled
+  - provider
+  - environments
+  - image
+  - credentials
+  - data_root
+  - run_as_uid
+  - run_as_gid
+infrastructure_services_allowed_resource_keys: [memory, cpus]
+infrastructure_services_allowed_platform_keys: [swarm, traefik, dokploy]
+infrastructure_services_allowed_swarm_keys:
+  - enabled
+  - advertise_address
+  - default_address_pool
+  - subnet_size
+infrastructure_services_allowed_traefik_keys:
+  - enabled
+  - image
+  - ingress_network
+  - http_port
+  - https_port
+  - tls
+infrastructure_services_allowed_tls_keys: [enabled, email]
+infrastructure_services_allowed_dokploy_keys:
+  - enabled
+  - image
+  - postgres_image
+  - management_port
+  - credentials
+  - secret_version
+infrastructure_services_allowed_domain_keys: [base, environment_style, dokploy_label, service_names]
+infrastructure_services_allowed_domain_styles: [hyphen, nested]
+infrastructure_services_allowed_redis_policies:
+  - noeviction
+  - allkeys-lru
+  - allkeys-lfu
+  - allkeys-random
+  - volatile-lru
+  - volatile-lfu
+  - volatile-random
+  - volatile-ttl
+
+infrastructure_services_network_state_file: /var/lib/foundry/networking/resolved-networks.yml
+infrastructure_services_state_directory: /var/lib/foundry/infrastructure-services
+infrastructure_services_state_file: /var/lib/foundry/infrastructure-services/resolved-services.yml
+infrastructure_services_backup_file: /var/lib/foundry/infrastructure-services/backup-metadata.yml
+infrastructure_services_secret_directory: /var/lib/foundry/infrastructure-services/secrets
+infrastructure_services_minio_state_directory: /var/lib/foundry/minio
+infrastructure_services_dokploy_directory: /etc/dokploy
+infrastructure_services_dokploy_config_directory: /etc/dokploy/application
+infrastructure_services_traefik_directory: /etc/dokploy/traefik
+infrastructure_services_traefik_dynamic_directory: /etc/dokploy/traefik/dynamic
+infrastructure_services_traefik_candidate: /var/lib/foundry/infrastructure-services/traefik.yml.candidate
+infrastructure_services_minio_container_suffix: minio
+infrastructure_services_minio_api_port: 9000
+infrastructure_services_minio_console_port: 9001
+infrastructure_services_minio_label_resource: minio
+infrastructure_services_minio_health_retries: 15
+infrastructure_services_minio_health_delay: 2
+infrastructure_services_environment_pattern: '^[a-z][a-z0-9-]{0,31}$'
+infrastructure_services_identifier_pattern: '^[a-z][a-z0-9-]{0,62}$'
+infrastructure_services_domain_pattern: '^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$'
+infrastructure_services_immutable_image_pattern: '^.+@sha256:[a-f0-9]{64}$'
+infrastructure_services_memory_pattern: '^[1-9][0-9]*[bBkKmMgG]?$'
+infrastructure_services_cpu_pattern: '^[0-9]+(?:\.[0-9]+)?$'
+infrastructure_services_absolute_safe_path_pattern: '^/(?!$)(?!etc(?:/|$)|bin(?:/|$)|boot(?:/|$)|dev(?:/|$)|proc(?:/|$)|root(?:/|$)|run(?:/|$)|sbin(?:/|$)|sys(?:/|$)|usr(?:/|$)|var(?:/|$))(?!.*(?:^|/)\.\.(?:/|$))[A-Za-z0-9._/-]+$'
+infrastructure_services_docker_binary: docker
+infrastructure_services_swarm_network_label_resource: ingress-network
+infrastructure_services_traefik_container_name: dokploy-traefik
+infrastructure_services_dokploy_service_name: dokploy
+infrastructure_services_dokploy_postgres_service_name: dokploy-postgres
+infrastructure_services_health_retries: 30
+infrastructure_services_health_delay: 2

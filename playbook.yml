@@ -154,6 +154,23 @@
   vars_files:
     - config.yml
 
+  pre_tasks:
+    - name: Resolve platform listeners before Security owns firewall convergence
+      ansible.builtin.include_role:
+        name: 7_infrastructure_services
+        tasks_from: plan/main
+        apply:
+          tags: [infrastructure_services_plan]
+      tags: [always, infrastructure_services_plan, security]
+
+    - name: Validate complete Infrastructure Services intent before host mutation
+      ansible.builtin.include_role:
+        name: 7_infrastructure_services
+        tasks_from: 01_validate
+        apply:
+          tags: [infrastructure_services_validation]
+      tags: [always, infrastructure_services_plan, infrastructure_services_validation]
+
   # Les couches seront ajoutées ici dans leur ordre d'exécution (1 à 9)
   # à mesure qu'elles seront implémentées.
   roles:
@@ -168,7 +185,28 @@
     - role: 4_security
       tags: [security]
 
+    - role: 6_runtime_platform
+      tags: [runtime]
+
+    - role: 5_networking
+      tags: [networking]
+
+    - role: 7_infrastructure_services
+      tags: [infrastructure_services]
+
   post_tasks:
+    - name: Revalidate final Security exposure after Docker workloads exist
+      ansible.builtin.include_role:
+        name: 4_security
+        tasks_from: validation/main
+        apply:
+          become: true
+          tags: [security_result, infrastructure_services_result]
+      when:
+        - security_resolved is defined
+        - (security | default({})).get('firewall', {}).get('enabled', true) | bool
+      tags: [security_result, infrastructure_services_result]
+
     - name: Run explicitly approved controlled reboot as the final phase
       ansible.builtin.include_role:
         name: 2_os_base_system
@@ -178,3 +216,57 @@
           tags: [os_reboot]
       when: os_base_reboot_enabled | default(false) | bool
       tags: [os_base, os_reboot]
+
+    - name: Revalidate Docker after an approved host reboot
+      ansible.builtin.include_role:
+        name: 6_runtime_platform
+        tasks_from: validation/main
+        apply:
+          become: true
+          tags: [runtime_reboot_validation]
+      when:
+        - os_base_reboot_enabled | default(false) | bool
+        - os_base_reboot_approved | default(false) | bool
+        - (runtime | default({})).get('docker', {}).get('enabled', false) | bool
+      tags: [os_reboot, runtime_reboot_validation]
+
+    - name: Revalidate the Dokploy Swarm after an approved host reboot
+      ansible.builtin.include_role:
+        name: 6_runtime_platform
+        tasks_from: swarm/main
+        apply:
+          become: true
+          tags: [runtime_swarm, runtime_reboot_validation]
+      when:
+        - os_base_reboot_enabled | default(false) | bool
+        - os_base_reboot_approved | default(false) | bool
+        - >-
+          (platform | default({})).get('swarm', {}).get('enabled', false) | bool
+          or (platform | default({})).get('dokploy', {}).get('enabled', false) | bool
+      tags: [os_reboot, runtime_swarm, runtime_reboot_validation]
+
+    - name: Revalidate every enabled Infrastructure Service after host reboot
+      ansible.builtin.include_role:
+        name: 7_infrastructure_services
+        tasks_from: validation/main
+        apply:
+          become: true
+          tags: [infrastructure_services_reboot_validation]
+      when:
+        - os_base_reboot_enabled | default(false) | bool
+        - os_base_reboot_approved | default(false) | bool
+        - infrastructure_services_any_enabled | default(false) | bool
+      tags: [os_reboot, infrastructure_services_reboot_validation]
+
+    - name: Revalidate Security exposure after rebooted workloads recover
+      ansible.builtin.include_role:
+        name: 4_security
+        tasks_from: validation/main
+        apply:
+          become: true
+          tags: [security_result, infrastructure_services_reboot_validation]
+      when:
+        - os_base_reboot_enabled | default(false) | bool
+        - os_base_reboot_approved | default(false) | bool
+        - security_resolved is defined
+      tags: [os_reboot, security_result, infrastructure_services_reboot_validation]

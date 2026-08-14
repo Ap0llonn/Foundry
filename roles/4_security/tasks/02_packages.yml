@@ -3,18 +3,18 @@
   ansible.builtin.set_fact:
     security_required_packages: >-
       {{
-        ['openssh-server', 'ufw']
+        ['openssh-server', 'ufw', 'iproute2']
         + (['fail2ban'] if security_resolved.fail2ban.enabled else [])
         + (['unattended-upgrades'] if security_resolved.updates.automatic_security_updates else [])
+        + (['apparmor', 'apparmor-utils'] if security_resolved.apparmor.enabled else [])
       }}
 
 - name: Install required security packages
   ansible.builtin.apt:
-    name: "{{ security_required_packages }}"
+    name: "{{ security_required_packages | unique | sort }}"
     state: present
-    update_cache: true
-    cache_valid_time: 3600
+    update_cache: false
 
-- name: Gather installed security package facts
+- name: Gather installed package facts
   ansible.builtin.package_facts:
     manager: auto

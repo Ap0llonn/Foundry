@@ -1,0 +1,9 @@
+---
+- name: Resolve global exposure into Foundry-owned rules
+  ansible.builtin.import_tasks: resolve.yml
+
+- name: Load previous Foundry firewall ownership state
+  ansible.builtin.import_tasks: ownership.yml
+
+- name: Converge only Foundry-owned firewall state
+  ansible.builtin.import_tasks: converge.yml

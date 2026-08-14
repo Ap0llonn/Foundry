@@ -1,0 +1,23 @@
+---
+- name: Ensure Foundry networking state directory exists
+  ansible.builtin.file:
+    path: "{{ networking_state_directory }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Persist authoritative environment network mapping
+  ansible.builtin.copy:
+    dest: "{{ networking_state_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: >-
+      {{
+        {
+          'project': project.name,
+          'driver': networking_network_driver,
+          'resolved_networks': foundry_resolved_networks
+        } | to_nice_yaml(indent=2)
+      }}

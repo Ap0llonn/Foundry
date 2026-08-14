@@ -1,0 +1,35 @@
+---
+- name: Inspect persistent journal directory
+  ansible.builtin.stat:
+    path: /var/log/journal
+  register: security_journal_directory
+  when: security_resolved.logging.persistent_journal
+
+- name: Read effective journald configuration
+  ansible.builtin.command:
+    argv: [systemd-analyze, cat-config, systemd/journald.conf]
+  register: security_journald_effective_configuration
+  changed_when: false
+  check_mode: false
+  when: security_resolved.logging.persistent_journal
+
+- name: Prove persistent journal is readable
+  ansible.builtin.command:
+    argv: [journalctl, --disk-usage]
+  changed_when: false
+  check_mode: false
+  when: security_resolved.logging.persistent_journal
+
+- name: Validate persistent journal policy and permissions
+  ansible.builtin.assert:
+    that:
+      - security_journal_directory.stat.exists
+      - security_journal_directory.stat.isdir
+      - security_journal_directory.stat.pw_name == 'root'
+      - security_journal_directory.stat.gr_name == 'systemd-journal'
+      - security_journal_directory.stat.mode == '2755'
+      - security_journald_effective_configuration.stdout is search('(?m)^Storage=persistent$')
+      - "'systemd-journald.service' in ansible_facts.services"
+      - ansible_facts.services['systemd-journald.service'].state == 'running'
+    fail_msg: Persistent system journal is not healthy or does not match policy.
+  when: security_resolved.logging.persistent_journal

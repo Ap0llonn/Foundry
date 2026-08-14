@@ -1,0 +1,49 @@
+---
+- name: Ensure SSH service and drop-in directory exist
+  ansible.builtin.import_tasks: prepare.yml
+
+- name: Inventory and preserve SSH host-key identity
+  ansible.builtin.import_tasks: host_keys.yml
+  when: security_resolved.ssh.enabled
+
+- name: Install temporary dual-listener SSH policy
+  ansible.builtin.include_tasks: apply_policy.yml
+  vars:
+    security_ssh_policy_phase: transition
+  when: security_resolved.ssh.enabled
+
+- name: Establish and verify a new desired-port connection
+  ansible.builtin.include_tasks: migrate_connection.yml
+  when:
+    - security_resolved.ssh.enabled
+    - not ansible_check_mode
+    - security_active_management_port | int != security_resolved.ssh.port | int
+
+- name: Resolve final desired-port-only policy
+  ansible.builtin.set_fact:
+    security_ssh_ports:
+      - "{{ security_resolved.ssh.port | int }}"
+  when: security_resolved.ssh.enabled
+
+- name: Install final single-listener SSH policy
+  ansible.builtin.include_tasks: apply_policy.yml
+  vars:
+    security_ssh_policy_phase: final
+  when: security_resolved.ssh.enabled
+
+- name: Retire old management endpoint only after successful migration
+  ansible.builtin.import_tasks: finalize_transition.yml
+  when: security_resolved.ssh.enabled
+
+- name: Remove Foundry SSH policy when explicitly disabled
+  ansible.builtin.file:
+    path: "{{ security_sshd_dropin }}"
+    state: absent
+  when: not security_resolved.ssh.enabled
+
+- name: Stop SSH only for explicitly permitted local provisioning
+  ansible.builtin.systemd_service:
+    name: "{{ security_ssh_service }}"
+    enabled: false
+    state: stopped
+  when: not security_resolved.ssh.enabled

@@ -1,0 +1,31 @@
+---
+- name: Validate pre-Security exposure planning is stable
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  tasks:
+    - name: Load domainless fixture
+      ansible.builtin.include_vars:
+        file: ../fixtures/infrastructure/valid-domainless.yml
+
+    - name: Start without predeclared platform exposure
+      ansible.builtin.set_fact:
+        network:
+          exposure: []
+
+    - name: Plan platform exposure first pass
+      ansible.builtin.include_role:
+        name: 7_infrastructure_services
+        tasks_from: plan/main
+
+    - name: Plan platform exposure second pass
+      ansible.builtin.include_role:
+        name: 7_infrastructure_services
+        tasks_from: plan/main
+
+    - name: Assert exposure planning is exact and duplicate-free
+      ansible.builtin.assert:
+        that:
+          - network.exposure | map(attribute='name') | list == ['traefik-http', 'dokploy-management']
+          - network.exposure | map(attribute='name') | unique | length == network.exposure | length
+          - network.exposure | selectattr('name', 'equalto', 'dokploy-management') | map(attribute='scope') | first == 'management'

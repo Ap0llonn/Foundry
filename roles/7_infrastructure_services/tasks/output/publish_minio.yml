@@ -1,0 +1,26 @@
+---
+- name: Add MinIO endpoint and backup metadata
+  ansible.builtin.set_fact:
+    foundry_resolved_services: >-
+      {{ foundry_resolved_services | combine({
+        infrastructure_services_output_minio.environment: {
+          'object_storage': {
+            'provider': 'minio',
+            'endpoint': 'http://minio:' + (infrastructure_services_minio_api_port | string),
+            'admin_endpoint': 'http://minio:' + (infrastructure_services_minio_console_port | string),
+            'container_name': infrastructure_services_output_minio.container_name,
+            'network_name': infrastructure_services_output_minio.network_name
+          }
+        }
+      }, recursive=true) }}
+    infrastructure_services_backup_targets: >-
+      {{ infrastructure_services_backup_targets + [{
+        'project': project.name,
+        'environment': infrastructure_services_output_minio.environment,
+        'service': 'object_storage',
+        'provider': 'minio',
+        'container_name': infrastructure_services_output_minio.container_name,
+        'data_path': infrastructure_services_output_minio.data_path,
+        'mount_path': '/data'
+      }] }}
+

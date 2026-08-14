@@ -1,0 +1,89 @@
+---
+- name: Ensure Foundry security state directory exists
+  ansible.builtin.file:
+    path: "{{ security_firewall_state_directory }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Find existing public SSH host keys
+  ansible.builtin.find:
+    paths: /etc/ssh
+    patterns: ssh_host_*_key.pub
+    file_type: file
+    recurse: false
+  register: security_ssh_host_key_files
+
+- name: Require at least one existing SSH host key
+  ansible.builtin.assert:
+    that:
+      - security_ssh_host_key_files.matched | int > 0
+    fail_msg: SSH host keys are missing; ordinary convergence will not regenerate them.
+
+- name: Read public SSH host-key fingerprints
+  ansible.builtin.command:
+    argv: [ssh-keygen, -lf, "{{ item.path }}", -E, sha256]
+  loop: "{{ security_ssh_host_key_files.files | sort(attribute='path') }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: security_ssh_host_key_fingerprint_commands
+  changed_when: false
+  check_mode: false
+
+- name: Initialize current SSH host-key fingerprint inventory
+  ansible.builtin.set_fact:
+    security_ssh_host_key_fingerprints: []
+
+- name: Collect current SSH host-key fingerprints
+  ansible.builtin.set_fact:
+    security_ssh_host_key_fingerprints: >-
+      {{ (security_ssh_host_key_fingerprints + [item.stdout.split()[1]]) | sort }}
+  loop: "{{ security_ssh_host_key_fingerprint_commands.results }}"
+  loop_control:
+    label: "{{ item.item.path }}"
+
+- name: Inspect previous SSH host-key inventory
+  ansible.builtin.stat:
+    path: "{{ security_ssh_host_key_state_file }}"
+  register: security_ssh_host_key_state_check
+
+- name: Read previous SSH host-key inventory
+  ansible.builtin.slurp:
+    path: "{{ security_ssh_host_key_state_file }}"
+  register: security_ssh_host_key_state_raw
+  when: security_ssh_host_key_state_check.stat.exists
+
+- name: Resolve previous SSH host-key fingerprints
+  ansible.builtin.set_fact:
+    security_ssh_previous_host_key_fingerprints: >-
+      {{
+        (security_ssh_host_key_state_raw.content | b64decode | from_yaml).fingerprints
+        if security_ssh_host_key_state_check.stat.exists else []
+      }}
+
+- name: Detect unexpected SSH host-key replacement
+  ansible.builtin.assert:
+    that:
+      - >-
+        not security_ssh_host_key_state_check.stat.exists
+        or security_resolved.ssh.accept_host_key_change
+        or security_ssh_host_key_fingerprints == security_ssh_previous_host_key_fingerprints
+    fail_msg: >-
+      SSH host-key fingerprints changed unexpectedly. Investigate the host and
+      set accept_host_key_change only for an approved rotation or reprovisioning.
+
+- name: Persist approved SSH host-key fingerprints
+  ansible.builtin.copy:
+    dest: "{{ security_ssh_host_key_state_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+    content: "{{ {'fingerprints': security_ssh_host_key_fingerprints} | to_nice_yaml(indent=2) }}"
+  when: >-
+    not security_ssh_host_key_state_check.stat.exists
+    or security_resolved.ssh.accept_host_key_change
+
+- name: Report public SSH host-key fingerprints
+  ansible.builtin.debug:
+    msg: "SSH host-key fingerprints: {{ security_ssh_host_key_fingerprints | join(', ') }}"
