@@ -13,3 +13,6 @@
 
     - role: 3_identity_access
       tags: [identity_access]
+
+    - role: 4_security
+      tags: [security]

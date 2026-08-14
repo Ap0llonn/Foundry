@@ -12,6 +12,19 @@
   loop_control:
     label: "{{ item.name }}"
 
+- name: Set Linux account passwords required by sudo policy
+  ansible.builtin.user:
+    name: "{{ item.name }}"
+    password: "{{ identity_access_password_hashes[item.name] }}"
+    update_password: always
+  when:
+    - item.state == 'present'
+    - item.sudo_password_required
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+
 - name: Remove explicitly absent human users while preserving their data
   ansible.builtin.user:
     name: "{{ item.name }}"

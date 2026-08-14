@@ -1,0 +1,83 @@
+---
+security_defaults:
+  ssh:
+    enabled: true
+    port: 22
+    permit_root_login: false
+    password_authentication: false
+    public_key_authentication: true
+    max_auth_tries: 4
+    login_grace_time: 60
+
+  firewall:
+    enabled: true
+    default_incoming: deny
+    default_outgoing: allow
+    automatic_rules: true
+    additional_rules: []
+
+  fail2ban:
+    enabled: true
+    ssh:
+      enabled: true
+      max_retries: 5
+      ban_time: 3600
+
+  updates:
+    automatic_security_updates: true
+    automatic_reboot: false
+
+# Future slices may provide required connectivity here. Internal services must
+# never be added merely because their packages are installed.
+security_firewall_derived_rules: []
+
+security_admin_group: sudo
+security_ssh_service: ssh
+security_sshd_binary: /usr/sbin/sshd
+security_sshd_dropin: /etc/ssh/sshd_config.d/00-foundry.conf
+security_fail2ban_service: fail2ban
+security_fail2ban_jail: /etc/fail2ban/jail.d/00-foundry-sshd.local
+security_firewall_state_directory: /var/lib/foundry
+security_firewall_state_file: /var/lib/foundry/security-firewall-rules.yml
+security_unattended_reboot_time: "03:00"
+
+security_allowed_root_keys:
+  - ssh
+  - firewall
+  - fail2ban
+  - updates
+
+security_allowed_ssh_keys:
+  - enabled
+  - port
+  - permit_root_login
+  - password_authentication
+  - public_key_authentication
+  - max_auth_tries
+  - login_grace_time
+
+security_allowed_firewall_keys:
+  - enabled
+  - default_incoming
+  - default_outgoing
+  - automatic_rules
+  - additional_rules
+
+security_allowed_firewall_rule_keys:
+  - name
+  - port
+  - protocol
+  - source
+
+security_allowed_fail2ban_keys:
+  - enabled
+  - ssh
+
+security_allowed_fail2ban_ssh_keys:
+  - enabled
+  - max_retries
+  - ban_time
+
+security_allowed_update_keys:
+  - automatic_security_updates
+  - automatic_reboot

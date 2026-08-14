@@ -1,18 +1,80 @@
 ---
-- name: Reconcile Foundry and administrative group membership
+- name: Ensure sudo tooling is installed
+  ansible.builtin.package:
+    name: "{{ identity_access_sudo_package }}"
+    state: present
+
+- name: Ensure managed sudoers directory exists
+  ansible.builtin.file:
+    path: "{{ identity_access_sudoers_directory }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Find Foundry-managed sudoers policies
+  ansible.builtin.find:
+    paths: "{{ identity_access_sudoers_directory }}"
+    patterns: "{{ identity_access_sudoers_prefix }}*"
+    file_type: any
+    recurse: false
+  register: identity_access_managed_sudoers_files
+
+- name: Remove obsolete or unsafe Foundry-managed sudoers paths
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  when: >-
+    not (item.isreg | default(false))
+    or (
+      item.path | basename
+      not in (
+        identity_access_users
+        | selectattr('state', 'equalto', 'present')
+        | selectattr('admin', 'equalto', true)
+        | map(attribute='sudoers_filename')
+        | list
+      )
+    )
+  loop: "{{ identity_access_managed_sudoers_files.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Install explicit per-user administrative sudo policies
+  ansible.builtin.template:
+    src: foundry-user-sudoers.j2
+    dest: "{{ identity_access_sudoers_directory }}/{{ item.sudoers_filename }}"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: "{{ identity_access_visudo_binary }} -cf %s"
+  when:
+    - item.state == 'present'
+    - item.admin
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }} -> {{ item.sudo_mode }}"
+
+- name: Validate aggregate sudo configuration after reconciliation
+  ansible.builtin.command:
+    argv:
+      - "{{ identity_access_visudo_binary }}"
+      - -cf
+      - /etc/sudoers
+  changed_when: false
+
+- name: Reconcile Foundry groups without implicit administrative groups
   ansible.builtin.user:
     name: "{{ item.name }}"
     groups: >-
       {{
-        (
-          (item.groups | default([]) | map('extract', identity_access_group_map) | list)
-          + ([identity_access_admin_group] if item.admin | default(false) | bool else [])
-        )
+        item.groups
+        | map('extract', identity_access_group_map)
         | unique
         | list
       }}
     append: false
-  when: (item.state | default('present')) == 'present'
+  when: item.state == 'present'
   loop: "{{ identity_access_users }}"
   loop_control:
     label: "{{ item.name }}"

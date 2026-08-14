@@ -3,6 +3,11 @@
 vm_ip: 149.56.96.110
 
 identity:
+  # Every admin using sudo.mode: inherit resolves to this explicit policy.
+  # SSH authentication remains controlled independently under security.ssh.
+  default_admin_sudo:
+    mode: passwordless
+
   users:
     - name: sam
       state: present
@@ -11,3 +16,60 @@ identity:
         - developer
       ssh_keys:
         - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK7L42eQxouanToSk3tTqGdf82hRiMNmiulVqUHo4QG8 samuelcourchesne@Mac"
+      sudo:
+        mode: inherit
+
+    # Password-authenticated sudo example. Keep the hash in an encrypted Vault
+    # vars file or retrieve it from an external secret source.
+    # - name: bob
+    #   state: present
+    #   admin: true
+    #   groups: []
+    #   ssh_keys:
+    #     - "ssh-ed25519 AAAA... bob@example"
+    #   sudo:
+    #     mode: password
+    #     password_hash: "{{ vault_bob_password_hash }}"
+
+    # Constrained admins must select authentication and explicit absolute commands.
+    # - name: operator
+    #   state: present
+    #   admin: true
+    #   groups:
+    #     - operator
+    #   ssh_keys:
+    #     - "ssh-ed25519 AAAA... operator@example"
+    #   sudo:
+    #     mode: constrained
+    #     authentication: passwordless
+    #     commands:
+    #       - /usr/bin/systemctl restart foundry.service
+
+security:
+  ssh:
+    enabled: true
+    port: 22
+    permit_root_login: false
+    password_authentication: false
+    public_key_authentication: true
+    max_auth_tries: 4
+    login_grace_time: 60
+
+  firewall:
+    enabled: true
+    default_incoming: deny
+    default_outgoing: allow
+    automatic_rules: true
+    # Example: {name: custom-api, port: 8080, protocol: tcp, source: 10.0.0.0/24}
+    additional_rules: []
+
+  fail2ban:
+    enabled: true
+    ssh:
+      enabled: true
+      max_retries: 5
+      ban_time: 3600
+
+  updates:
+    automatic_security_updates: true
+    automatic_reboot: false

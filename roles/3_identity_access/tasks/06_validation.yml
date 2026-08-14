@@ -117,7 +117,7 @@
     label: "{{ item.name }}"
   register: identity_access_group_membership_checks
 
-- name: Validate exact Linux group memberships
+- name: Validate exact Linux group memberships without implicit sudo groups
   ansible.builtin.assert:
     that:
       - >-
@@ -125,12 +125,239 @@
         ==
         (
           [item.item.name]
-          + (item.item.groups | default([]) | map('extract', identity_access_group_map) | list)
-          + ([identity_access_admin_group] if item.item.admin | default(false) | bool else [])
+          + (item.item.groups | map('extract', identity_access_group_map) | list)
         ) | unique | sort
     fail_msg: "Linux group membership is incorrect for {{ item.item.name }}."
   when: not item.skipped | default(false)
   loop: "{{ identity_access_group_membership_checks.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Inspect per-user sudoers policy files
+  ansible.builtin.stat:
+    path: "{{ identity_access_sudoers_directory }}/{{ item.sudoers_filename }}"
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: identity_access_sudoers_file_checks
+
+- name: Validate per-user sudoers policy presence and metadata
+  ansible.builtin.assert:
+    that:
+      - >-
+        (item.item.state == 'present' and item.item.admin and item.stat.exists)
+        or ((item.item.state != 'present' or not item.item.admin) and not item.stat.exists)
+      - >-
+        not item.stat.exists
+        or (
+          item.stat.isreg
+          and item.stat.pw_name == 'root'
+          and item.stat.gr_name == 'root'
+          and item.stat.mode == '0440'
+        )
+    fail_msg: "Invalid managed sudoers file state for {{ item.item.name }}."
+  loop: "{{ identity_access_sudoers_file_checks.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Read installed administrative sudo policies
+  ansible.builtin.slurp:
+    path: "{{ identity_access_sudoers_directory }}/{{ item.sudoers_filename }}"
+  when:
+    - item.state == 'present'
+    - item.admin
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: identity_access_sudoers_content_checks
+
+- name: Validate exact administrative sudo policy content
+  ansible.builtin.assert:
+    that:
+      - >-
+        (item.content | b64decode).splitlines()
+        == [
+          '# Managed by Foundry. Local changes will be overwritten.',
+          item.item.name
+          + ' ALL=(ALL:ALL) '
+          + (
+            'NOPASSWD:'
+            if item.item.sudo_mode == 'passwordless'
+               or item.item.sudo_authentication == 'passwordless'
+            else 'PASSWD:'
+          )
+          + ' '
+          + (
+            item.item.sudo_commands | join(', ')
+            if item.item.sudo_mode == 'constrained'
+            else 'ALL'
+          )
+        ]
+    fail_msg: "Installed sudo policy does not match configuration for {{ item.item.name }}."
+  when: not item.skipped | default(false)
+  loop: "{{ identity_access_sudoers_content_checks.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Validate complete sudo configuration syntax
+  ansible.builtin.command:
+    argv:
+      - "{{ identity_access_visudo_binary }}"
+      - -cf
+      - /etc/sudoers
+  changed_when: false
+
+- name: Inspect effective administrative sudo authorization
+  ansible.builtin.command:
+    argv:
+      - "{{ identity_access_sudo_binary }}"
+      - -l
+      - -U
+      - "{{ item.name }}"
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  environment:
+    LC_ALL: C
+  when:
+    - item.state == 'present'
+    - item.admin
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: identity_access_admin_sudo_authorization_checks
+
+- name: Validate effective administrative sudo authorization
+  ansible.builtin.assert:
+    that:
+      - item.rc == 0
+      - "'is not allowed to run sudo' not in item.stdout"
+    fail_msg: >-
+      Effective sudo authorization is unusable for admin {{ item.item.name }}.
+  when: not item.skipped | default(false)
+  loop: "{{ identity_access_admin_sudo_authorization_checks.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Verify non-administrators cannot list sudo privileges
+  ansible.builtin.command:
+    argv:
+      - "{{ identity_access_sudo_binary }}"
+      - -n
+      - -u
+      - "{{ item.name }}"
+      - --
+      - "{{ identity_access_sudo_binary }}"
+      - -n
+      - -l
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  environment:
+    LC_ALL: C
+  when:
+    - item.state == 'present'
+    - not item.admin
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: identity_access_nonadmin_sudo_checks
+
+- name: Validate non-administrators have no effective sudo privileges
+  ansible.builtin.assert:
+    that:
+      - item.rc != 0
+    fail_msg: >-
+      Non-administrative user {{ item.item.name }} still has effective sudo
+      privileges through an unmanaged rule or group.
+  when: not item.skipped | default(false)
+  loop: "{{ identity_access_nonadmin_sudo_checks.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Verify full passwordless administrators can elevate non-interactively
+  ansible.builtin.command:
+    argv:
+      - "{{ identity_access_sudo_binary }}"
+      - -n
+      - -u
+      - "{{ item.name }}"
+      - --
+      - "{{ identity_access_sudo_binary }}"
+      - -n
+      - /usr/bin/true
+  changed_when: false
+  check_mode: false
+  when:
+    - item.state == 'present'
+    - item.admin
+    - item.sudo_mode == 'passwordless'
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Inspect Linux password state for password-authenticated sudo
+  ansible.builtin.command:
+    argv:
+      - "{{ identity_access_passwd_binary }}"
+      - -S
+      - "{{ item.name }}"
+  changed_when: false
+  check_mode: false
+  when:
+    - item.state == 'present'
+    - item.sudo_password_required
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: identity_access_password_state_checks
+
+- name: Validate Linux password state for password-authenticated sudo
+  ansible.builtin.assert:
+    that:
+      - item.rc == 0
+      - item.stdout.split() | length >= 2
+      - item.stdout.split()[1] == 'P'
+    fail_msg: >-
+      Linux account {{ item.item.name }} has no usable password for its
+      password-authenticated sudo policy.
+  when: not item.skipped | default(false)
+  loop: "{{ identity_access_password_state_checks.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Confirm password-authenticated full sudo is not accidentally passwordless
+  ansible.builtin.command:
+    argv:
+      - "{{ identity_access_sudo_binary }}"
+      - -n
+      - -u
+      - "{{ item.name }}"
+      - --
+      - "{{ identity_access_sudo_binary }}"
+      - -n
+      - /usr/bin/true
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when:
+    - item.state == 'present'
+    - item.admin
+    - item.sudo_mode == 'password'
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: identity_access_password_sudo_noninteractive_checks
+
+- name: Validate full password sudo requires authentication
+  ansible.builtin.assert:
+    that:
+      - item.rc != 0
+    fail_msg: >-
+      Password-authenticated sudo unexpectedly succeeded without a password for
+      {{ item.item.name }}. Check for conflicting NOPASSWD rules.
+  when: not item.skipped | default(false)
+  loop: "{{ identity_access_password_sudo_noninteractive_checks.results }}"
   loop_control:
     label: "{{ item.item.name }}"
 
@@ -140,3 +367,4 @@
       - "Identity & access validation: OK"
       - "Managed users: {{ identity_access_users | length }}"
       - "Foundry authorization groups: {{ identity_access_group_map.keys() | list | join(', ') }}"
+      - "Administrative sudo policies: explicit and validated"

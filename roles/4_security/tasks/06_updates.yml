@@ -1,0 +1,45 @@
+---
+- name: Configure periodic automatic security updates
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "{{ security_resolved.updates.automatic_security_updates | ternary('1', '0') }}";
+      APT::Periodic::Unattended-Upgrade "{{ security_resolved.updates.automatic_security_updates | ternary('1', '0') }}";
+      APT::Periodic::AutocleanInterval "7";
+
+- name: Configure unattended security update reboot policy
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/52foundry-unattended-upgrades
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      // Managed by Foundry. Automatic reboot occurs only when explicitly enabled.
+      Unattended-Upgrade::Automatic-Reboot "{{ security_resolved.updates.automatic_reboot | ternary('true', 'false') }}";
+      Unattended-Upgrade::Automatic-Reboot-Time "{{ security_unattended_reboot_time }}";
+  when: security_resolved.updates.automatic_security_updates
+
+- name: Remove Foundry unattended-upgrades policy when disabled
+  ansible.builtin.file:
+    path: /etc/apt/apt.conf.d/52foundry-unattended-upgrades
+    state: absent
+  when: not security_resolved.updates.automatic_security_updates
+
+- name: Enable unattended-upgrades service
+  ansible.builtin.systemd_service:
+    name: unattended-upgrades
+    enabled: true
+    state: started
+  when: security_resolved.updates.automatic_security_updates
+
+- name: Disable unattended-upgrades service when policy is disabled
+  ansible.builtin.systemd_service:
+    name: unattended-upgrades
+    enabled: false
+    state: stopped
+  when:
+    - not security_resolved.updates.automatic_security_updates
+    - "'unattended-upgrades' in ansible_facts.packages"

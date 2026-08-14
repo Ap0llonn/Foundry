@@ -1,0 +1,2 @@
+# Managed by Foundry. Local changes will be overwritten.
+{{ item.name }} ALL=(ALL:ALL) {{ 'NOPASSWD:' if item.sudo_mode == 'passwordless' or item.sudo_authentication == 'passwordless' else 'PASSWD:' }} {{ item.sudo_commands | join(', ') if item.sudo_mode == 'constrained' else 'ALL' }}

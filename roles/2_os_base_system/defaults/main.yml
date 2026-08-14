@@ -18,7 +18,6 @@ os_base_supported_architectures:
 os_base_apt_cache_valid_time: 3600
 os_base_upgrade_packages: true
 os_base_apt_upgrade_mode: dist
-os_base_enable_security_updates: true
 os_base_autoremove_packages: true
 os_base_autoclean_packages: true
 

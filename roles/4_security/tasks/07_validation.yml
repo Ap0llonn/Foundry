@@ -1,0 +1,159 @@
+---
+- name: Validate SSH daemon syntax
+  ansible.builtin.command:
+    argv:
+      - "{{ security_sshd_binary }}"
+      - -t
+  changed_when: false
+  when: security_resolved.ssh.enabled
+
+- name: Read effective SSH daemon configuration
+  ansible.builtin.command:
+    argv:
+      - "{{ security_sshd_binary }}"
+      - -T
+  register: security_sshd_effective_configuration
+  changed_when: false
+  when: security_resolved.ssh.enabled
+
+- name: Gather security service facts
+  ansible.builtin.service_facts:
+
+- name: Validate SSH service and effective policy
+  ansible.builtin.assert:
+    that:
+      - (security_ssh_service + '.service') in ansible_facts.services
+      - ansible_facts.services[security_ssh_service + '.service'].state == 'running'
+      - >-
+        security_ssh_ports
+        | difference(
+            security_sshd_effective_configuration.stdout_lines
+            | select('match', '^port [0-9]+$')
+            | map('regex_replace', '^port ', '')
+            | map('int')
+            | list
+          )
+        | length == 0
+      - >-
+        ('permitrootlogin ' + (security_resolved.ssh.permit_root_login | ternary('yes', 'no')))
+        in security_sshd_effective_configuration.stdout_lines
+      - >-
+        ('passwordauthentication ' + (security_resolved.ssh.password_authentication | ternary('yes', 'no')))
+        in security_sshd_effective_configuration.stdout_lines
+      - >-
+        ('pubkeyauthentication ' + (security_resolved.ssh.public_key_authentication | ternary('yes', 'no')))
+        in security_sshd_effective_configuration.stdout_lines
+      - ('maxauthtries ' + (security_resolved.ssh.max_auth_tries | string)) in security_sshd_effective_configuration.stdout_lines
+      - ('logingracetime ' + (security_resolved.ssh.login_grace_time | string)) in security_sshd_effective_configuration.stdout_lines
+    fail_msg: "Effective SSH daemon policy does not match the resolved security policy."
+  when: security_resolved.ssh.enabled
+
+- name: Read UFW status
+  ansible.builtin.command:
+    argv:
+      - ufw
+      - status
+      - verbose
+  environment:
+    LC_ALL: C
+  register: security_ufw_status
+  changed_when: false
+
+- name: Validate enabled firewall policy
+  ansible.builtin.assert:
+    that:
+      - security_ufw_status.stdout is search('(?m)^Status:\s+active$')
+      - >-
+        security_ufw_status.stdout is search(
+          '(?m)^Default:\s+' + security_resolved.firewall.default_incoming
+          + ' \(incoming\), ' + security_resolved.firewall.default_outgoing + ' \(outgoing\)'
+        )
+    fail_msg: "UFW state or default policies do not match the resolved policy."
+  when: security_resolved.firewall.enabled
+
+- name: Validate resolved firewall rules are active
+  ansible.builtin.assert:
+    that:
+      - security_ufw_status.stdout is search('(?m)^' + (item.port | string) + '/' + item.protocol + '\s+ALLOW IN')
+    fail_msg: "Required firewall rule is missing: {{ item.port }}/{{ item.protocol }}."
+  when: security_resolved.firewall.enabled
+  loop: "{{ security_firewall_rules }}"
+  loop_control:
+    label: "{{ item.source }} -> {{ item.port }}/{{ item.protocol }}"
+
+- name: Validate disabled firewall policy
+  ansible.builtin.assert:
+    that:
+      - security_ufw_status.stdout is search('(?m)^Status:\s+inactive$')
+    fail_msg: "UFW should be inactive."
+  when: not security_resolved.firewall.enabled
+
+- name: Validate Fail2ban service
+  ansible.builtin.assert:
+    that:
+      - (security_fail2ban_service + '.service') in ansible_facts.services
+      - ansible_facts.services[security_fail2ban_service + '.service'].state == 'running'
+    fail_msg: "Fail2ban is not running."
+  when: security_resolved.fail2ban.enabled
+
+- name: Validate Fail2ban SSH jail
+  ansible.builtin.command:
+    argv:
+      - fail2ban-client
+      - status
+      - sshd
+  changed_when: false
+  when:
+    - security_resolved.fail2ban.enabled
+    - security_resolved.fail2ban.ssh.enabled
+
+- name: Read automatic update configuration
+  ansible.builtin.slurp:
+    path: /etc/apt/apt.conf.d/20auto-upgrades
+  register: security_automatic_update_configuration
+
+- name: Validate automatic security update policy
+  ansible.builtin.assert:
+    that:
+      - >-
+        security_automatic_update_configuration.content | b64decode
+        is search('APT::Periodic::Unattended-Upgrade "'
+                  + (security_resolved.updates.automatic_security_updates | ternary('1', '0')) + '";')
+      - >-
+        not security_resolved.updates.automatic_security_updates
+        or (security_automatic_update_configuration.content | b64decode
+            is search('APT::Periodic::Update-Package-Lists "1";'))
+    fail_msg: "Automatic security update policy does not match desired state."
+
+- name: Read unattended-upgrades reboot policy
+  ansible.builtin.slurp:
+    path: /etc/apt/apt.conf.d/52foundry-unattended-upgrades
+  register: security_unattended_reboot_configuration
+  when: security_resolved.updates.automatic_security_updates
+
+- name: Validate unattended-upgrades reboot policy
+  ansible.builtin.assert:
+    that:
+      - >-
+        security_unattended_reboot_configuration.content | b64decode
+        is search('Unattended-Upgrade::Automatic-Reboot "'
+                  + (security_resolved.updates.automatic_reboot | ternary('true', 'false')) + '";')
+    fail_msg: "Automatic reboot policy does not match desired state."
+  when: security_resolved.updates.automatic_security_updates
+
+- name: Report safe SSH port transition
+  ansible.builtin.debug:
+    msg: >-
+      SSH now listens on desired port {{ security_resolved.ssh.port }} and active
+      management port {{ security_active_management_port }}. Update ansible_port
+      in inventory, then rerun Foundry to remove the transition port.
+  when: security_active_management_port | int != security_resolved.ssh.port | int
+
+- name: Report security validation result
+  ansible.builtin.debug:
+    msg:
+      - "Host security validation: OK"
+      - "SSH ports: {{ security_ssh_ports | join(', ') }}"
+      - "Firewall enabled: {{ security_resolved.firewall.enabled }}"
+      - "Fail2ban enabled: {{ security_resolved.fail2ban.enabled }}"
+      - "Automatic security updates: {{ security_resolved.updates.automatic_security_updates }}"

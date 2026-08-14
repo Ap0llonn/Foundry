@@ -1,0 +1,22 @@
+---
+- name: Validate SSH daemon before reload
+  become: true
+  ansible.builtin.command:
+    argv:
+      - "{{ security_sshd_binary }}"
+      - -t
+  changed_when: false
+  listen: Validate and reload SSH
+
+- name: Reload SSH daemon
+  become: true
+  ansible.builtin.systemd_service:
+    name: "{{ security_ssh_service }}"
+    state: reloaded
+  listen: Validate and reload SSH
+
+- name: Restart Fail2ban
+  become: true
+  ansible.builtin.systemd_service:
+    name: "{{ security_fail2ban_service }}"
+    state: restarted

@@ -3,11 +3,66 @@
   ansible.builtin.assert:
     that:
       - identity | default({}) is mapping
-      - (identity | default({})).keys() | difference(['users']) | length == 0
-      - identity_access_users is sequence
-      - identity_access_users is not string
-      - identity_access_users is not mapping
-    fail_msg: "identity must contain only a users list."
+      - >-
+        (identity | default({})).keys()
+        | difference(['default_admin_sudo', 'users'])
+        | length == 0
+      - identity_access_users_config is sequence
+      - identity_access_users_config is not string
+      - identity_access_users_config is not mapping
+      - identity_access_default_admin_sudo is mapping
+    fail_msg: >-
+      identity may contain only default_admin_sudo and users, and both must
+      have the documented types.
+  no_log: true
+
+- name: Validate default administrative sudo policy properties
+  ansible.builtin.assert:
+    that:
+      - >-
+        identity_access_default_admin_sudo.keys()
+        | difference(identity_access_allowed_default_sudo_properties)
+        | length == 0
+      - >-
+        identity_access_default_admin_sudo | length == 0
+        or (
+          identity_access_default_admin_sudo.mode is defined
+          and identity_access_default_admin_sudo.mode
+              in identity_access_allowed_default_sudo_modes
+        )
+      - >-
+        identity_access_default_admin_sudo.authentication is not defined
+        or identity_access_default_admin_sudo.authentication is string
+      - >-
+        identity_access_default_admin_sudo.commands is not defined
+        or (
+          identity_access_default_admin_sudo.commands is sequence
+          and identity_access_default_admin_sudo.commands is not string
+        )
+      - >-
+        identity_access_default_admin_sudo.mode | default('') == 'constrained'
+        or identity_access_default_admin_sudo.authentication is not defined
+      - >-
+        identity_access_default_admin_sudo.mode | default('') != 'constrained'
+        or identity_access_default_admin_sudo.authentication
+           in identity_access_allowed_constrained_authentication
+      - >-
+        identity_access_default_admin_sudo.mode | default('') == 'constrained'
+        or identity_access_default_admin_sudo.commands | default([]) | length == 0
+      - >-
+        identity_access_default_admin_sudo.mode | default('') != 'constrained'
+        or identity_access_default_admin_sudo.commands | default([]) | length > 0
+      - >-
+        identity_access_default_admin_sudo.commands | default([])
+        | select('string') | list | length
+        == identity_access_default_admin_sudo.commands | default([]) | length
+      - >-
+        identity_access_default_admin_sudo.commands | default([])
+        | select('match', identity_access_sudo_command_pattern) | list | length
+        == identity_access_default_admin_sudo.commands | default([]) | length
+    fail_msg: "identity.default_admin_sudo contains an invalid option or value."
+  no_log: >-
+    {{ identity_access_default_admin_sudo.password_hash is defined }}
 
 - name: Validate identity user entry shape
   ansible.builtin.assert:
@@ -15,9 +70,11 @@
       - item is mapping
       - item.name is defined
     fail_msg: "Every identity.users entry must be an object containing name."
-  loop: "{{ identity_access_users }}"
+  loop: "{{ identity_access_users_config }}"
   loop_control:
     label: "{{ item.name | default('invalid entry') }}"
+  no_log: >-
+    {{ (item.sudo | default({})).password_hash is defined }}
 
 - name: Validate identity user properties
   ansible.builtin.assert:
@@ -31,49 +88,116 @@
       - (item.groups | default([])) is not string
       - (item.ssh_keys | default([])) is sequence
       - (item.ssh_keys | default([])) is not string
+      - (item.sudo | default({})) is mapping
       - item.name not in identity_access_protected_accounts
     fail_msg: "Invalid identity configuration for user {{ item.name }}."
-  loop: "{{ identity_access_users }}"
+  loop: "{{ identity_access_users_config }}"
   loop_control:
     label: "{{ item.name }}"
+  no_log: >-
+    {{ (item.sudo | default({})).password_hash is defined }}
+
+- name: Validate per-user sudo policy properties
+  ansible.builtin.assert:
+    that:
+      - >-
+        (item.sudo | default({})).keys()
+        | difference(identity_access_allowed_sudo_properties)
+        | length == 0
+      - >-
+        (item.sudo | default({})).mode is not defined
+        or (item.sudo | default({})).mode in identity_access_allowed_sudo_modes
+      - >-
+        (item.sudo | default({})).authentication is not defined
+        or (item.sudo | default({})).authentication is string
+      - >-
+        (item.sudo | default({})).commands is not defined
+        or (
+          (item.sudo | default({})).commands is sequence
+          and (item.sudo | default({})).commands is not string
+        )
+      - >-
+        (item.sudo | default({})).password_hash is not defined
+        or (item.sudo | default({})).password_hash is string
+    fail_msg: "Invalid sudo policy shape for user {{ item.name }}."
+  loop: "{{ identity_access_users_config }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: >-
+    {{ (item.sudo | default({})).password_hash is defined }}
+
+- name: Reject sudo policy on non-administrative users
+  ansible.builtin.assert:
+    that:
+      - >-
+        item.sudo is not defined
+        or (
+          (item.sudo | default({})).keys() | difference(['mode']) | length == 0
+          and (item.sudo | default({})).get('mode', 'none') == 'none'
+        )
+    fail_msg: >-
+      Non-administrative user {{ item.name }} may only omit sudo or explicitly
+      set sudo.mode to none.
+  when: not (item.admin | default(false) | bool)
+  loop: "{{ identity_access_users_config }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: >-
+    {{ (item.sudo | default({})).password_hash is defined }}
 
 - name: Validate authorization group value types
   ansible.builtin.assert:
     that:
-      - (item.groups | default([]) | select('string') | list | length) == (item.groups | default([]) | length)
+      - >-
+        (item.groups | default([]) | select('string') | list | length)
+        == (item.groups | default([]) | length)
     fail_msg: "All groups for {{ item.name }} must be strings."
-  loop: "{{ identity_access_users }}"
+  loop: "{{ identity_access_users_config }}"
   loop_control:
     label: "{{ item.name }}"
+  no_log: >-
+    {{ (item.sudo | default({})).password_hash is defined }}
 
 - name: Validate SSH public-key value types
   ansible.builtin.assert:
     that:
-      - (item.ssh_keys | default([]) | select('string') | list | length) == (item.ssh_keys | default([]) | length)
+      - >-
+        (item.ssh_keys | default([]) | select('string') | list | length)
+        == (item.ssh_keys | default([]) | length)
     fail_msg: "All ssh_keys for {{ item.name }} must be public-key strings."
-  loop: "{{ identity_access_users }}"
+  loop: "{{ identity_access_users_config }}"
   loop_control:
     label: "{{ item.name }}"
+  no_log: >-
+    {{ (item.sudo | default({})).password_hash is defined }}
 
 - name: Reject duplicate usernames
   ansible.builtin.assert:
     that:
-      - identity_access_users | map(attribute='name') | list | unique | length == identity_access_users | length
+      - >-
+        identity_access_users_config | map(attribute='name') | list | unique | length
+        == identity_access_users_config | length
     fail_msg: "identity.users contains duplicate usernames."
+  no_log: true
 
 - name: Validate Foundry authorization groups
   ansible.builtin.assert:
     that:
       - item.groups | default([]) | intersect(identity_access_privileged_groups) | length == 0
-      - item.groups | default([]) | difference(identity_access_group_map.keys() | list) | length == 0
+      - >-
+        item.groups | default([])
+        | difference(identity_access_group_map.keys() | list)
+        | length == 0
       - item.groups | default([]) | unique | length == item.groups | default([]) | length
     fail_msg: >-
       User {{ item.name }} has duplicate, privileged, or unknown groups.
       Allowed Foundry groups: {{ identity_access_group_map.keys() | list | join(', ') }}.
-      Administrative access must use admin: true.
-  loop: "{{ identity_access_users }}"
+      Administrative access must use admin: true with an explicit sudo policy.
+  loop: "{{ identity_access_users_config }}"
   loop_control:
     label: "{{ item.name }}"
+  no_log: >-
+    {{ (item.sudo | default({})).password_hash is defined }}
 
 - name: Validate SSH public-key format and per-user uniqueness
   ansible.builtin.assert:
@@ -83,33 +207,206 @@
         | list | length == item.ssh_keys | default([]) | length
       - item.ssh_keys | default([]) | unique | length == item.ssh_keys | default([]) | length
     fail_msg: "Malformed or duplicate SSH public key for user {{ item.name }}."
-  loop: "{{ identity_access_users }}"
+  loop: "{{ identity_access_users_config }}"
   loop_control:
     label: "{{ item.name }}"
+  no_log: >-
+    {{ (item.sudo | default({})).password_hash is defined }}
 
 - name: Reject contradictory absent-user configuration
   ansible.builtin.assert:
     that:
-      - not (item.admin | default(false) | bool)
-      - item.groups | default([]) | length == 0
-      - item.ssh_keys | default([]) | length == 0
+      - item.keys() | difference(['name', 'state']) | length == 0
     fail_msg: >-
-      User {{ item.name }} is absent but still declares privileges or SSH keys.
+      User {{ item.name }} is absent but still declares account configuration.
       An absent entry may contain only name and state.
   when: (item.state | default('present')) == 'absent'
+  loop: "{{ identity_access_users_config }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: >-
+    {{ (item.sudo | default({})).password_hash is defined }}
+
+- name: Initialize normalized identity policy
+  ansible.builtin.set_fact:
+    identity_access_users_prevalidated: []
+    identity_access_password_hashes: {}
+  no_log: true
+
+- name: Resolve non-secret user sudo inputs
+  ansible.builtin.set_fact:
+    identity_access_users_prevalidated: >-
+      {{
+        identity_access_users_prevalidated
+        + [
+          {
+            'name': item.name,
+            'state': item.state | default('present'),
+            'admin': item.admin | default(false) | bool,
+            'groups': item.groups | default([]),
+            'ssh_keys': item.ssh_keys | default([]),
+            'sudo_requested_mode': (item.sudo | default({})).get('mode', 'inherit'),
+            'sudo_default_mode': identity_access_default_admin_sudo.get('mode', ''),
+            'sudo_authentication': (
+              (item.sudo | default({})).get(
+                'authentication',
+                identity_access_default_admin_sudo.get('authentication', '')
+              )
+              if (item.sudo | default({})).get('mode', 'inherit') == 'inherit'
+              else (item.sudo | default({})).get('authentication', '')
+            ),
+            'sudo_commands': (
+              (item.sudo | default({})).get(
+                'commands',
+                identity_access_default_admin_sudo.get('commands', [])
+              )
+              if (item.sudo | default({})).get('mode', 'inherit') == 'inherit'
+              else (item.sudo | default({})).get('commands', [])
+            ),
+            'sudo_has_password_hash': (
+              (item.sudo | default({})).get('password_hash', '') | length > 0
+            ),
+            'sudoers_filename': identity_access_sudoers_prefix + item.name
+          }
+        ]
+      }}
+    identity_access_password_hashes: >-
+      {{
+        identity_access_password_hashes
+        | combine(
+          {
+            item.name: (
+              (item.sudo | default({})).get('password_hash', '')
+            )
+          }
+        )
+      }}
+  loop: "{{ identity_access_users_config }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+
+- name: Initialize resolved identity policy
+  ansible.builtin.set_fact:
+    identity_access_users: []
+
+- name: Resolve effective per-user sudo policy
+  ansible.builtin.set_fact:
+    identity_access_users: >-
+      {{
+        identity_access_users
+        + [
+          item
+          | combine(
+            {
+              'sudo_mode': (
+                'none'
+                if not item.admin
+                else (
+                  item.sudo_default_mode
+                  if item.sudo_requested_mode == 'inherit'
+                  else item.sudo_requested_mode
+                )
+              ),
+              'sudo_password_required': (
+                item.admin
+                and (
+                  (
+                    item.sudo_default_mode
+                    if item.sudo_requested_mode == 'inherit'
+                    else item.sudo_requested_mode
+                  ) == 'password'
+                  or (
+                    (
+                      item.sudo_default_mode
+                      if item.sudo_requested_mode == 'inherit'
+                      else item.sudo_requested_mode
+                    ) == 'constrained'
+                    and item.sudo_authentication == 'password'
+                  )
+                )
+              )
+            },
+            recursive=false
+          )
+        ]
+      }}
+  loop: "{{ identity_access_users_prevalidated }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Validate resolved administrative sudo policies
+  ansible.builtin.assert:
+    that:
+      - >-
+        not item.admin
+        or item.sudo_mode in ['passwordless', 'password', 'constrained']
+      - >-
+        item.sudo_mode == 'constrained'
+        or item.sudo_authentication | length == 0
+      - >-
+        item.sudo_mode != 'constrained'
+        or item.sudo_authentication in identity_access_allowed_constrained_authentication
+      - >-
+        item.sudo_mode == 'constrained'
+        or item.sudo_commands | length == 0
+      - >-
+        item.sudo_mode != 'constrained'
+        or item.sudo_commands | length > 0
+      - item.sudo_has_password_hash == item.sudo_password_required
+      - item.admin or item.sudo_mode == 'none'
+    fail_msg: >-
+      User {{ item.name }} does not resolve to a usable explicit sudo policy.
+      Admins must resolve to passwordless, password, or constrained. Password
+      policies require a modern Linux password hash; other policies must not
+      declare one. Constrained policies require authentication and commands.
+  when: item.state == 'present'
   loop: "{{ identity_access_users }}"
   loop_control:
     label: "{{ item.name }}"
 
+- name: Validate constrained sudo command value types and syntax
+  ansible.builtin.assert:
+    that:
+      - item.1 is string
+      - item.1 is match(identity_access_sudo_command_pattern)
+    fail_msg: >-
+      Constrained sudo command for {{ item.0.name }} must be an absolute command
+      specification without commas, backslashes, or line breaks.
+  loop: "{{ identity_access_users | subelements('sudo_commands') }}"
+  loop_control:
+    label: "{{ item.0.name }} -> {{ item.1 }}"
+
+- name: Validate configured Linux password hashes
+  ansible.builtin.assert:
+    that:
+      - identity_access_password_hashes[item.name] is string
+      - >-
+        identity_access_password_hashes[item.name]
+        is match(identity_access_password_hash_pattern)
+    fail_msg: >-
+      The Linux password hash for {{ item.name }} is missing, locked, plaintext,
+      or not a supported modern crypt hash. Supply it through Ansible Vault or
+      another external secret source.
+  when:
+    - item.state == 'present'
+    - item.sudo_password_required
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+
 - name: Protect the active Ansible provisioning identity
   ansible.builtin.assert:
     that:
-      - (item.state | default('present')) == 'present'
-      - item.admin | default(false) | bool
-      - item.ssh_keys | default([]) | length > 0
+      - item.state == 'present'
+      - item.admin
+      - item.sudo_mode in ['passwordless', 'password', 'constrained']
+      - item.ssh_keys | length > 0
     fail_msg: >-
       Refusing to modify provisioning user {{ item.name }}: it must remain
-      present, administrative, and have at least one configured SSH public key.
+      present, administrative, have an explicit usable sudo policy, and retain
+      at least one configured SSH public key.
   when: item.name == (ansible_user | default(''))
   loop: "{{ identity_access_users }}"
   loop_control:
@@ -122,7 +419,7 @@
 - name: Collect configured SSH public keys
   ansible.builtin.set_fact:
     identity_access_all_ssh_keys: >-
-      {{ identity_access_all_ssh_keys + (item.ssh_keys | default([])) }}
+      {{ identity_access_all_ssh_keys + item.ssh_keys }}
   loop: "{{ identity_access_users }}"
   loop_control:
     label: "{{ item.name }}"
@@ -130,11 +427,7 @@
 - name: Reject SSH public keys shared by multiple accounts
   ansible.builtin.assert:
     that:
-      - identity_access_all_ssh_keys | unique | length == identity_access_all_ssh_keys | length
+      - >-
+        identity_access_all_ssh_keys | unique | length
+        == identity_access_all_ssh_keys | length
     fail_msg: "The same SSH public key is assigned to multiple user accounts."
-
-- name: Validate administrative system group exists
-  ansible.builtin.getent:
-    database: group
-    key: "{{ identity_access_admin_group }}"
-    fail_key: true

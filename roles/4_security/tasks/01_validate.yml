@@ -1,0 +1,271 @@
+---
+- name: Gather facts required for security pre-flight
+  ansible.builtin.setup:
+    gather_subset:
+      - min
+
+- name: Validate security configuration root type
+  ansible.builtin.assert:
+    that:
+      - security | default({}) is mapping
+    fail_msg: "security must be an object containing supported policy sections."
+
+- name: Validate security configuration section types
+  ansible.builtin.assert:
+    that:
+      - security.ssh | default({}) is mapping
+      - security.firewall | default({}) is mapping
+      - security.fail2ban | default({}) is mapping
+      - security.fail2ban.ssh | default({}) is mapping
+      - security.updates | default({}) is mapping
+    fail_msg: "Each configured security section must be an object."
+
+- name: Resolve security defaults and user overrides
+  ansible.builtin.set_fact:
+    security_resolved: "{{ security_defaults | combine(security | default({}), recursive=true) }}"
+    security_active_management_port: "{{ ansible_port | default(22) | int }}"
+
+- name: Resolve safe SSH transition ports
+  ansible.builtin.set_fact:
+    security_ssh_ports: >-
+      {{
+        (
+          [security_resolved.ssh.port | int]
+          + ([security_active_management_port | int]
+             if (security_active_management_port | int) != (security_resolved.ssh.port | int)
+             else [])
+        )
+        | unique
+        | list
+      }}
+    security_management_source_ip: >-
+      {{ (ansible_facts.env.SSH_CONNECTION | default('')).split() | first | default('') }}
+
+- name: Validate security configuration sections
+  ansible.builtin.assert:
+    that:
+      - security | default({}) is mapping
+      - (security | default({})).keys() | difference(security_allowed_root_keys) | length == 0
+      - security_resolved.ssh is mapping
+      - security_resolved.firewall is mapping
+      - security_resolved.fail2ban is mapping
+      - security_resolved.updates is mapping
+      - (security.ssh | default({})).keys() | difference(security_allowed_ssh_keys) | length == 0
+      - (security.firewall | default({})).keys() | difference(security_allowed_firewall_keys) | length == 0
+      - (security.fail2ban | default({})).keys() | difference(security_allowed_fail2ban_keys) | length == 0
+      - (security.fail2ban.ssh | default({})).keys() | difference(security_allowed_fail2ban_ssh_keys) | length == 0
+      - (security.updates | default({})).keys() | difference(security_allowed_update_keys) | length == 0
+    fail_msg: "security contains an unknown section or option."
+
+- name: Validate SSH security policy
+  ansible.builtin.assert:
+    that:
+      - security_resolved.ssh.enabled is boolean
+      - security_resolved.ssh.port is number
+      - security_resolved.ssh.port | int >= 1
+      - security_resolved.ssh.port | int <= 65535
+      - security_resolved.ssh.permit_root_login is boolean
+      - security_resolved.ssh.password_authentication is boolean
+      - security_resolved.ssh.public_key_authentication is boolean
+      - security_resolved.ssh.max_auth_tries is number
+      - security_resolved.ssh.max_auth_tries | int >= 1
+      - security_resolved.ssh.max_auth_tries | int <= 10
+      - security_resolved.ssh.login_grace_time is number
+      - security_resolved.ssh.login_grace_time | int >= 1
+      - security_resolved.ssh.login_grace_time | int <= 600
+      - >-
+        not security_resolved.ssh.enabled
+        or security_resolved.ssh.password_authentication
+        or security_resolved.ssh.public_key_authentication
+      - >-
+        security_resolved.ssh.enabled
+        or (ansible_connection | default('smart')) == 'local'
+    fail_msg: >-
+      Invalid or unsafe SSH policy. A remotely provisioned host must keep SSH
+      enabled and must retain at least one supported authentication method.
+
+- name: Validate firewall policy
+  ansible.builtin.assert:
+    that:
+      - security_resolved.firewall.enabled is boolean
+      - security_resolved.firewall.default_incoming in ['allow', 'deny', 'reject']
+      - security_resolved.firewall.default_outgoing in ['allow', 'deny', 'reject']
+      - security_resolved.firewall.automatic_rules is boolean
+      - security_resolved.firewall.additional_rules is sequence
+      - security_resolved.firewall.additional_rules is not string
+      - security_resolved.firewall.additional_rules is not mapping
+      - security_firewall_derived_rules is sequence
+      - security_firewall_derived_rules is not string
+    fail_msg: "Invalid firewall policy."
+
+- name: Build configured firewall rule validation list
+  ansible.builtin.set_fact:
+    security_firewall_configured_rules: >-
+      {{
+        security_resolved.firewall.additional_rules
+        + (security_firewall_derived_rules if security_resolved.firewall.automatic_rules else [])
+      }}
+
+- name: Validate firewall rule shape
+  ansible.builtin.assert:
+    that:
+      - item is mapping
+      - item.port is defined
+      - item.protocol is defined
+    fail_msg: "Every firewall rule must be an object with port and protocol."
+  loop: "{{ security_firewall_configured_rules }}"
+  loop_control:
+    label: "{{ item.name | default('unnamed rule') }}"
+
+- name: Validate firewall rule values
+  ansible.builtin.assert:
+    that:
+      - item.keys() | difference(security_allowed_firewall_rule_keys) | length == 0
+      - item.port is number
+      - item.protocol is string
+      - item.name | default('foundry-rule') is string
+      - item.source | default('any') is string
+      - item.port | int >= 1
+      - item.port | int <= 65535
+      - item.protocol in ['tcp', 'udp']
+      - item.source | default('any') == 'any' or (item.source | ansible.utils.ipaddr)
+    fail_msg: "Invalid firewall rule: {{ item.name | default(item) }}."
+  loop: "{{ security_firewall_configured_rules }}"
+  loop_control:
+    label: "{{ item.name | default(item.port | default('invalid rule')) }}"
+
+- name: Validate Fail2ban policy
+  ansible.builtin.assert:
+    that:
+      - security_resolved.fail2ban.enabled is boolean
+      - security_resolved.fail2ban.ssh is mapping
+      - security_resolved.fail2ban.ssh.enabled is boolean
+      - security_resolved.fail2ban.ssh.max_retries is number
+      - security_resolved.fail2ban.ssh.max_retries | int >= 1
+      - security_resolved.fail2ban.ssh.max_retries | int <= 20
+      - security_resolved.fail2ban.ssh.ban_time is number
+      - security_resolved.fail2ban.ssh.ban_time | int >= 60
+      - >-
+        not security_resolved.fail2ban.enabled
+        or not security_resolved.fail2ban.ssh.enabled
+        or security_resolved.ssh.enabled
+    fail_msg: "Invalid Fail2ban policy."
+
+- name: Validate automatic security update policy
+  ansible.builtin.assert:
+    that:
+      - security_resolved.updates.automatic_security_updates is boolean
+      - security_resolved.updates.automatic_reboot is boolean
+      - >-
+        not security_resolved.updates.automatic_reboot
+        or security_resolved.updates.automatic_security_updates
+    fail_msg: "Automatic reboot requires automatic security updates."
+
+- name: Inspect active provisioning account
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ ansible_user }}"
+    fail_key: true
+
+- name: Verify active provisioning privilege escalation
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/true
+  become: true
+  register: security_provisioning_become_check
+  changed_when: false
+  check_mode: false
+
+- name: Inspect active provisioning authorized_keys
+  ansible.builtin.stat:
+    path: "{{ ansible_facts.getent_passwd[ansible_user][4] }}/.ssh/authorized_keys"
+  register: security_provisioning_authorized_keys
+
+- name: Count configured administrative SSH access paths
+  ansible.builtin.set_fact:
+    security_configured_admin_key_count: 0
+
+- name: Count administrative users with public keys
+  ansible.builtin.set_fact:
+    security_configured_admin_key_count: >-
+      {{ security_configured_admin_key_count | int + (item.ssh_keys | default([]) | length) }}
+  when:
+    - (item.state | default('present')) == 'present'
+    - item.admin | default(false) | bool
+  loop: "{{ (identity | default({})).get('users', []) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: >-
+    {{ (item.sudo | default({})).password_hash is defined }}
+
+- name: Validate an administrative access path survives hardening
+  ansible.builtin.assert:
+    that:
+      - security_provisioning_become_check.rc == 0
+      - >-
+        security_resolved.ssh.password_authentication
+        or not security_resolved.ssh.public_key_authentication
+        or security_provisioning_authorized_keys.stat.exists
+        or security_configured_admin_key_count | int > 0
+      - >-
+        security_resolved.ssh.password_authentication
+        or not security_provisioning_authorized_keys.stat.exists
+        or security_provisioning_authorized_keys.stat.size | int > 0
+        or security_configured_admin_key_count | int > 0
+    fail_msg: >-
+      SSH hardening would leave no verified administrative access path.
+      Keep a sudo-capable provisioning user with an authorized public key.
+
+- name: Initialize explicit SSH firewall access validation
+  ansible.builtin.set_fact:
+    security_manual_active_ssh_access: false
+    security_manual_desired_ssh_access: false
+
+- name: Detect explicit rule for the active management port
+  ansible.builtin.set_fact:
+    security_manual_active_ssh_access: true
+  when:
+    - item.protocol == 'tcp'
+    - item.port | int == security_active_management_port | int
+    - >-
+      item.source | default('any') == 'any'
+      or (
+        security_management_source_ip | length > 0
+        and security_management_source_ip | ansible.utils.ipaddr(item.source)
+      )
+  loop: "{{ security_resolved.firewall.additional_rules }}"
+  loop_control:
+    label: "{{ item.name | default(item.port) }}"
+
+- name: Detect explicit rule for the desired SSH port
+  ansible.builtin.set_fact:
+    security_manual_desired_ssh_access: true
+  when:
+    - item.protocol == 'tcp'
+    - item.port | int == security_resolved.ssh.port | int
+    - >-
+      item.source | default('any') == 'any'
+      or (
+        security_management_source_ip | length > 0
+        and security_management_source_ip | ansible.utils.ipaddr(item.source)
+      )
+  loop: "{{ security_resolved.firewall.additional_rules }}"
+  loop_control:
+    label: "{{ item.name | default(item.port) }}"
+
+- name: Prevent firewall management lockout
+  ansible.builtin.assert:
+    that:
+      - >-
+        not security_resolved.firewall.enabled
+        or security_resolved.firewall.default_incoming == 'allow'
+        or security_resolved.firewall.automatic_rules
+        or security_manual_active_ssh_access
+      - >-
+        not security_resolved.firewall.enabled
+        or security_resolved.firewall.default_incoming == 'allow'
+        or security_resolved.firewall.automatic_rules
+        or security_manual_desired_ssh_access
+    fail_msg: >-
+      Firewall policy would block SSH management. Enable automatic_rules or add
+      explicit TCP rules for both the active and desired SSH ports.

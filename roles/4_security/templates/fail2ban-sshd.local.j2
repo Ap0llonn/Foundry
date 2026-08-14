@@ -1,0 +1,7 @@
+# Managed by Foundry. Manual changes will be overwritten.
+[sshd]
+enabled = {{ security_resolved.fail2ban.ssh.enabled | ternary('true', 'false') }}
+port = {{ security_ssh_ports | join(',') }}
+backend = systemd
+maxretry = {{ security_resolved.fail2ban.ssh.max_retries }}
+bantime = {{ security_resolved.fail2ban.ssh.ban_time }}

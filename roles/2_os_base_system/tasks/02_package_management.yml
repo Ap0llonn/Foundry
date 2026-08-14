@@ -4,24 +4,6 @@
     update_cache: true
     cache_valid_time: "{{ os_base_apt_cache_valid_time }}"
 
-- name: Install automatic security update support
-  ansible.builtin.apt:
-    name: unattended-upgrades
-    state: present
-  when: os_base_enable_security_updates | bool
-
-- name: Configure automatic security updates
-  ansible.builtin.copy:
-    dest: /etc/apt/apt.conf.d/20auto-upgrades
-    owner: root
-    group: root
-    mode: "0644"
-    content: |
-      APT::Periodic::Update-Package-Lists "1";
-      APT::Periodic::Unattended-Upgrade "1";
-      APT::Periodic::AutocleanInterval "7";
-  when: os_base_enable_security_updates | bool
-
 - name: Upgrade installed packages
   ansible.builtin.apt:
     upgrade: "{{ os_base_apt_upgrade_mode }}"

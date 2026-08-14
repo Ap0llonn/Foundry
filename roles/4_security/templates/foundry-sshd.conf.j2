@@ -1,0 +1,10 @@
+# Managed by Foundry. Manual changes will be overwritten.
+{% for ssh_port in security_ssh_ports %}
+Port {{ ssh_port }}
+{% endfor %}
+PermitRootLogin {{ security_resolved.ssh.permit_root_login | ternary('yes', 'no') }}
+PasswordAuthentication {{ security_resolved.ssh.password_authentication | ternary('yes', 'no') }}
+KbdInteractiveAuthentication {{ security_resolved.ssh.password_authentication | ternary('yes', 'no') }}
+PubkeyAuthentication {{ security_resolved.ssh.public_key_authentication | ternary('yes', 'no') }}
+MaxAuthTries {{ security_resolved.ssh.max_auth_tries }}
+LoginGraceTime {{ security_resolved.ssh.login_grace_time }}

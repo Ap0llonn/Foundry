@@ -1,4 +1,55 @@
 ---
-# Role: 4 - Security
-# Placeholder — ne fait rien pour le moment.
-[]
+# Couche 4 - Security
+# L'ordre est volontaire: valider, ouvrir les accès firewall requis, puis
+# appliquer SSH et les autres politiques de sécurité.
+
+- name: 4.1 Validate resolved security policy
+  ansible.builtin.import_tasks: 01_validate.yml
+  # Pre-flight also runs when a Security sub-tag is selected directly.
+  tags:
+    - security
+    - security_validation
+    - security_packages
+    - security_firewall
+    - security_ssh
+    - security_fail2ban
+    - security_updates
+    - security_result
+
+- name: 4.2 Install security components
+  ansible.builtin.import_tasks: 02_packages.yml
+  become: true
+  tags: [security, security_packages]
+
+- name: 4.3 Prepare and enable host firewall
+  ansible.builtin.import_tasks: 03_firewall.yml
+  become: true
+  tags: [security, security_firewall]
+
+- name: 4.4 Harden SSH server policy
+  ansible.builtin.import_tasks: 04_ssh.yml
+  become: true
+  tags: [security, security_ssh]
+
+- name: Apply validated SSH configuration before continuing
+  ansible.builtin.meta: flush_handlers
+  tags: [security, security_ssh]
+
+- name: 4.5 Configure Fail2ban
+  ansible.builtin.import_tasks: 05_fail2ban.yml
+  become: true
+  tags: [security, security_fail2ban]
+
+- name: 4.6 Configure automatic security updates
+  ansible.builtin.import_tasks: 06_updates.yml
+  become: true
+  tags: [security, security_updates]
+
+- name: Apply pending security service handlers
+  ansible.builtin.meta: flush_handlers
+  tags: [security, security_fail2ban]
+
+- name: 4.7 Validate resulting host security state
+  ansible.builtin.import_tasks: 07_validation.yml
+  become: true
+  tags: [security, security_result]

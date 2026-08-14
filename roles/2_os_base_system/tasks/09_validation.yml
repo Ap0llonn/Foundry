@@ -9,7 +9,6 @@
       {{
         os_base_packages
         + ['locales', os_base_time_package]
-        + (['unattended-upgrades'] if os_base_enable_security_updates | bool else [])
       }}
 
 - name: Validate required packages

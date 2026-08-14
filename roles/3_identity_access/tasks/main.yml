@@ -4,7 +4,14 @@
 
 - name: 3.1 Validate identity configuration
   ansible.builtin.import_tasks: 01_validate.yml
-  tags: [identity_access, identity_validation]
+  tags:
+    - identity_access
+    - identity_validation
+    - identity_groups
+    - identity_users
+    - identity_ssh
+    - identity_privileges
+    - identity_result
 
 - name: 3.2 Manage Foundry authorization groups
   ansible.builtin.import_tasks: 02_groups.yml
@@ -21,7 +28,7 @@
   become: true
   tags: [identity_access, identity_ssh]
 
-- name: 3.5 Reconcile administrative and group privileges
+- name: 3.5 Reconcile explicit sudo and group privileges
   ansible.builtin.import_tasks: 05_privileges.yml
   become: true
   tags: [identity_access, identity_privileges]

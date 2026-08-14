@@ -1,0 +1,20 @@
+---
+- name: Build required security package list
+  ansible.builtin.set_fact:
+    security_required_packages: >-
+      {{
+        ['openssh-server', 'ufw']
+        + (['fail2ban'] if security_resolved.fail2ban.enabled else [])
+        + (['unattended-upgrades'] if security_resolved.updates.automatic_security_updates else [])
+      }}
+
+- name: Install required security packages
+  ansible.builtin.apt:
+    name: "{{ security_required_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Gather installed security package facts
+  ansible.builtin.package_facts:
+    manager: auto

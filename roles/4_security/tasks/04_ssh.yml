@@ -1,0 +1,48 @@
+---
+- name: Ensure SSH daemon is enabled and running
+  ansible.builtin.systemd_service:
+    name: "{{ security_ssh_service }}"
+    enabled: true
+    state: started
+  when: security_resolved.ssh.enabled
+
+- name: Ensure SSH drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/ssh/sshd_config.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: security_resolved.ssh.enabled
+
+- name: Install Foundry SSH daemon policy
+  ansible.builtin.template:
+    src: foundry-sshd.conf.j2
+    dest: "{{ security_sshd_dropin }}"
+    owner: root
+    group: root
+    mode: "0600"
+    validate: "{{ security_sshd_binary }} -t -f %s"
+  notify: Validate and reload SSH
+  when: security_resolved.ssh.enabled
+
+- name: Validate complete SSH daemon configuration before reload
+  ansible.builtin.command:
+    argv:
+      - "{{ security_sshd_binary }}"
+      - -t
+  changed_when: false
+  when: security_resolved.ssh.enabled
+
+- name: Remove Foundry SSH policy when SSH is explicitly disabled
+  ansible.builtin.file:
+    path: "{{ security_sshd_dropin }}"
+    state: absent
+  when: not security_resolved.ssh.enabled
+
+- name: Stop and disable SSH when explicitly allowed local provisioning requests it
+  ansible.builtin.systemd_service:
+    name: "{{ security_ssh_service }}"
+    enabled: false
+    state: stopped
+  when: not security_resolved.ssh.enabled
