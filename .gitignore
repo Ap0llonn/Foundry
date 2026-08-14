@@ -1,1 +1,4 @@
 .foundry/state/
+.venv/
+collections/ansible_collections/
+__pycache__/

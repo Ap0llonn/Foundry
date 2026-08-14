@@ -1,0 +1,14 @@
+---
+collections:
+  - name: ansible.posix
+    version: "2.2.2"
+
+  - name: ansible.utils
+    version: "6.1.0"
+
+  - name: community.general
+    version: "13.3.0"
+
+  # Exact transitive dependency declared by community.general 13.3.0.
+  - name: community.library_inventory_filtering_v1
+    version: "1.1.5"
