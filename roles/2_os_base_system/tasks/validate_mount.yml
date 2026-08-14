@@ -1,0 +1,112 @@
+---
+- name: "Inspect live mount {{ os_base_mount.path }}"
+  ansible.builtin.command:
+    argv:
+      - findmnt
+      - --noheadings
+      - --raw
+      - --evaluate
+      - --mountpoint
+      - "{{ os_base_mount.path }}"
+      - --output
+      - SOURCE,FSTYPE,OPTIONS,FREQ,PASSNO
+  register: os_base_live_mount
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: "Inspect persistent mount {{ os_base_mount.path }}"
+  ansible.builtin.command:
+    argv:
+      - findmnt
+      - --fstab
+      - --noheadings
+      - --raw
+      - --evaluate
+      - --target
+      - "{{ os_base_mount.path }}"
+      - --output
+      - SOURCE,FSTYPE,OPTIONS,FREQ,PASSNO
+  register: os_base_fstab_mount
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: "Resolve declared mount source {{ os_base_mount.src }}"
+  ansible.builtin.command:
+    argv:
+      - findmnt
+      - --fstab
+      - --noheadings
+      - --raw
+      - --evaluate
+      - --source
+      - "{{ os_base_mount.src }}"
+      - --output
+      - TARGET
+  register: os_base_declared_mount_source
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: "Validate persistent mount definition {{ os_base_mount.path }}"
+  ansible.builtin.assert:
+    that:
+      - os_base_fstab_mount.rc == 0
+      - os_base_declared_mount_source.rc == 0
+      - os_base_mount.path in os_base_declared_mount_source.stdout_lines
+      - os_base_fstab_mount.stdout.split() | length >= 5
+      - os_base_fstab_mount.stdout.split()[1] == os_base_mount.fstype
+      - os_base_fstab_mount.stdout.split()[3] == os_base_mount.dump | default('0') | string
+      - os_base_fstab_mount.stdout.split()[4] == os_base_mount.passno | default('0') | string
+      - >-
+        (
+          os_base_mount.opts | default('defaults') | split(',')
+          | reject('equalto', 'defaults')
+          | sort
+          | list
+        ) == (
+          os_base_fstab_mount.stdout.split()[2].split(',')
+          | reject('equalto', 'defaults')
+          | sort
+          | list
+        )
+      - >-
+        (
+          os_base_mount.forbidden_opts | default(os_base_mount_forbidden_options)
+          | intersect(os_base_fstab_mount.stdout.split()[2].split(','))
+          | length
+        ) == 0
+    fail_msg: "fstab does not match the declaration for {{ os_base_mount.path }}."
+  when: os_base_mount.state | default('mounted') in ['mounted', 'present', 'unmounted']
+
+- name: "Validate active mount definition {{ os_base_mount.path }}"
+  ansible.builtin.assert:
+    that:
+      - os_base_live_mount.rc == 0
+      - os_base_live_mount.stdout.split() | length >= 3
+      - os_base_live_mount.stdout.split()[0] == os_base_fstab_mount.stdout.split()[0]
+      - os_base_live_mount.stdout.split()[1] == os_base_mount.fstype
+      - >-
+        (
+          os_base_mount.opts | default('defaults') | split(',')
+          | reject('equalto', 'defaults')
+          | difference(os_base_live_mount.stdout.split()[2].split(','))
+          | length
+        ) == 0
+      - >-
+        (
+          os_base_mount.forbidden_opts | default(os_base_mount_forbidden_options)
+          | intersect(os_base_live_mount.stdout.split()[2].split(','))
+          | length
+        ) == 0
+    fail_msg: "Live mount does not match fstab for {{ os_base_mount.path }}."
+  when: os_base_mount.state | default('mounted') == 'mounted'
+
+- name: "Validate inactive or absent mount {{ os_base_mount.path }}"
+  ansible.builtin.assert:
+    that:
+      - os_base_live_mount.rc != 0
+      - os_base_mount.state != 'absent' or os_base_fstab_mount.rc != 0
+    fail_msg: "Mount {{ os_base_mount.path }} is active or persists unexpectedly."
+  when: os_base_mount.state | default('mounted') in ['unmounted', 'absent']

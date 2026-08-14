@@ -1,30 +1,177 @@
 ---
+- name: Validate time synchronization policy
+  ansible.builtin.assert:
+    that:
+      - os_base_timezone | string | length > 0
+      - os_base_time_sources is sequence
+      - os_base_time_sources is not string
+      - os_base_time_sources | length > 0
+      - os_base_time_max_offset_seconds | float > 0
+      - os_base_time_conflicting_services is sequence
+      - os_base_time_conflicting_services is not string
+    fail_msg: "Chrony needs at least one managed source and a positive offset threshold."
+
+- name: Validate managed Chrony sources
+  ansible.builtin.assert:
+    that:
+      - item.type | default('server') in ['server', 'pool']
+      - item.name is defined
+      - item.name | string | trim | length > 0
+      - item.name is match('^[A-Za-z0-9][A-Za-z0-9.:-]*$')
+      - item.options | default('') is not search('[\r\n]')
+      - >-
+        item.options | default('') == ''
+        or item.options is match('^[A-Za-z0-9_.=:+/@-]+(?: [A-Za-z0-9_.=:+/@-]+)*$')
+      - item.nts | default(false) is boolean
+    fail_msg: "Invalid Chrony source declaration."
+  loop: "{{ os_base_time_sources }}"
+  loop_control:
+    label: "{{ item.name | default('undefined') }}"
+
+- name: Determine whether DNS tooling is required
+  ansible.builtin.set_fact:
+    os_base_dns_tools_required: "{{ os_base_hostname_validate_dns | bool }}"
+
+- name: Require DNS tooling for named time sources
+  ansible.builtin.set_fact:
+    os_base_dns_tools_required: true
+  loop: "{{ os_base_time_sources }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: not (item.name | ansible.utils.ipaddr)
+
 - name: Read current timezone
   ansible.builtin.command:
-    argv:
-      - timedatectl
-      - show
-      - --property=Timezone
-      - --value
+    argv: [timedatectl, show, --property=Timezone, --value]
   register: os_base_current_timezone
   changed_when: false
+  check_mode: false
 
 - name: Set system timezone
   ansible.builtin.command:
-    argv:
-      - timedatectl
-      - set-timezone
-      - "{{ os_base_timezone }}"
+    argv: [timedatectl, set-timezone, "{{ os_base_timezone }}"]
   when: os_base_current_timezone.stdout != os_base_timezone
   changed_when: true
 
-- name: Install clock synchronization package
+- name: Install clock synchronization provider
   ansible.builtin.apt:
-    name: "{{ os_base_time_package }}"
+    name: >-
+      {{
+        [os_base_time_package]
+        + ([os_base_dns_package] if os_base_dns_tools_required | bool else [])
+      }}
     state: present
+    lock_timeout: "{{ os_base_apt_lock_timeout }}"
+  register: os_base_time_package_result
+  retries: "{{ os_base_apt_retries }}"
+  delay: "{{ os_base_apt_retry_delay }}"
+  until: os_base_time_package_result is succeeded
 
-- name: Enable and start clock synchronization
+# Validate the complete candidate before disabling or replacing any active
+# source. Feeding chronyd through stdin keeps check mode strictly non-mutating.
+- name: Render managed Chrony source content in memory
+  ansible.builtin.set_fact:
+    os_base_chrony_source_content: |
+      # Managed by Foundry. Changes outside configuration are overwritten.
+      {% for source in os_base_time_sources %}
+      {{ source.type | default('server') }} {{ source.name }}{% if source.options | default('') | length > 0 %} {{ source.options }}{% endif %}{% if source.nts | default(false) %} nts{% endif %}
+      {% endfor %}
+
+- name: Validate candidate Chrony source configuration
+  ansible.builtin.command:
+    argv:
+      - chronyd
+      - -p
+      - -f
+      - /dev/stdin
+    stdin: "{{ os_base_chrony_source_content }}"
+  register: os_base_chrony_candidate_validation
+  changed_when: false
+  check_mode: false
+
+- name: Inspect conflicting time providers
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - show
+      - "{{ item }}.service"
+      - --property=LoadState
+      - --value
+  loop: "{{ os_base_time_conflicting_services }}"
+  loop_control:
+    label: "{{ item }}"
+  register: os_base_time_conflict_checks
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Stop and mask installed conflicting time providers
   ansible.builtin.systemd_service:
-    name: "{{ os_base_time_service }}"
+    name: "{{ item.item }}.service"
+    state: stopped
+    enabled: false
+    masked: true
+  loop: "{{ os_base_time_conflict_checks.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when:
+    - item.rc == 0
+    - item.stdout | trim not in ['not-found', '']
+
+- name: Ensure Chrony source directory exists
+  ansible.builtin.file:
+    path: /etc/chrony/sources.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Ensure Chrony loads managed source fragments
+  ansible.builtin.lineinfile:
+    path: /etc/chrony/chrony.conf
+    regexp: '^\s*sourcedir\s+/etc/chrony/sources\.d\s*$'
+    line: sourcedir /etc/chrony/sources.d
+    state: present
+  notify: Restart Chrony
+
+- name: Disable unmanaged inline Chrony sources
+  ansible.builtin.replace:
+    path: /etc/chrony/chrony.conf
+    regexp: '^(\s*(?:server|pool|peer)\s+.*)$'
+    replace: '# Foundry disabled unmanaged source: \1'
+  when: os_base_time_own_all_sources | bool
+  notify: Restart Chrony
+
+- name: Find Chrony source fragments
+  ansible.builtin.find:
+    paths: /etc/chrony/sources.d
+    patterns: '*.sources'
+    file_type: file
+  register: os_base_chrony_source_fragments
+  when: os_base_time_own_all_sources | bool
+
+- name: Remove unmanaged Chrony source fragments
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ os_base_chrony_source_fragments.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
+  when: item.path != '/etc/chrony/sources.d/foundry.sources'
+  notify: Restart Chrony
+
+- name: Install validated managed Chrony sources
+  ansible.builtin.copy:
+    dest: /etc/chrony/sources.d/foundry.sources
+    owner: root
+    group: root
+    mode: "0644"
+    content: "{{ os_base_chrony_source_content }}"
+  notify: Restart Chrony
+
+- name: Enable and start Chrony
+  ansible.builtin.systemd_service:
+    name: "{{ os_base_time_service }}.service"
     enabled: true
+    masked: false
     state: started

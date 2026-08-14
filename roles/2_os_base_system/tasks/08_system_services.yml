@@ -1,22 +1,132 @@
 ---
-- name: Build effective essential service list
+- name: Validate service policy containers
+  ansible.builtin.assert:
+    that:
+      - os_base_services is sequence
+      - os_base_services is not string
+      - os_base_essential_services is sequence
+      - os_base_disabled_services is sequence
+      - os_base_masked_services is sequence
+    fail_msg: "Service policies must be lists."
+
+- name: Validate explicit service declarations
+  ansible.builtin.assert:
+    that:
+      - item is mapping
+      - item.name is defined
+      - item.name | string | length > 0
+      - >-
+        item.presence | default(
+          'required' if item.required | default(true) | bool else 'optional'
+        ) in ['required', 'optional', 'forbidden']
+      - item.state | default('active') in ['active', 'inactive']
+      - item.enabled is not defined or item.enabled is none or item.enabled is boolean
+      - item.masked | default(false) is boolean
+      - >-
+        not (item.masked | default(false) | bool)
+        or item.state | default('active') != 'active'
+      - >-
+        not (item.masked | default(false) | bool)
+        or item.enabled is defined and (item.enabled is none or not (item.enabled | bool))
+      - >-
+        item.presence | default(
+          'required' if item.required | default(true) | bool else 'optional'
+        ) != 'forbidden'
+        or item.state | default('inactive') == 'inactive'
+    fail_msg: "Invalid service state declaration for {{ item.name | default('undefined') }}."
+  loop: "{{ os_base_services }}"
+  loop_control:
+    label: "{{ item.name | default('undefined') }}"
+
+- name: Initialize normalized service policy
   ansible.builtin.set_fact:
-    os_base_effective_essential_services: "{{ os_base_essential_services | unique | list }}"
+    os_base_effective_services: []
 
-- name: Enable and start essential system services
-  ansible.builtin.systemd_service:
-    name: "{{ item }}"
-    enabled: true
-    state: started
-  loop: "{{ os_base_effective_essential_services }}"
+- name: Normalize explicit service declarations
+  ansible.builtin.set_fact:
+    os_base_effective_services: >-
+      {{
+        os_base_effective_services
+        + [
+          item
+          | combine({
+              'presence': item.presence | default(
+                'required' if item.required | default(true) | bool else 'optional'
+              ),
+              'state': item.state | default(
+                'inactive'
+                if item.presence | default(
+                  'required' if item.required | default(true) | bool else 'optional'
+                ) == 'forbidden'
+                else 'active'
+              ),
+              'enabled': item.enabled | default(true),
+              'masked': item.masked | default(false)
+            }, recursive=true)
+        ]
+      }}
+  loop: "{{ os_base_services }}"
   loop_control:
-    label: "{{ item }}"
+    label: "{{ item.name }}"
 
-- name: Disable and stop unnecessary system services
-  ansible.builtin.systemd_service:
-    name: "{{ item }}"
-    enabled: false
-    state: stopped
+- name: Add legacy essential services to normalized policy
+  ansible.builtin.set_fact:
+    os_base_effective_services: >-
+      {{
+        os_base_effective_services
+        + [{
+          'name': item,
+          'presence': 'required',
+          'enabled': true,
+          'state': 'active',
+          'masked': false
+        }]
+      }}
+  loop: "{{ os_base_essential_services }}"
+
+- name: Add legacy disabled services to normalized policy
+  ansible.builtin.set_fact:
+    os_base_effective_services: >-
+      {{
+        os_base_effective_services
+        + [{
+          'name': item,
+          'presence': 'optional',
+          'enabled': false,
+          'state': 'inactive',
+          'masked': false
+        }]
+      }}
   loop: "{{ os_base_disabled_services }}"
+
+- name: Add legacy masked services to normalized policy
+  ansible.builtin.set_fact:
+    os_base_effective_services: >-
+      {{
+        os_base_effective_services
+        + [{
+          'name': item,
+          'presence': 'optional',
+          'enabled': false,
+          'state': 'inactive',
+          'masked': true
+        }]
+      }}
+  loop: "{{ os_base_masked_services }}"
+
+- name: Require one unambiguous policy per service
+  ansible.builtin.assert:
+    that:
+      - >-
+        (os_base_effective_services | map(attribute='name') | list | unique | length)
+        == (os_base_effective_services | length)
+    fail_msg: >-
+      A service appears more than once across os_base_services and the legacy
+      essential/disabled/masked lists.
+
+- name: Reconcile normalized system service policy
+  ansible.builtin.include_tasks: manage_service.yml
+  loop: "{{ os_base_effective_services }}"
   loop_control:
-    label: "{{ item }}"
+    loop_var: os_base_service
+    label: "{{ os_base_service.name }}"

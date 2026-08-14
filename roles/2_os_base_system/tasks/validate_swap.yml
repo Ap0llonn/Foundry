@@ -1,0 +1,63 @@
+---
+- name: Inspect active swap capacity
+  ansible.builtin.command:
+    argv: [swapon, --show, --bytes, --noheadings, --raw, --output, NAME,SIZE]
+  register: os_base_active_swap
+  changed_when: false
+  check_mode: false
+
+- name: Inspect persistent swap declarations
+  ansible.builtin.command:
+    argv: [findmnt, --fstab, --types, swap, --noheadings, --raw, --evaluate, --output, SOURCE]
+  register: os_base_persistent_swap
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Calculate active swap capacity
+  ansible.builtin.set_fact:
+    os_base_active_swap_sources: >-
+      {{
+        os_base_active_swap.stdout_lines
+        | map('split')
+        | map('first')
+        | list
+      }}
+    os_base_persistent_swap_sources: >-
+      {{
+        os_base_persistent_swap.stdout_lines
+        | map('trim')
+        | reject('equalto', '')
+        | list
+      }}
+    os_base_active_swap_mb: >-
+      {{
+        ((
+          os_base_active_swap.stdout_lines
+          | map('split')
+          | map('last')
+          | map('int')
+          | sum
+        )
+        / 1048576) | int
+      }}
+
+- name: Validate swap activation and persistence policy
+  ansible.builtin.assert:
+    that:
+      - >-
+        os_base_swap_policy != 'disabled'
+        or (
+          os_base_active_swap_mb | int == 0
+          and os_base_persistent_swap.stdout | trim | length == 0
+        )
+      - >-
+        os_base_swap_policy != 'required'
+        or (
+          os_base_active_swap_mb | int >= ([1, os_base_swap_minimum_mb | int] | max)
+          and os_base_persistent_swap.rc == 0
+          and os_base_active_swap_sources | sort == os_base_persistent_swap_sources | sort
+          and os_base_active_swap_sources | length > 0
+        )
+    fail_msg: >-
+      Active or persistent swap violates os_base_swap_policy={{ os_base_swap_policy }}.

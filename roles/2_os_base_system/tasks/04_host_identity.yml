@@ -1,13 +1,61 @@
 ---
-- name: Validate configured hostname
+- name: Validate short hostname and FQDN policy
   ansible.builtin.assert:
     that:
       - os_base_hostname | string | length > 0
-      - os_base_hostname | string | length <= 64
-      - os_base_hostname is match('^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$')
-    fail_msg: "os_base_hostname must be a non-empty valid hostname."
+      - os_base_hostname | string | length <= 63
+      - os_base_hostname is match('^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$')
+      - os_base_fqdn | string | length > 0
+      - os_base_fqdn | string | length <= 253
+      - >-
+        os_base_fqdn is match(
+          '^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?'
+          '(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$'
+        )
+      - os_base_fqdn == os_base_hostname or os_base_fqdn.startswith(os_base_hostname + '.')
+      - os_base_hostname_expected_addresses is sequence
+      - os_base_hostname_expected_addresses is not string
+    fail_msg: >-
+      Define a valid short os_base_hostname and an os_base_fqdn beginning with it.
 
-- name: Set system hostname
+- name: Detect cloud-init hostname ownership
+  ansible.builtin.stat:
+    path: /etc/cloud/cloud.cfg.d
+  register: os_base_cloud_init_config_directory
+
+- name: Preserve Foundry hostname across cloud-init runs
+  ansible.builtin.copy:
+    dest: /etc/cloud/cloud.cfg.d/99-foundry-hostname.cfg
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by Foundry.
+      preserve_hostname: true
+  when:
+    - os_base_hostname_manage_cloud_init | bool
+    - os_base_cloud_init_config_directory.stat.isdir | default(false)
+
+- name: Release Foundry cloud-init hostname ownership when disabled
+  ansible.builtin.file:
+    path: /etc/cloud/cloud.cfg.d/99-foundry-hostname.cfg
+    state: absent
+  when: not (os_base_hostname_manage_cloud_init | bool)
+
+- name: Set system short hostname
   ansible.builtin.hostname:
     name: "{{ os_base_hostname }}"
     use: systemd
+
+- name: Reconcile local hostname and FQDN resolution
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: >-
+      ^\s*{{ os_base_hostname_hosts_address | regex_escape }}\s+
+    line: >-
+      {{ os_base_hostname_hosts_address }} {{ os_base_fqdn }}{% if os_base_fqdn != os_base_hostname %} {{ os_base_hostname }}{% endif %}
+    state: present
+    owner: root
+    group: root
+    mode: "0644"
+  when: os_base_hostname_manage_etc_hosts | bool

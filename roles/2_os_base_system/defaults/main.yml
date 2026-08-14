@@ -1,61 +1,170 @@
 ---
-# 2.1 - Matrice de support. Surcharger ces valeurs dans l'inventaire lorsque
-# la politique de support du projet évolue.
-os_base_supported_versions:
-  Ubuntu:
-    - "22"
-    - "24"
-    - "26"
-  Debian:
-    - "12"
-    - "13"
+# Foundry currently supports only the end-to-end combinations below. Debian is
+# intentionally excluded until the security role has a Debian firewall path.
+os_base_supported_platforms:
+  - distribution: Ubuntu
+    versions: ["26.04"]
+    architectures: [x86_64]
 
-os_base_supported_architectures:
-  - x86_64
-  - aarch64
-
-# 2.2 - Gestion APT.
+# 2.2 - Package lifecycle. Ordinary convergence defaults to bootstrap and never
+# performs a broad upgrade or autoremove. Broad maintenance requires both an
+# explicit mode and approval/window identifiers.
+os_base_operation_mode: bootstrap
+os_base_allowed_operation_modes:
+  - bootstrap
+  - security_patching
+  - full_maintenance
+os_base_maintenance_approved: false
+os_base_maintenance_window: ""
+os_base_maintenance_autoremove: false
+# Package removals have their own approval because they are a distinct,
+# destructive step beyond approval of the distribution upgrade itself.
+os_base_maintenance_removals_approved: false
+os_base_maintenance_autoclean: false
 os_base_apt_cache_valid_time: 3600
-os_base_upgrade_packages: true
-os_base_apt_upgrade_mode: dist
-os_base_autoremove_packages: true
-os_base_autoclean_packages: true
+os_base_apt_lock_timeout: 120
+os_base_apt_retries: 5
+os_base_apt_retry_delay: 10
+os_base_apt_plan_directory: /var/lib/foundry/os-base
+os_base_apt_ownership_manifest: /var/lib/foundry/os-base/apt-ownership.yml
 
-# 2.3 - Baseline minimale; ajouter uniquement les outils réellement utilisés.
+# APT trust and transport controls. Foundry never uses apt-key. Every custom
+# repository must contain a signed-by= keyring reference, and downloaded
+# keyrings require a checksum.
+os_base_apt_keyrings: []
+# - name: example-archive-keyring.gpg
+#   url: https://packages.example.invalid/example-archive-keyring.gpg
+#   checksum: sha256:...
+os_base_apt_repositories: []
+# - name: example
+#   uris: [https://packages.example.invalid/ubuntu]
+#   suites: [resolute]
+#   components: [main]
+#   signed_by: /usr/share/keyrings/example-archive-keyring.gpg
+#   state: present
+
+# Optional Foundry-owned Ubuntu mirror definition. It is opt-in because taking
+# ownership disables Ubuntu's vendor source files.
+os_base_apt_manage_distribution_sources: false
+os_base_apt_mirror: http://archive.ubuntu.com/ubuntu
+os_base_apt_ports_mirror: http://ports.ubuntu.com/ubuntu-ports
+os_base_apt_security_mirror: http://security.ubuntu.com/ubuntu
+os_base_apt_components: [main, restricted, universe, multiverse]
+os_base_apt_distribution_keyring: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+os_base_apt_proxy:
+  # Proxy URLs may contain credentials. Supply them from Ansible Vault or an
+  # external secret source; task output and diffs are suppressed.
+  http: ""
+  https: ""
+  no_proxy: []
+os_base_apt_holds: []
+
+# Security-patching mode uses unattended-upgrade only with these approved
+# origin patterns. It does not enable periodic unattended upgrades.
+os_base_apt_security_origins:
+  - "origin=Ubuntu,codename=${distro_codename}-security,label=Ubuntu"
+os_base_needrestart_mode: report
+os_base_allowed_needrestart_modes:
+  - report
+
+# 2.3 - Minimal baseline plus package-management safety tooling.
 os_base_packages:
   - ca-certificates
   - curl
   - git
   - unzip
+os_base_package_control_packages:
+  - needrestart
+  - python3-debian
+  - unattended-upgrades
 
-# 2.4 - L'identité Ansible devient l'identité système par défaut.
-os_base_hostname: "{{ inventory_hostname }}"
+# 2.4 - Host identity. os_base_hostname is the short host name; the optional
+# FQDN defaults to inventory_hostname when it is already fully qualified.
+os_base_hostname: "{{ inventory_hostname.split('.')[0] }}"
+os_base_fqdn: >-
+  {{ inventory_hostname if '.' in inventory_hostname else os_base_hostname }}
+os_base_hostname_manage_cloud_init: true
+os_base_hostname_manage_etc_hosts: true
+os_base_hostname_hosts_address: 127.0.1.1
+os_base_hostname_validate_dns: false
+os_base_hostname_expected_addresses: []
+os_base_hostname_validate_reverse_dns: false
 
-# 2.5 - Temps standardisé.
+# 2.5 - Foundry owns one time provider and its sources. Set nts: true only for
+# servers that support Network Time Security.
 os_base_timezone: Etc/UTC
 os_base_time_package: chrony
 os_base_time_service: chrony
+os_base_time_own_all_sources: true
+os_base_time_sources:
+  - type: pool
+    name: ntp.ubuntu.com
+    options: iburst maxsources 4
+    nts: false
+os_base_time_conflicting_services:
+  - systemd-timesyncd
+os_base_time_max_offset_seconds: 1.0
+os_base_time_sync_retries: 12
+os_base_time_sync_delay: 5
+# Ubuntu 26.04 provides /usr/bin/dig from this concrete package. Avoid the
+# dnsutils virtual/transitional name so package-fact validation is exact.
+os_base_dns_package: bind9-dnsutils
 
-# 2.6 - Locale UTF-8 cohérente.
+# 2.6 - LANG is the global default. Individual LC_* categories are opt-in;
+# LC_ALL is deliberately forbidden as a persistent global setting.
 os_base_locale: en_CA.UTF-8
+os_base_locale_categories: {}
 
-# 2.7 - Éléments propres à l'infrastructure. Exemples de structures:
-# os_base_mounts:
-#   - path: /data
-#     src: /dev/disk/by-uuid/xxxx
-#     fstype: ext4
-#     opts: defaults
-#     state: mounted
-# os_base_directories:
-#   - path: /data/apps
-#     owner: root
-#     group: root
-#     mode: "0755"
+# 2.7 - Mount declarations are verified against the live mount and /etc/fstab.
+# Capacity thresholds may be overridden on each mount definition.
 os_base_mounts: []
+# - path: /data
+#   src: /dev/disk/by-uuid/xxxx
+#   fstype: ext4
+#   opts: defaults,nodev
+#   state: mounted
+#   min_free_percent: 10
+#   min_free_inodes_percent: 5
 os_base_directories: []
+os_base_min_free_percent: 10
+os_base_min_free_inodes_percent: 5
+os_base_mount_forbidden_options: []
+os_base_capacity_paths:
+  - path: /
+    min_free_percent: "{{ os_base_min_free_percent }}"
+    min_free_inodes_percent: "{{ os_base_min_free_inodes_percent }}"
+os_base_swap_policy: preserve
+os_base_allowed_swap_policies: [preserve, required, disabled]
+os_base_swap_minimum_mb: 1
 
-# 2.8 - Chrony est essentiel à cette baseline. Les services additionnels sont
-# fournis par l'inventaire selon le type de VM.
+# 2.8 - Legacy lists remain supported and are normalized into explicit service
+# expectations. Optional absent disabled/masked units are accepted.
 os_base_essential_services:
   - "{{ os_base_time_service }}"
 os_base_disabled_services: []
+os_base_masked_services: []
+os_base_services: []
+# - name: example.service
+#   presence: required  # required, optional, or forbidden
+#   enabled: true
+#   state: active
+#   masked: false
+
+# 2.8.5 - Reboot is a separately approved operation. A reboot-required marker
+# alone never authorizes a reboot.
+os_base_reboot_enabled: false
+os_base_reboot_approved: false
+os_base_reboot_only_if_required: true
+os_base_reboot_timeout: 900
+os_base_reboot_connect_timeout: 10
+os_base_reboot_validate_latest_kernel: true
+os_base_reboot_reason: Foundry approved operating-system maintenance
+os_base_reboot_record_path: /var/lib/foundry/os-base/last-controlled-reboot.yml
+os_base_reboot_ssh_service: ssh.service
+os_base_reboot_provisioning_user: "{{ ansible_user | default('') }}"
+os_base_reboot_precheck_commands: []
+os_base_reboot_postcheck_commands: []
+
+# Post-package health gates run after patching/maintenance and after a reboot.
+os_base_fail_on_systemd_failed_units: true

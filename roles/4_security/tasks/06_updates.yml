@@ -17,8 +17,8 @@
     group: root
     mode: "0644"
     content: |
-      // Managed by Foundry. Automatic reboot occurs only when explicitly enabled.
-      Unattended-Upgrade::Automatic-Reboot "{{ security_resolved.updates.automatic_reboot | ternary('true', 'false') }}";
+      // Managed by Foundry. Reboots use the final health-gated OS phase only.
+      Unattended-Upgrade::Automatic-Reboot "false";
       Unattended-Upgrade::Automatic-Reboot-Time "{{ security_unattended_reboot_time }}";
   when: security_resolved.updates.automatic_security_updates
 

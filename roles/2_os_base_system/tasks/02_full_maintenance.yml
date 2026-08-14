@@ -1,0 +1,112 @@
+---
+- name: Reconfirm full maintenance authorization at execution boundary
+  ansible.builtin.assert:
+    that:
+      - os_base_operation_mode == 'full_maintenance'
+      - os_base_maintenance_approved | bool
+      - os_base_maintenance_window | string | trim | length > 0
+      - >-
+        not (os_base_maintenance_autoremove | bool)
+        or (os_base_maintenance_removals_approved | bool)
+    fail_msg: >-
+      Full maintenance is blocked without explicit approval and a maintenance window.
+
+- name: Simulate full distribution maintenance plan
+  ansible.builtin.command:
+    argv:
+      - apt-get
+      - --simulate
+      - --option=Dpkg::Options::=--force-confold
+      - dist-upgrade
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+    LC_ALL: C
+  register: os_base_full_maintenance_plan
+  changed_when: false
+  check_mode: false
+  retries: "{{ os_base_apt_retries }}"
+  delay: "{{ os_base_apt_retry_delay }}"
+  until: os_base_full_maintenance_plan is succeeded
+
+- name: Capture full maintenance package plan
+  ansible.builtin.copy:
+    dest: "{{ os_base_apt_plan_directory }}/full-maintenance-plan.txt"
+    owner: root
+    group: root
+    mode: "0640"
+    content: |
+      Maintenance window: {{ os_base_maintenance_window }}
+      {{ os_base_full_maintenance_plan.stdout }}
+      {{ os_base_full_maintenance_plan.stderr }}
+
+- name: Apply approved full distribution upgrade
+  ansible.builtin.apt:
+    upgrade: dist
+    dpkg_options: force-confdef,force-confold
+    lock_timeout: "{{ os_base_apt_lock_timeout }}"
+  register: os_base_full_maintenance_result
+  retries: "{{ os_base_apt_retries }}"
+  delay: "{{ os_base_apt_retry_delay }}"
+  until: os_base_full_maintenance_result is succeeded
+
+- name: Simulate separately approved autoremove and purge plan
+  ansible.builtin.command:
+    argv:
+      - apt-get
+      - --simulate
+      - --purge
+      - autoremove
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+    LC_ALL: C
+  register: os_base_autoremove_plan
+  changed_when: false
+  check_mode: false
+  retries: "{{ os_base_apt_retries }}"
+  delay: "{{ os_base_apt_retry_delay }}"
+  until: os_base_autoremove_plan is succeeded
+  when:
+    - os_base_maintenance_autoremove | bool
+    - os_base_maintenance_removals_approved | bool
+
+- name: Persist separate autoremove and purge plan
+  ansible.builtin.copy:
+    dest: "{{ os_base_apt_plan_directory }}/full-maintenance-autoremove-plan.txt"
+    owner: root
+    group: root
+    mode: "0640"
+    content: |
+      Maintenance window: {{ os_base_maintenance_window }}
+      Removal approval: explicit
+      {{ os_base_autoremove_plan.stdout }}
+      {{ os_base_autoremove_plan.stderr }}
+  when:
+    - os_base_maintenance_autoremove | bool
+    - os_base_maintenance_removals_approved | bool
+
+- name: Remove unused packages during approved maintenance
+  ansible.builtin.apt:
+    autoremove: true
+    purge: true
+    lock_timeout: "{{ os_base_apt_lock_timeout }}"
+  register: os_base_maintenance_autoremove_result
+  retries: "{{ os_base_apt_retries }}"
+  delay: "{{ os_base_apt_retry_delay }}"
+  until: os_base_maintenance_autoremove_result is succeeded
+  when:
+    - os_base_maintenance_autoremove | bool
+    - os_base_maintenance_removals_approved | bool
+
+- name: Clean obsolete package files during approved maintenance
+  ansible.builtin.apt:
+    autoclean: true
+    lock_timeout: "{{ os_base_apt_lock_timeout }}"
+  when: os_base_maintenance_autoclean | bool
+
+- name: Record full maintenance execution result
+  ansible.builtin.set_fact:
+    os_base_package_operation_performed: >-
+      {{
+        os_base_full_maintenance_result.changed
+        or (os_base_maintenance_autoremove_result.changed | default(false))
+      }}

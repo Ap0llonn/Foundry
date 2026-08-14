@@ -1,0 +1,78 @@
+---
+- name: Read effective unattended-upgrade origin policy
+  ansible.builtin.command:
+    argv: [apt-config, dump]
+  register: os_base_effective_apt_configuration
+  changed_when: false
+  check_mode: false
+
+- name: Resolve effective immediate-patching origin lists
+  ansible.builtin.set_fact:
+    os_base_effective_security_origins: >-
+      {{
+        os_base_effective_apt_configuration.stdout
+        | regex_findall('(?m)^Unattended-Upgrade::Origins-Pattern::[ \t]+"([^"]+)";$')
+      }}
+    os_base_effective_legacy_security_origins: >-
+      {{
+        os_base_effective_apt_configuration.stdout
+        | regex_findall('(?m)^Unattended-Upgrade::Allowed-Origins::[ \t]+"([^"]+)";$')
+      }}
+
+- name: Require an exclusive approved security-origin allowlist
+  ansible.builtin.assert:
+    that:
+      - os_base_effective_security_origins | sort == os_base_apt_security_origins | sort
+      - os_base_effective_legacy_security_origins | length == 0
+    fail_msg: >-
+      Effective unattended-upgrade origins are not exactly the Foundry
+      allowlist; refusing immediate security patching.
+
+- name: Simulate approved security patching plan
+  ansible.builtin.command:
+    argv:
+      - unattended-upgrade
+      - --dry-run
+      - --debug
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+    LC_ALL: C
+  register: os_base_security_patch_plan
+  changed_when: false
+  check_mode: false
+  retries: "{{ os_base_apt_retries }}"
+  delay: "{{ os_base_apt_retry_delay }}"
+  until: os_base_security_patch_plan is succeeded
+
+- name: Capture approved security patching plan
+  ansible.builtin.copy:
+    dest: "{{ os_base_apt_plan_directory }}/security-patching-plan.txt"
+    owner: root
+    group: root
+    mode: "0640"
+    content: "{{ os_base_security_patch_plan.stdout }}\n{{ os_base_security_patch_plan.stderr }}\n"
+
+- name: Apply approved security patches
+  ansible.builtin.command:
+    argv:
+      - unattended-upgrade
+      - --verbose
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+    LC_ALL: C
+  register: os_base_security_patch_result
+  changed_when: >-
+    os_base_security_patch_result.stdout
+    is not search('No packages found that can be upgraded unattended')
+  retries: "{{ os_base_apt_retries }}"
+  delay: "{{ os_base_apt_retry_delay }}"
+  until: os_base_security_patch_result is succeeded
+  when: not ansible_check_mode
+
+- name: Record security patch execution result
+  ansible.builtin.set_fact:
+    os_base_package_operation_performed: >-
+      {{
+        (os_base_security_patch_result.changed | default(false))
+        if not ansible_check_mode else false
+      }}

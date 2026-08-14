@@ -1,0 +1,26 @@
+---
+# Only resources recorded in Foundry's manifest may be removed. Files, keyrings,
+# and holds created by administrators or other tooling are never enumerated.
+- name: Remove stale Foundry-owned repository files
+  ansible.builtin.file:
+    path: "/etc/apt/sources.list.d/{{ item }}"
+    state: absent
+  loop: "{{ os_base_stale_owned_repositories }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Remove stale Foundry-owned keyrings
+  ansible.builtin.file:
+    path: "/usr/share/keyrings/{{ item }}"
+    state: absent
+  loop: "{{ os_base_stale_owned_keyrings }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Release stale Foundry-owned package holds
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: install
+  loop: "{{ os_base_stale_owned_holds }}"
+  loop_control:
+    label: "{{ item }}"

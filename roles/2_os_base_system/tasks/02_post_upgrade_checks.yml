@@ -1,0 +1,57 @@
+---
+- name: Audit package database after package operation
+  ansible.builtin.command:
+    argv: [dpkg, --audit]
+  register: os_base_dpkg_audit
+  changed_when: false
+  check_mode: false
+
+- name: Require a consistent package database
+  ansible.builtin.assert:
+    that:
+      - os_base_dpkg_audit.stdout | trim | length == 0
+    fail_msg: "dpkg reports incomplete or inconsistent package state."
+
+- name: Inspect failed systemd units after package operation
+  ansible.builtin.command:
+    argv: [systemctl, --failed, --no-legend, --plain]
+  register: os_base_failed_units_after_upgrade
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Enforce post-upgrade systemd health gate
+  ansible.builtin.assert:
+    that:
+      - os_base_failed_units_after_upgrade.stdout | trim | length == 0
+    fail_msg: >-
+      Failed systemd units detected after package operation:
+      {{ os_base_failed_units_after_upgrade.stdout | trim }}
+  when: os_base_fail_on_systemd_failed_units | bool
+
+- name: Inspect services and sessions requiring restart
+  ansible.builtin.command:
+    argv: [needrestart, -b]
+  environment:
+    LC_ALL: C
+  register: os_base_needrestart_check
+  changed_when: false
+  failed_when: os_base_needrestart_check.rc not in [0, 1]
+  check_mode: false
+
+- name: Persist actionable needrestart report
+  ansible.builtin.copy:
+    dest: "{{ os_base_apt_plan_directory }}/needrestart-report.txt"
+    owner: root
+    group: root
+    mode: "0640"
+    content: |
+      {{ os_base_needrestart_check.stdout }}
+      {{ os_base_needrestart_check.stderr }}
+
+- name: Report needrestart evidence path
+  ansible.builtin.debug:
+    msg: >-
+      Service/session restart evidence is stored in
+      {{ os_base_apt_plan_directory }}/needrestart-report.txt; Foundry did not
+      restart arbitrary workload services.

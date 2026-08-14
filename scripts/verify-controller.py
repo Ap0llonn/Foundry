@@ -76,6 +76,22 @@ subprocess.run(
     check=True,
     cwd=ROOT,
 )
+subprocess.run(
+    [
+        str(ansible_playbook),
+        "--syntax-check",
+        "-i",
+        "localhost,",
+        "roles/2_os_base_system/tests/syntax.yml",
+    ],
+    check=True,
+    cwd=ROOT,
+)
+subprocess.run(
+    [sys.executable, "scripts/verify-os-role-policy.py"],
+    check=True,
+    cwd=ROOT,
+)
 
 print(
     f"Controller verified: Python {expected_python}, "

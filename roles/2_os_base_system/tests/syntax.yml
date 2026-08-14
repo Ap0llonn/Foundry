@@ -1,0 +1,62 @@
+---
+- name: Parse detached controlled reboot phase
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Import detached reboot task file
+      ansible.builtin.import_role:
+        name: 2_os_base_system
+        tasks_from: 10_controlled_reboot
+
+- name: Parse dynamic service helper
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Import service reconciliation helper
+      ansible.builtin.import_role:
+        name: 2_os_base_system
+        tasks_from: manage_service
+
+- name: Parse dynamic validation helpers
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Import mount validation helper
+      ansible.builtin.import_role:
+        name: 2_os_base_system
+        tasks_from: validate_mount
+
+    - name: Import capacity validation helper
+      ansible.builtin.import_role:
+        name: 2_os_base_system
+        tasks_from: validate_capacity
+
+    - name: Import service validation helper
+      ansible.builtin.import_role:
+        name: 2_os_base_system
+        tasks_from: validate_service
+
+    - name: Import global fstab validation helper
+      ansible.builtin.import_role:
+        name: 2_os_base_system
+        tasks_from: validate_fstab
+
+    - name: Import swap validation helper
+      ansible.builtin.import_role:
+        name: 2_os_base_system
+        tasks_from: validate_swap
+
+    - name: Import time validation helper
+      ansible.builtin.import_role:
+        name: 2_os_base_system
+        tasks_from: validate_time
+
+    - name: Import time-source resolution helper
+      ansible.builtin.import_role:
+        name: 2_os_base_system
+        tasks_from: resolve_time_source
+
+    - name: Import host-identity validation helper
+      ansible.builtin.import_role:
+        name: 2_os_base_system
+        tasks_from: validate_host_identity

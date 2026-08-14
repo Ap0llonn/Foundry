@@ -11,3 +11,8 @@
   ansible.builtin.apt:
     name: "{{ os_base_packages }}"
     state: present
+    lock_timeout: "{{ os_base_apt_lock_timeout }}"
+  register: os_base_package_install_result
+  retries: "{{ os_base_apt_retries }}"
+  delay: "{{ os_base_apt_retry_delay }}"
+  until: os_base_package_install_result is succeeded

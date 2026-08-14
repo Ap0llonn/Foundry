@@ -156,10 +156,10 @@
     that:
       - security_resolved.updates.automatic_security_updates is boolean
       - security_resolved.updates.automatic_reboot is boolean
-      - >-
-        not security_resolved.updates.automatic_reboot
-        or security_resolved.updates.automatic_security_updates
-    fail_msg: "Automatic reboot requires automatic security updates."
+      - not security_resolved.updates.automatic_reboot
+    fail_msg: >-
+      security.updates.automatic_reboot must remain false. Foundry routes every
+      reboot through the explicitly approved, final os_reboot health-gated phase.
 
 - name: Inspect active provisioning account
   ansible.builtin.getent:

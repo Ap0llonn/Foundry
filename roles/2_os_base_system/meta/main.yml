@@ -1,0 +1,11 @@
+---
+galaxy_info:
+  role_name: os_base_system
+  author: Foundry
+  description: Foundry OS and base-system convergence layer
+  min_ansible_version: "2.21"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - "26.04"
+dependencies: []

@@ -5,35 +5,154 @@
       - min
       - hardware
 
-- name: Validate supported distribution
-  ansible.builtin.assert:
-    that:
-      - ansible_distribution in os_base_supported_versions
-    fail_msg: >-
-      Unsupported distribution: {{ ansible_distribution }}.
-      Supported distributions: {{ os_base_supported_versions.keys() | list | join(', ') }}.
-    success_msg: "Supported distribution: {{ ansible_distribution }}"
+- name: Select supported platform declarations
+  ansible.builtin.set_fact:
+    os_base_matching_platforms: >-
+      {{
+        os_base_supported_platforms
+        | selectattr('distribution', 'equalto', ansible_facts['distribution'])
+        | list
+      }}
 
-- name: Validate supported distribution version
+- name: Validate end-to-end supported platform
   ansible.builtin.assert:
     that:
-      - (ansible_distribution_major_version | string) in os_base_supported_versions[ansible_distribution]
+      - os_base_matching_platforms | length == 1
+      - >-
+        (ansible_facts['distribution_version'] | string)
+        in os_base_matching_platforms[0].versions
+      - ansible_facts['architecture'] in os_base_matching_platforms[0].architectures
+      - ansible_facts['pkg_mgr'] == 'apt'
     fail_msg: >-
-      Unsupported {{ ansible_distribution }} version: {{ ansible_distribution_version }}.
-      Supported major versions: {{ os_base_supported_versions[ansible_distribution] | join(', ') }}.
-    success_msg: "Supported version: {{ ansible_distribution_version }}"
+      Unsupported platform {{ ansible_facts['distribution'] }}
+      {{ ansible_facts['distribution_version'] }} / {{ ansible_facts['architecture'] }}.
+      Foundry OS and security provisioning currently supports only the exact
+      Ubuntu combinations declared in os_base_supported_platforms.
+    success_msg: >-
+      Supported platform: {{ ansible_facts['distribution'] }}
+      {{ ansible_facts['distribution_version'] }} / {{ ansible_facts['architecture'] }}.
 
-- name: Validate supported CPU architecture
+- name: Validate package lifecycle policy
   ansible.builtin.assert:
     that:
-      - ansible_architecture in os_base_supported_architectures
+      - os_base_operation_mode in os_base_allowed_operation_modes
+      - os_base_apt_cache_valid_time | int >= 0
+      - os_base_apt_lock_timeout | int > 0
+      - os_base_apt_retries | int > 0
+      - os_base_apt_retry_delay | int >= 0
+      - os_base_needrestart_mode in os_base_allowed_needrestart_modes
+      - os_base_apt_proxy is mapping
+      - os_base_apt_proxy.no_proxy | default([]) is sequence
+      - os_base_apt_proxy.no_proxy | default([]) is not string
+      - os_base_apt_holds is sequence
+      - os_base_apt_holds is not string
+      - os_base_apt_keyrings is sequence
+      - os_base_apt_keyrings is not string
+      - os_base_apt_repositories is sequence
+      - os_base_apt_repositories is not string
+      - os_base_apt_security_origins is sequence
+      - os_base_apt_security_origins is not string
+      - os_base_apt_security_origins | length > 0
+      - os_base_apt_ownership_manifest is match('^/var/lib/foundry/os-base/[A-Za-z0-9_.-]+$')
+      - os_base_apt_keyrings | map(attribute='name') | list | unique | length == os_base_apt_keyrings | length
+      - os_base_apt_repositories | map(attribute='name') | list | unique | length == os_base_apt_repositories | length
+      - os_base_apt_holds | unique | length == os_base_apt_holds | length
+    fail_msg: "Invalid OS package lifecycle, APT, or needrestart configuration."
+
+- name: Require explicit approval for full maintenance
+  ansible.builtin.assert:
+    that:
+      - os_base_maintenance_approved | bool
+      - os_base_maintenance_window | string | trim | length > 0
     fail_msg: >-
-      Unsupported CPU architecture: {{ ansible_architecture }}.
-      Supported architectures: {{ os_base_supported_architectures | join(', ') }}.
-    success_msg: "Supported CPU architecture: {{ ansible_architecture }}"
+      full_maintenance requires os_base_maintenance_approved=true and a
+      non-empty os_base_maintenance_window identifier.
+  when: os_base_operation_mode == 'full_maintenance'
 
-- name: Validate APT package manager availability
+- name: Require separate approval for maintenance removals
   ansible.builtin.assert:
     that:
-      - ansible_pkg_mgr == 'apt'
-    fail_msg: "This baseline currently requires APT; detected: {{ ansible_pkg_mgr }}."
+      - os_base_maintenance_removals_approved | bool
+    fail_msg: >-
+      Package autoremove/purge requires os_base_maintenance_removals_approved=true.
+  when:
+    - os_base_operation_mode == 'full_maintenance'
+    - os_base_maintenance_autoremove | bool
+
+- name: Validate custom repository keyrings
+  ansible.builtin.assert:
+    that:
+      - item.name is defined
+      - item.name is match('^[A-Za-z0-9][A-Za-z0-9_.-]*$')
+      - item.url is defined
+      - item.url is match('^https://')
+      - item.checksum is defined
+      - item.checksum is match('^sha256:[A-Fa-f0-9]{64}$')
+    fail_msg: >-
+      Every APT keyring needs a safe name, HTTPS URL, and pinned SHA-256 checksum.
+  loop: "{{ os_base_apt_keyrings }}"
+  loop_control:
+    label: "{{ item.name | default('undefined') }}"
+
+- name: Build checksum-pinned keyring allowlist
+  ansible.builtin.set_fact:
+    os_base_declared_keyring_paths: >-
+      {{
+        os_base_apt_keyrings
+        | map(attribute='name')
+        | map('regex_replace', '^', '/usr/share/keyrings/')
+        | list
+      }}
+
+- name: Validate custom signed repositories
+  ansible.builtin.assert:
+    that:
+      - item.name is defined
+      - item.name is match('^[A-Za-z0-9][A-Za-z0-9_.-]*$')
+      - item.uris is defined
+      - item.uris is sequence
+      - item.uris is not string
+      - item.suites is defined
+      - item.suites is sequence
+      - item.suites is not string
+      - item.components is defined
+      - item.components is sequence
+      - item.components is not string
+      - >-
+        (item.state | default('present')) == 'absent'
+        or item.signed_by | default('') in os_base_declared_keyring_paths
+      - (item.state | default('present')) in ['present', 'absent']
+    fail_msg: >-
+      Every enabled custom APT repository must use a dedicated signed-by keyring.
+  loop: "{{ os_base_apt_repositories }}"
+  loop_control:
+    label: "{{ item.name | default('undefined') }}"
+
+- name: Validate Foundry-owned package hold names
+  ansible.builtin.assert:
+    that:
+      - item is match('^[A-Za-z0-9][A-Za-z0-9+.:~-]*$')
+    fail_msg: "Invalid APT package hold name: {{ item }}."
+  loop: "{{ os_base_apt_holds }}"
+
+- name: Require expected addresses for reverse DNS validation
+  ansible.builtin.assert:
+    that:
+      - os_base_hostname_validate_dns | bool
+      - os_base_hostname_expected_addresses | length > 0
+    fail_msg: >-
+      Reverse DNS validation requires forward DNS validation and explicit expected addresses.
+  when: os_base_hostname_validate_reverse_dns | bool
+
+- name: Validate reboot authorization policy
+  ansible.builtin.assert:
+    that:
+      - not (os_base_reboot_enabled | bool) or (os_base_reboot_approved | bool)
+      - os_base_reboot_timeout | int > 0
+      - os_base_reboot_connect_timeout | int > 0
+      - os_base_reboot_precheck_commands is sequence
+      - os_base_reboot_precheck_commands is not string
+      - os_base_reboot_postcheck_commands is sequence
+      - os_base_reboot_postcheck_commands is not string
+    fail_msg: >-
+      Enabling reboot requires os_base_reboot_approved=true and valid timeout/check lists.

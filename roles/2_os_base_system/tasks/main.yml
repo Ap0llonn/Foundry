@@ -5,7 +5,12 @@
 
 - name: 2.1 OS validation
   ansible.builtin.import_tasks: 01_os_validation.yml
-  tags: [os_base, os_validation]
+  tags:
+    - os_base
+    - os_validation
+    - os_bootstrap
+    - os_security_patching
+    - os_full_maintenance
 
 - name: 2.2 Package management
   ansible.builtin.import_tasks: 02_package_management.yml

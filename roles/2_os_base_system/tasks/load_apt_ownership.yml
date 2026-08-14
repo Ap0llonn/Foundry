@@ -1,0 +1,90 @@
+---
+- name: Inspect Foundry APT ownership manifest
+  ansible.builtin.stat:
+    path: "{{ os_base_apt_ownership_manifest }}"
+  register: os_base_apt_manifest_stat
+
+- name: Read Foundry APT ownership manifest
+  ansible.builtin.slurp:
+    src: "{{ os_base_apt_ownership_manifest }}"
+  register: os_base_apt_manifest_raw
+  when: os_base_apt_manifest_stat.stat.exists
+
+- name: Decode previous Foundry APT ownership
+  ansible.builtin.set_fact:
+    os_base_previous_apt_ownership: >-
+      {{
+        (os_base_apt_manifest_raw.content | b64decode | from_yaml)
+        if os_base_apt_manifest_stat.stat.exists
+        else {'version': 1, 'keyrings': [], 'repositories': [], 'holds': []}
+      }}
+
+- name: Validate previous APT ownership manifest structure
+  ansible.builtin.assert:
+    that:
+      - os_base_previous_apt_ownership is mapping
+      - os_base_previous_apt_ownership.version | default(0) | int == 1
+      - os_base_previous_apt_ownership.keyrings | default([]) is sequence
+      - os_base_previous_apt_ownership.repositories | default([]) is sequence
+      - os_base_previous_apt_ownership.holds | default([]) is sequence
+      - >-
+        os_base_previous_apt_ownership.keyrings | default([])
+        | select('match', '^[A-Za-z0-9][A-Za-z0-9_.-]*$')
+        | list | length
+        == os_base_previous_apt_ownership.keyrings | default([]) | length
+      - >-
+        os_base_previous_apt_ownership.repositories | default([])
+        | select('match', '^foundry-[A-Za-z0-9][A-Za-z0-9_.-]*\\.sources$')
+        | list | length
+        == os_base_previous_apt_ownership.repositories | default([]) | length
+      - >-
+        os_base_previous_apt_ownership.holds | default([])
+        | select('match', '^[A-Za-z0-9][A-Za-z0-9+.:~-]*$')
+        | list | length
+        == os_base_previous_apt_ownership.holds | default([]) | length
+    fail_msg: >-
+      Refusing APT reconciliation because the Foundry ownership manifest is invalid.
+
+- name: Build current Foundry APT ownership
+  ansible.builtin.set_fact:
+    os_base_current_owned_keyrings: >-
+      {{ os_base_apt_keyrings | map(attribute='name') | unique | sort | list }}
+    os_base_current_owned_repositories: []
+    os_base_present_apt_repositories: []
+
+- name: Accumulate present Foundry repository ownership
+  ansible.builtin.set_fact:
+    os_base_current_owned_repositories: >-
+      {{
+        os_base_current_owned_repositories
+        + ['foundry-' + item.name + '.sources']
+      }}
+    os_base_present_apt_repositories: "{{ os_base_present_apt_repositories + [item] }}"
+  loop: "{{ os_base_apt_repositories }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.state | default('present') == 'present'
+
+- name: Record Foundry-owned distribution source
+  ansible.builtin.set_fact:
+    os_base_current_owned_repositories: >-
+      {{ os_base_current_owned_repositories + ['foundry-ubuntu.sources'] }}
+  when: os_base_apt_manage_distribution_sources | bool
+
+- name: Calculate stale Foundry APT resources
+  ansible.builtin.set_fact:
+    os_base_stale_owned_keyrings: >-
+      {{
+        os_base_previous_apt_ownership.keyrings | default([])
+        | difference(os_base_current_owned_keyrings)
+      }}
+    os_base_stale_owned_repositories: >-
+      {{
+        os_base_previous_apt_ownership.repositories | default([])
+        | difference(os_base_current_owned_repositories)
+      }}
+    os_base_stale_owned_holds: >-
+      {{
+        os_base_previous_apt_ownership.holds | default([])
+        | difference(os_base_apt_holds)
+      }}

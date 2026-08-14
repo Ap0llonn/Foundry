@@ -147,6 +147,9 @@
 - name: Standardize infrastructure
   hosts: all
   gather_facts: false
+  # Maintenance and reboot operations are deliberately rolling. This is also
+  # the safe default when more VMs are added to the inventory later.
+  serial: 1
 
   vars_files:
     - config.yml
@@ -155,10 +158,23 @@
   # à mesure qu'elles seront implémentées.
   roles:
     - role: 2_os_base_system
-      tags: [os_base]
+      # Operation tags intentionally select the complete OS convergence and
+      # validation path. The configured mode still controls package mutation.
+      tags: [os_base, os_bootstrap, os_security_patching, os_full_maintenance, os_reboot]
 
     - role: 3_identity_access
       tags: [identity_access]
 
     - role: 4_security
       tags: [security]
+
+  post_tasks:
+    - name: Run explicitly approved controlled reboot as the final phase
+      ansible.builtin.include_role:
+        name: 2_os_base_system
+        tasks_from: 10_controlled_reboot
+        apply:
+          become: true
+          tags: [os_reboot]
+      when: os_base_reboot_enabled | default(false) | bool
+      tags: [os_base, os_reboot]

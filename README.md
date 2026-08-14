@@ -12,8 +12,11 @@ packages and collections cannot change provisioning behavior.
 - Python package versions declared in `requirements-controller.lock`
 
 The managed Linux VM must expose a Python version supported by ansible-core
-2.21. Foundry currently supports target Python `3.9` through `3.14` and tests
-the Ubuntu/Debian path implemented by the existing roles.
+2.21. Foundry currently supports target Python `3.9` through `3.14`. Managed
+host support is narrower and is published in the
+[supported-platform matrix](docs/supported-platforms.md); a distribution is not
+considered supported until the complete implemented provisioning path has been
+tested on it.
 
 ## First-time setup
 
@@ -60,6 +63,36 @@ collection directory. To validate without connecting to or modifying a VM:
 ```bash
 make check
 ```
+
+## OS lifecycle modes
+
+The OS role has three explicit modes configured in `config.yml`:
+
+- `bootstrap` installs and validates the baseline. It never performs a broad
+  upgrade, package autoremove/purge, or reboot.
+- `security_patching` applies packages only from the configured security
+  origins and records the simulated plan first.
+- `full_maintenance` performs a distribution upgrade only when
+  `os_base_maintenance_approved` is true and
+  `os_base_maintenance_window` identifies the approved window. Autoremove and
+  autoclean have separate switches, and autoremove/purge additionally requires
+  `os_base_maintenance_removals_approved`.
+
+Tags select work; they neither select the lifecycle mode nor authorize it. Set
+`os_base_operation_mode` in `config.yml` first. Maintenance still fails closed
+unless its independent configuration approval is present:
+
+```bash
+ansible-playbook playbook.yml --tags os_base
+ansible-playbook playbook.yml --tags os_security_patching
+ansible-playbook playbook.yml --tags os_full_maintenance
+```
+
+An OS-required reboot is reported by default. If reboot is explicitly enabled
+and approved, Foundry evaluates it only in the final, rolling playbook phase
+after Identity and Security have converged. See the
+[OS role guide](roles/2_os_base_system/Doc.MD) for policy examples and safety
+requirements.
 
 ## Updating dependencies
 

@@ -1,0 +1,58 @@
+---
+- name: "Read normalized service state {{ os_base_service.name }}"
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - show
+      - "{{ os_base_service.name }}"
+      - --property=LoadState
+      - --property=ActiveState
+      - --property=UnitFileState
+  register: os_base_service_validation
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: "Resolve normalized service presence {{ os_base_service.name }}"
+  ansible.builtin.set_fact:
+    os_base_service_validation_installed: >-
+      {{
+        os_base_service_validation.rc == 0
+        and 'LoadState=not-found' not in os_base_service_validation.stdout
+        and 'LoadState=' in os_base_service_validation.stdout
+      }}
+
+- name: "Validate service presence {{ os_base_service.name }}"
+  ansible.builtin.assert:
+    that:
+      - os_base_service.presence != 'required' or os_base_service_validation_installed | bool
+      - os_base_service.presence != 'forbidden' or not (os_base_service_validation_installed | bool)
+    fail_msg: "Service presence does not match policy: {{ os_base_service.name }}."
+
+- name: "Validate installed service behavior {{ os_base_service.name }}"
+  ansible.builtin.assert:
+    that:
+      - os_base_service.state != 'active' or 'ActiveState=active' in os_base_service_validation.stdout
+      - os_base_service.state != 'inactive' or 'ActiveState=active' not in os_base_service_validation.stdout
+      - >-
+        os_base_service.enabled is none
+        or not (os_base_service.enabled | bool)
+        or os_base_service_validation.stdout is search(
+          '(?m)^UnitFileState=(enabled|enabled-runtime|static|indirect|alias)$'
+        )
+      - >-
+        os_base_service.enabled is none
+        or (os_base_service.enabled | bool)
+        or os_base_service_validation.stdout is search(
+          '(?m)^UnitFileState=(disabled|static|indirect|alias|generated)$'
+        )
+        or os_base_service.masked | bool
+      - >-
+        not (os_base_service.masked | bool)
+        or os_base_service_validation.stdout is search(
+          '(?m)^UnitFileState=(masked|masked-runtime)$'
+        )
+    fail_msg: "Installed service does not match normalized policy: {{ os_base_service.name }}."
+  when:
+    - os_base_service.presence != 'forbidden'
+    - os_base_service_validation_installed | bool

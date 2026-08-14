@@ -1,0 +1,40 @@
+---
+- name: "Inspect service unit {{ os_base_service.name }}"
+  ansible.builtin.command:
+    argv: [systemctl, show, "{{ os_base_service.name }}", --property=LoadState, --value]
+  register: os_base_service_load_state
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: "Resolve service presence {{ os_base_service.name }}"
+  ansible.builtin.set_fact:
+    os_base_service_is_installed: >-
+      {{
+        os_base_service_load_state.rc == 0
+        and os_base_service_load_state.stdout | trim not in ['', 'not-found']
+      }}
+
+- name: "Require installed service {{ os_base_service.name }}"
+  ansible.builtin.assert:
+    that:
+      - os_base_service_is_installed | bool
+    fail_msg: "Required service is absent: {{ os_base_service.name }}."
+  when: os_base_service.presence == 'required'
+
+- name: "Require forbidden service absence {{ os_base_service.name }}"
+  ansible.builtin.assert:
+    that:
+      - not (os_base_service_is_installed | bool)
+    fail_msg: "Forbidden service is installed: {{ os_base_service.name }}."
+  when: os_base_service.presence == 'forbidden'
+
+- name: "Apply installed service state {{ os_base_service.name }}"
+  ansible.builtin.systemd_service:
+    name: "{{ os_base_service.name }}"
+    enabled: "{{ os_base_service.enabled if os_base_service.enabled is not none else omit }}"
+    masked: "{{ os_base_service.masked | bool }}"
+    state: "{{ 'started' if os_base_service.state == 'active' else 'stopped' }}"
+  when:
+    - os_base_service.presence != 'forbidden'
+    - os_base_service_is_installed | bool

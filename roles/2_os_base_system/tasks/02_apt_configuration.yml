@@ -1,0 +1,301 @@
+---
+- name: Ensure package state directory exists
+  ansible.builtin.file:
+    path: "{{ os_base_apt_plan_directory }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Load Foundry APT ownership state
+  ansible.builtin.import_tasks: load_apt_ownership.yml
+
+- name: Validate APT ownership boundaries before mutation
+  ansible.builtin.import_tasks: validate_apt_ownership.yml
+
+- name: Preserve previous and desired ownership during reconciliation
+  ansible.builtin.set_fact:
+    os_base_manifest_keyrings: >-
+      {{
+        (os_base_previous_apt_ownership.keyrings | default([])
+        + os_base_current_owned_keyrings) | unique | sort | list
+      }}
+    os_base_manifest_repositories: >-
+      {{
+        (os_base_previous_apt_ownership.repositories | default([])
+        + os_base_current_owned_repositories) | unique | sort | list
+      }}
+    os_base_manifest_holds: >-
+      {{
+        (os_base_previous_apt_ownership.holds | default([])
+        + os_base_apt_holds) | unique | sort | list
+      }}
+
+- name: Persist validated APT ownership intent
+  ansible.builtin.import_tasks: persist_apt_ownership.yml
+
+- name: Ensure APT trust directory exists
+  ansible.builtin.file:
+    path: /usr/share/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install pinned custom repository keyrings
+  ansible.builtin.get_url:
+    url: "{{ item.url }}"
+    dest: "/usr/share/keyrings/{{ item.name }}"
+    checksum: "{{ item.checksum }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ os_base_apt_keyrings }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Configure APT proxy policy
+  no_log: true
+  diff: false
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/90foundry-proxy
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      {% if os_base_apt_proxy.http | default('') | length > 0 %}
+      Acquire::http::Proxy "{{ os_base_apt_proxy.http }}";
+      {% endif %}
+      {% if os_base_apt_proxy.https | default('') | length > 0 %}
+      Acquire::https::Proxy "{{ os_base_apt_proxy.https }}";
+      {% endif %}
+      {% for host in os_base_apt_proxy.no_proxy | default([]) %}
+      Acquire::http::Proxy::{{ host }} "DIRECT";
+      Acquire::https::Proxy::{{ host }} "DIRECT";
+      {% endfor %}
+  when: >-
+    os_base_apt_proxy.http | default('') | length > 0
+    or os_base_apt_proxy.https | default('') | length > 0
+    or os_base_apt_proxy.no_proxy | default([]) | length > 0
+
+- name: Remove obsolete Foundry APT proxy policy
+  no_log: true
+  diff: false
+  ansible.builtin.file:
+    path: /etc/apt/apt.conf.d/90foundry-proxy
+    state: absent
+  when:
+    - os_base_apt_proxy.http | default('') | length == 0
+    - os_base_apt_proxy.https | default('') | length == 0
+    - os_base_apt_proxy.no_proxy | default([]) | length == 0
+
+- name: Install Foundry-owned Ubuntu mirror definition
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/foundry-ubuntu.sources
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      Types: deb
+      URIs: {{ os_base_apt_mirror if ansible_facts['architecture'] == 'x86_64' else os_base_apt_ports_mirror }}
+      Suites: {{ ansible_facts['distribution_release'] }} {{ ansible_facts['distribution_release'] }}-updates
+      Components: {{ os_base_apt_components | join(' ') }}
+      Signed-By: {{ os_base_apt_distribution_keyring }}
+
+      Types: deb
+      URIs: {{ os_base_apt_security_mirror if ansible_facts['architecture'] == 'x86_64' else os_base_apt_ports_mirror }}
+      Suites: {{ ansible_facts['distribution_release'] }}-security
+      Components: {{ os_base_apt_components | join(' ') }}
+      Signed-By: {{ os_base_apt_distribution_keyring }}
+  when: os_base_apt_manage_distribution_sources | bool
+
+- name: Inspect vendor Ubuntu source definition
+  ansible.builtin.stat:
+    path: /etc/apt/sources.list.d/ubuntu.sources
+  register: os_base_vendor_ubuntu_sources
+
+- name: Preserve vendor Ubuntu source definition before taking ownership
+  ansible.builtin.copy:
+    src: /etc/apt/sources.list.d/ubuntu.sources
+    dest: /etc/apt/sources.list.d/ubuntu.sources.foundry-disabled
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+    force: false
+  when:
+    - os_base_apt_manage_distribution_sources | bool
+    - os_base_vendor_ubuntu_sources.stat.exists
+
+- name: Disable vendor Ubuntu source definition when Foundry owns mirrors
+  ansible.builtin.file:
+    path: /etc/apt/sources.list.d/ubuntu.sources
+    state: absent
+  when: os_base_apt_manage_distribution_sources | bool
+
+- name: Inspect legacy distribution source list
+  ansible.builtin.stat:
+    path: /etc/apt/sources.list
+  register: os_base_legacy_ubuntu_sources
+
+- name: Preserve legacy source list before taking ownership
+  ansible.builtin.copy:
+    src: /etc/apt/sources.list
+    dest: /etc/apt/sources.list.foundry-disabled
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+    force: false
+  when:
+    - os_base_apt_manage_distribution_sources | bool
+    - os_base_legacy_ubuntu_sources.stat.exists
+
+- name: Own legacy distribution source list when Foundry owns mirrors
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list
+    owner: root
+    group: root
+    mode: "0644"
+    content: "# Distribution repositories are managed by Foundry.\n"
+  when: os_base_apt_manage_distribution_sources | bool
+
+- name: Inspect preserved vendor source definition
+  ansible.builtin.stat:
+    path: /etc/apt/sources.list.d/ubuntu.sources.foundry-disabled
+  register: os_base_preserved_vendor_sources
+  when: not (os_base_apt_manage_distribution_sources | bool)
+
+- name: Restore vendor source definition when Foundry releases ownership
+  ansible.builtin.copy:
+    src: /etc/apt/sources.list.d/ubuntu.sources.foundry-disabled
+    dest: /etc/apt/sources.list.d/ubuntu.sources
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - not (os_base_apt_manage_distribution_sources | bool)
+    - os_base_preserved_vendor_sources.stat.exists | default(false)
+
+- name: Inspect preserved legacy source list
+  ansible.builtin.stat:
+    path: /etc/apt/sources.list.foundry-disabled
+  register: os_base_preserved_legacy_sources
+  when: not (os_base_apt_manage_distribution_sources | bool)
+
+- name: Restore legacy source list when Foundry releases ownership
+  ansible.builtin.copy:
+    src: /etc/apt/sources.list.foundry-disabled
+    dest: /etc/apt/sources.list
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - not (os_base_apt_manage_distribution_sources | bool)
+    - os_base_preserved_legacy_sources.stat.exists | default(false)
+
+- name: Reconcile stale Foundry-owned APT resources
+  ansible.builtin.import_tasks: reconcile_apt_ownership.yml
+
+- name: Refresh APT package metadata with lock retries
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: "{{ os_base_apt_cache_valid_time }}"
+    lock_timeout: "{{ os_base_apt_lock_timeout }}"
+  register: os_base_apt_cache_result
+  retries: "{{ os_base_apt_retries }}"
+  delay: "{{ os_base_apt_retry_delay }}"
+  until: os_base_apt_cache_result is succeeded
+
+- name: Install package lifecycle safety tools
+  ansible.builtin.apt:
+    name: "{{ os_base_package_control_packages }}"
+    state: present
+    lock_timeout: "{{ os_base_apt_lock_timeout }}"
+  register: os_base_package_control_result
+  retries: "{{ os_base_apt_retries }}"
+  delay: "{{ os_base_apt_retry_delay }}"
+  until: os_base_package_control_result is succeeded
+
+- name: Configure custom signed APT repositories
+  ansible.builtin.deb822_repository:
+    name: "foundry-{{ item.name }}"
+    types: "{{ item.types | default(['deb']) }}"
+    uris: "{{ item.uris }}"
+    suites: "{{ item.suites }}"
+    components: "{{ item.components }}"
+    architectures: "{{ item.architectures | default(omit) }}"
+    signed_by: "{{ item.signed_by | default(omit) }}"
+    state: "{{ item.state | default('present') }}"
+    install_python_debian: false
+    mode: "0644"
+  loop: "{{ os_base_present_apt_repositories }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Refresh APT metadata after repository changes
+  ansible.builtin.apt:
+    update_cache: true
+    lock_timeout: "{{ os_base_apt_lock_timeout }}"
+  register: os_base_custom_repository_cache_result
+  retries: "{{ os_base_apt_retries }}"
+  delay: "{{ os_base_apt_retry_delay }}"
+  until: os_base_custom_repository_cache_result is succeeded
+  when: os_base_present_apt_repositories | length > 0
+
+- name: Apply explicit APT package holds
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop: "{{ os_base_apt_holds }}"
+
+- name: Ensure needrestart configuration directory exists
+  ansible.builtin.file:
+    path: /etc/needrestart/conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Configure non-interactive needrestart policy
+  ansible.builtin.copy:
+    dest: /etc/needrestart/conf.d/99-foundry.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Foundry reports required restarts but never restarts arbitrary services.
+      $nrconf{restart} = 'l';
+
+- name: Configure approved security update origins
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/99foundry-security-upgrades
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      // Foundry owns the complete immediate-patching allowlist. APT list
+      // fragments are additive, so clear vendor/external entries first.
+      #clear Unattended-Upgrade::Allowed-Origins;
+      #clear Unattended-Upgrade::Origins-Pattern;
+      Unattended-Upgrade::Origins-Pattern {
+      {% for origin in os_base_apt_security_origins %}
+        "{{ origin }}";
+      {% endfor %}
+      };
+      Unattended-Upgrade::Remove-Unused-Dependencies "false";
+      Unattended-Upgrade::Automatic-Reboot "false";
+
+- name: Remove obsolete non-exclusive Foundry security origin policy
+  ansible.builtin.file:
+    path: /etc/apt/apt.conf.d/52foundry-security-upgrades
+    state: absent
+
+- name: Persist Foundry APT ownership state
+  vars:
+    os_base_manifest_keyrings: "{{ os_base_current_owned_keyrings }}"
+    os_base_manifest_repositories: "{{ os_base_current_owned_repositories }}"
+    os_base_manifest_holds: "{{ os_base_apt_holds }}"
+  ansible.builtin.import_tasks: persist_apt_ownership.yml

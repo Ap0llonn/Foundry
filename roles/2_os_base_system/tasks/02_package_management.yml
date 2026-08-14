@@ -1,21 +1,38 @@
 ---
-- name: Refresh APT package cache
-  ansible.builtin.apt:
-    update_cache: true
-    cache_valid_time: "{{ os_base_apt_cache_valid_time }}"
+# Package management is intentionally split into configuration, planning,
+# execution, and health gates. The selected mode is always explicit.
+- name: Initialize package lifecycle result
+  ansible.builtin.set_fact:
+    os_base_package_operation_performed: false
 
-- name: Upgrade installed packages
-  ansible.builtin.apt:
-    upgrade: "{{ os_base_apt_upgrade_mode }}"
-  when: os_base_upgrade_packages | bool
+- name: Guard full maintenance before package configuration
+  ansible.builtin.assert:
+    that:
+      - os_base_maintenance_approved | bool
+      - os_base_maintenance_window | string | trim | length > 0
+      - >-
+        not (os_base_maintenance_autoremove | bool)
+        or (os_base_maintenance_removals_approved | bool)
+    fail_msg: >-
+      Full maintenance is blocked without explicit approval and a maintenance window.
+  when: os_base_operation_mode == 'full_maintenance'
+  tags: [os_full_maintenance]
 
-- name: Remove packages that are no longer required
-  ansible.builtin.apt:
-    autoremove: true
-    purge: true
-  when: os_base_autoremove_packages | bool
+- name: Configure trusted APT package management
+  ansible.builtin.import_tasks: 02_apt_configuration.yml
+  tags: [os_bootstrap, os_security_patching, os_full_maintenance]
 
-- name: Clean obsolete APT package files
-  ansible.builtin.apt:
-    autoclean: true
-  when: os_base_autoclean_packages | bool
+- name: Run security-only patching mode
+  ansible.builtin.import_tasks: 02_security_patching.yml
+  when: os_base_operation_mode == 'security_patching'
+  tags: [os_security_patching]
+
+- name: Run approved full-maintenance mode
+  ansible.builtin.import_tasks: 02_full_maintenance.yml
+  when: os_base_operation_mode == 'full_maintenance'
+  tags: [os_full_maintenance]
+
+- name: Run post-package health gates
+  ansible.builtin.import_tasks: 02_post_upgrade_checks.yml
+  when: os_base_operation_mode in ['security_patching', 'full_maintenance']
+  tags: [os_security_patching, os_full_maintenance]

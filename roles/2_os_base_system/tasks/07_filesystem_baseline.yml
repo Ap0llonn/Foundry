@@ -1,14 +1,58 @@
 ---
-- name: Validate filesystem baseline definitions
+- name: Validate filesystem and swap policy containers
   ansible.builtin.assert:
     that:
       - os_base_mounts is sequence
       - os_base_mounts is not string
       - os_base_directories is sequence
       - os_base_directories is not string
-    fail_msg: "os_base_mounts and os_base_directories must be lists."
+      - os_base_swap_policy in os_base_allowed_swap_policies
+      - os_base_swap_minimum_mb | int >= 0
+      - os_base_min_free_percent | int >= 0
+      - os_base_min_free_percent | int < 100
+      - os_base_min_free_inodes_percent | int >= 0
+      - os_base_min_free_inodes_percent | int < 100
+      - os_base_mount_forbidden_options is sequence
+      - os_base_mount_forbidden_options is not string
+    fail_msg: "Invalid filesystem, capacity, inode, or swap baseline policy."
 
-- name: Configure required filesystems and mounts
+- name: Validate mount declarations
+  ansible.builtin.assert:
+    that:
+      - item.path is defined
+      - item.path is match('^/')
+      - item.src is defined
+      - item.src | string | length > 0
+      - item.fstype is defined
+      - item.fstype | string | length > 0
+      - item.state | default('mounted') in ['mounted', 'present', 'unmounted', 'absent']
+      - item.min_free_percent | default(os_base_min_free_percent) | int >= 0
+      - item.min_free_percent | default(os_base_min_free_percent) | int < 100
+      - item.min_free_inodes_percent | default(os_base_min_free_inodes_percent) | int >= 0
+      - item.min_free_inodes_percent | default(os_base_min_free_inodes_percent) | int < 100
+      - item.forbidden_opts | default(os_base_mount_forbidden_options) is sequence
+      - item.forbidden_opts | default(os_base_mount_forbidden_options) is not string
+      - >-
+        item.opts | default('defaults') | split(',')
+        | intersect(item.forbidden_opts | default(os_base_mount_forbidden_options))
+        | length == 0
+    fail_msg: "Invalid mount declaration for {{ item.path | default('undefined') }}."
+  loop: "{{ os_base_mounts }}"
+  loop_control:
+    label: "{{ item.path | default('undefined') }}"
+
+- name: Validate system directory declarations
+  ansible.builtin.assert:
+    that:
+      - item.path is defined
+      - item.path is match('^/')
+      - item.mode | default('0755') is match('^0?[0-7]{3,4}$')
+    fail_msg: "Invalid directory declaration for {{ item.path | default('undefined') }}."
+  loop: "{{ os_base_directories }}"
+  loop_control:
+    label: "{{ item.path | default('undefined') }}"
+
+- name: Configure required filesystems and persistent mounts
   ansible.posix.mount:
     path: "{{ item.path }}"
     src: "{{ item.src }}"
@@ -31,3 +75,10 @@
   loop: "{{ os_base_directories }}"
   loop_control:
     label: "{{ item.path }}"
+
+- name: Report validation-only disabled swap policy
+  ansible.builtin.debug:
+    msg: >-
+      swap_policy=disabled is validation-only. Foundry will not rewrite or
+      deactivate swap it cannot prove it owns.
+  when: os_base_swap_policy == 'disabled'

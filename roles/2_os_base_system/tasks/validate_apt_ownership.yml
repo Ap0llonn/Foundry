@@ -1,0 +1,63 @@
+---
+- name: Inspect declared custom keyring paths
+  ansible.builtin.stat:
+    path: "/usr/share/keyrings/{{ item }}"
+  loop: "{{ os_base_current_owned_keyrings }}"
+  loop_control:
+    label: "{{ item }}"
+  register: os_base_declared_keyring_stats
+
+- name: Refuse to adopt externally owned keyrings
+  ansible.builtin.assert:
+    that:
+      - >-
+        not item.stat.exists
+        or item.item in os_base_previous_apt_ownership.keyrings | default([])
+    fail_msg: >-
+      {{ item.item }} already exists but is not in Foundry's ownership manifest.
+  loop: "{{ os_base_declared_keyring_stats.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Inspect desired Foundry repository paths
+  ansible.builtin.stat:
+    path: "/etc/apt/sources.list.d/{{ item }}"
+  loop: "{{ os_base_current_owned_repositories }}"
+  loop_control:
+    label: "{{ item }}"
+  register: os_base_desired_repository_stats
+
+- name: Refuse to adopt externally owned repository files
+  ansible.builtin.assert:
+    that:
+      - >-
+        not item.stat.exists
+        or item.item in os_base_previous_apt_ownership.repositories | default([])
+    fail_msg: "{{ item.item }} exists but is not owned by Foundry."
+  loop: "{{ os_base_desired_repository_stats.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Inspect desired package hold state
+  ansible.builtin.command:
+    argv: [dpkg, --get-selections, "{{ item }}"]
+  loop: "{{ os_base_apt_holds }}"
+  loop_control:
+    label: "{{ item }}"
+  register: os_base_desired_hold_states
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Refuse to adopt externally owned package holds
+  ansible.builtin.assert:
+    that:
+      - item.rc == 0
+      - >-
+        not (item.stdout is search('\\shold$'))
+        or item.item in os_base_previous_apt_ownership.holds | default([])
+    fail_msg: >-
+      Package {{ item.item }} is absent or already held outside Foundry ownership.
+  loop: "{{ os_base_desired_hold_states.results }}"
+  loop_control:
+    label: "{{ item.item }}"

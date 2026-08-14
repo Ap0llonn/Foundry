@@ -1,0 +1,122 @@
+---
+- name: Initialize declared time-source address sets
+  ansible.builtin.set_fact:
+    os_base_declared_time_addresses: []
+    os_base_declared_nts_addresses: []
+    os_base_declared_time_names: "{{ os_base_time_sources | map(attribute='name') | unique | list }}"
+
+- name: Resolve declared time sources safely
+  ansible.builtin.include_tasks: resolve_time_source.yml
+  loop: "{{ os_base_time_sources }}"
+  loop_control:
+    loop_var: os_base_time_source
+    label: "{{ os_base_time_source.name }}"
+
+- name: Wait for Chrony synchronization
+  ansible.builtin.command:
+    argv: [chronyc, -c, tracking]
+  environment:
+    LC_ALL: C
+  register: os_base_clock_tracking
+  changed_when: false
+  check_mode: false
+  retries: "{{ os_base_time_sync_retries }}"
+  delay: "{{ os_base_time_sync_delay }}"
+  until:
+    - os_base_clock_tracking.rc == 0
+    - os_base_clock_tracking.stdout.split(',') | length >= 14
+    - os_base_clock_tracking.stdout.split(',')[-1] | trim == 'Normal'
+
+- name: Read numeric Chrony sources as CSV
+  ansible.builtin.command:
+    argv: [chronyc, -c, -n, sources]
+  environment:
+    LC_ALL: C
+  register: os_base_clock_sources_csv
+  changed_when: false
+  check_mode: false
+
+- name: Read original Chrony source names as CSV
+  ansible.builtin.command:
+    argv: [chronyc, -c, -N, sources]
+  environment:
+    LC_ALL: C
+  register: os_base_clock_source_names_csv
+  changed_when: false
+  check_mode: false
+
+- name: Select synchronized Chrony source rows
+  ansible.builtin.set_fact:
+    os_base_selected_time_rows: >-
+      {{ os_base_clock_sources_csv.stdout_lines | select('match', '^\^,\*,') | list }}
+    os_base_selected_time_name_rows: >-
+      {{ os_base_clock_source_names_csv.stdout_lines | select('match', '^\^,\*,') | list }}
+
+- name: Require exactly one declared selected source and bounded offset
+  ansible.builtin.assert:
+    that:
+      - os_base_selected_time_rows | length == 1
+      - os_base_selected_time_name_rows | length == 1
+      - >-
+        os_base_selected_time_rows[0].split(',')[2] in os_base_declared_time_addresses
+        or os_base_selected_time_name_rows[0].split(',')[2] in os_base_declared_time_names
+      # chronyc -c tracking: field 4 is System time; field 3 is reference time.
+      - os_base_clock_tracking.stdout.split(',')[4] | float | abs <= os_base_time_max_offset_seconds | float
+    fail_msg: >-
+      Chrony has no uniquely selected declared source, or its system offset
+      exceeds {{ os_base_time_max_offset_seconds }} seconds.
+
+- name: Read Chrony NTS authentication state
+  ansible.builtin.command:
+    argv: [chronyc, -c, -n, authdata]
+  environment:
+    LC_ALL: C
+  register: os_base_chrony_authdata
+  changed_when: false
+  check_mode: false
+  when: os_base_time_sources | selectattr('nts', 'defined') | selectattr('nts') | list | length > 0
+
+- name: Resolve selected Chrony source identity
+  ansible.builtin.set_fact:
+    os_base_selected_time_address: "{{ os_base_selected_time_rows[0].split(',')[2] }}"
+    os_base_selected_time_name: "{{ os_base_selected_time_name_rows[0].split(',')[2] }}"
+  when: os_base_time_sources | selectattr('nts', 'defined') | selectattr('nts') | list | length > 0
+
+- name: Select NTS authentication row for the synchronized source
+  ansible.builtin.set_fact:
+    os_base_selected_nts_auth_rows: >-
+      {{
+        os_base_chrony_authdata.stdout_lines
+        | select('match', '^' + (os_base_selected_time_address | regex_escape) + ',NTS,')
+        | list
+      }}
+    os_base_declared_nts_names: >-
+      {{
+        os_base_time_sources
+        | selectattr('nts', 'defined')
+        | selectattr('nts')
+        | map(attribute='name')
+        | list
+      }}
+  when: os_base_time_sources | selectattr('nts', 'defined') | selectattr('nts') | list | length > 0
+
+- name: Require successful NTS key establishment on the synchronized source
+  ansible.builtin.assert:
+    that:
+      - >-
+        os_base_selected_time_name in os_base_declared_nts_names
+        or os_base_selected_time_address in os_base_declared_nts_addresses
+      - os_base_selected_nts_auth_rows | length == 1
+      - os_base_selected_nts_auth_rows[0].split(',') | length >= 9
+      # authdata CSV: address, mode, key ID, type, key length, last attempt,
+      # NAK, cookies, cookie length. Non-zero crypto/cookie fields prove that
+      # NTS-KE succeeded for the source Chrony is actually using.
+      - os_base_selected_nts_auth_rows[0].split(',')[2] | int > 0
+      - os_base_selected_nts_auth_rows[0].split(',')[3] | int > 0
+      - os_base_selected_nts_auth_rows[0].split(',')[4] | int > 0
+      - os_base_selected_nts_auth_rows[0].split(',')[7] | int > 0
+      - os_base_selected_nts_auth_rows[0].split(',')[8] | int > 0
+    fail_msg: >-
+      NTS was requested, but the selected declared source has no successful
+      NTS key establishment and usable cookies in chronyc authdata.
+  when: os_base_time_sources | selectattr('nts', 'defined') | selectattr('nts') | list | length > 0

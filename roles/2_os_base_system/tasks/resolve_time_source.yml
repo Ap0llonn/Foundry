@@ -1,0 +1,53 @@
+---
+- name: "Resolve IPv4 addresses for time source {{ os_base_time_source.name }}"
+  ansible.builtin.command:
+    argv: [dig, +short, A, "{{ os_base_time_source.name }}"]
+  register: os_base_time_source_ipv4
+  changed_when: false
+  check_mode: false
+  when: not (os_base_time_source.name | ansible.utils.ipaddr)
+
+- name: "Resolve IPv6 addresses for time source {{ os_base_time_source.name }}"
+  ansible.builtin.command:
+    argv: [dig, +short, AAAA, "{{ os_base_time_source.name }}"]
+  register: os_base_time_source_ipv6
+  changed_when: false
+  check_mode: false
+  when: not (os_base_time_source.name | ansible.utils.ipaddr)
+
+- name: "Build safe address set for time source {{ os_base_time_source.name }}"
+  ansible.builtin.set_fact:
+    os_base_resolved_time_source_addresses: >-
+      {{
+        [os_base_time_source.name]
+        if (os_base_time_source.name | ansible.utils.ipaddr)
+        else (
+          (
+            (os_base_time_source_ipv4.stdout_lines | default([]))
+            + (os_base_time_source_ipv6.stdout_lines | default([]))
+          )
+          | ansible.utils.ipaddr
+        )
+      }}
+
+- name: "Require DNS addresses for time source {{ os_base_time_source.name }}"
+  ansible.builtin.assert:
+    that:
+      - os_base_resolved_time_source_addresses | length > 0
+    fail_msg: "Time source {{ os_base_time_source.name }} did not resolve through DNS."
+
+- name: Accumulate declared time-source addresses
+  ansible.builtin.set_fact:
+    os_base_declared_time_addresses: >-
+      {{
+        (os_base_declared_time_addresses + os_base_resolved_time_source_addresses)
+        | unique | list
+      }}
+    os_base_declared_nts_addresses: >-
+      {{
+        (
+          os_base_declared_nts_addresses
+          + (os_base_resolved_time_source_addresses if os_base_time_source.nts | default(false) else [])
+        )
+        | unique | list
+      }}

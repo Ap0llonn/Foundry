@@ -1,25 +1,54 @@
 ---
-- name: Validate UTF-8 locale
-  become: true
+- name: Validate global locale policy
   ansible.builtin.assert:
     that:
       - os_base_locale | upper is search('UTF-8$')
-    fail_msg: "os_base_locale must be an UTF-8 locale, for example en_CA.UTF-8."
+      - os_base_locale_categories is mapping
+      - "'LC_ALL' not in os_base_locale_categories"
+    fail_msg: >-
+      os_base_locale must be UTF-8, categories must be a mapping, and LC_ALL
+      cannot be persisted globally.
+
+- name: Validate optional locale categories
+  ansible.builtin.assert:
+    that:
+      - item.key is match('^LC_[A-Z_]+$')
+      - item.key != 'LC_ALL'
+      - item.value | upper is search('UTF-8$')
+    fail_msg: "Locale categories must be individual LC_* UTF-8 values, never LC_ALL."
+  loop: "{{ os_base_locale_categories | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
 
 - name: Install locale support
   ansible.builtin.apt:
     name: locales
     state: present
+    lock_timeout: "{{ os_base_apt_lock_timeout }}"
+  register: os_base_locale_package_result
+  retries: "{{ os_base_apt_retries }}"
+  delay: "{{ os_base_apt_retry_delay }}"
+  until: os_base_locale_package_result is succeeded
 
-- name: Enable configured locale generation
+- name: Build locales that must be generated
+  ansible.builtin.set_fact:
+    os_base_generated_locales: >-
+      {{
+        ([os_base_locale] + (os_base_locale_categories.values() | list))
+        | unique
+        | list
+      }}
+
+- name: Enable required locale generation
   ansible.builtin.lineinfile:
     path: /etc/locale.gen
-    regexp: '^#?\s*{{ os_base_locale | regex_escape }}\s+UTF-8$'
-    line: "{{ os_base_locale }} UTF-8"
+    regexp: '^#?\s*{{ item | regex_escape }}\s+UTF-8$'
+    line: "{{ item }} UTF-8"
     state: present
-  notify: Generate configured locale
+  loop: "{{ os_base_generated_locales }}"
+  notify: Generate configured locales
 
-- name: Set system default locale
+- name: Set system default locale without global LC_ALL
   ansible.builtin.copy:
     dest: /etc/default/locale
     owner: root
@@ -27,5 +56,29 @@
     mode: "0644"
     content: |
       LANG={{ os_base_locale }}
-      LC_ALL={{ os_base_locale }}
-  notify: Generate configured locale
+      {% for category, value in os_base_locale_categories | dictsort %}
+      {{ category }}={{ value }}
+      {% endfor %}
+  notify: Generate configured locales
+
+- name: Read effective localectl locale policy
+  ansible.builtin.command:
+    argv: [localectl, status, --no-pager]
+  register: os_base_localectl_before
+  changed_when: false
+  check_mode: false
+
+- name: Set effective system LANG policy
+  ansible.builtin.command:
+    argv: [localectl, set-locale, "LANG={{ os_base_locale }}"]
+  when: "('LANG=' + os_base_locale) not in os_base_localectl_before.stdout"
+  changed_when: true
+
+- name: Set effective individual locale categories
+  ansible.builtin.command:
+    argv: [localectl, set-locale, "{{ item.key }}={{ item.value }}"]
+  loop: "{{ os_base_locale_categories | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: (item.key + '=' + item.value) not in os_base_localectl_before.stdout
+  changed_when: true

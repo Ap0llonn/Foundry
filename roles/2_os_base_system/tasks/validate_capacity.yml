@@ -1,0 +1,26 @@
+---
+- name: "Inspect free space for {{ os_base_capacity.path }}"
+  ansible.builtin.command:
+    argv: [df, --portability, "{{ os_base_capacity.path }}"]
+  register: os_base_space_check
+  changed_when: false
+  check_mode: false
+
+- name: "Inspect free inodes for {{ os_base_capacity.path }}"
+  ansible.builtin.command:
+    argv: [df, --portability, --inodes, "{{ os_base_capacity.path }}"]
+  register: os_base_inode_check
+  changed_when: false
+  check_mode: false
+
+- name: "Validate capacity thresholds for {{ os_base_capacity.path }}"
+  ansible.builtin.assert:
+    that:
+      - >-
+        100 - (os_base_space_check.stdout_lines[-1].split()[-2] | replace('%', '') | int)
+        >= os_base_capacity.min_free_percent | default(os_base_min_free_percent) | int
+      - >-
+        100 - (os_base_inode_check.stdout_lines[-1].split()[-2] | replace('%', '') | int)
+        >= os_base_capacity.min_free_inodes_percent | default(os_base_min_free_inodes_percent) | int
+    fail_msg: >-
+      {{ os_base_capacity.path }} violates minimum free space or inode policy.

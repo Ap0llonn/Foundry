@@ -2,6 +2,28 @@
 # Configuration globale de l'infrastructure.
 vm_ip: 149.56.96.110
 
+# OS package lifecycle. The default bootstrap mode installs and validates the
+# baseline but never runs a distribution upgrade, autoremove, purge, or reboot.
+os_base_operation_mode: bootstrap
+
+# Full maintenance requires all three values to be set intentionally. Keep
+# these disabled during ordinary application deployments.
+os_base_maintenance_approved: false
+os_base_maintenance_window: ""
+os_base_maintenance_autoremove: false
+# Autoremove/purge is a separate destructive approval from the distribution
+# upgrade itself.
+os_base_maintenance_removals_approved: false
+os_base_maintenance_autoclean: false
+
+# Reboot is evaluated only after all implemented roles have converged. A
+# reboot-required marker is a signal, not an authorization.
+os_base_reboot_enabled: false
+os_base_reboot_approved: false
+os_base_reboot_only_if_required: true
+os_base_reboot_precheck_commands: []
+os_base_reboot_postcheck_commands: []
+
 identity:
   # Optional Foundry role customization. Built-ins are developer, operator,
   # and viewer. Custom Linux groups always use the foundry-* namespace.

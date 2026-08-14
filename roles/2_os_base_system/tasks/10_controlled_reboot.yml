@@ -1,0 +1,366 @@
+---
+# Intentionally detached from tasks/main.yml. Call only as a final post-role
+# phase after application/workload health gates are known.
+- name: Validate explicit controlled reboot authorization
+  ansible.builtin.assert:
+    that:
+      - os_base_reboot_enabled | bool
+      - os_base_reboot_approved | bool
+      - not ansible_check_mode
+      - os_base_reboot_timeout | int > 0
+      - os_base_reboot_connect_timeout | int > 0
+      - os_base_reboot_reason | string | trim | length > 0
+      - os_base_effective_services is defined
+    fail_msg: >-
+      Controlled reboot requires explicit enablement, approval, a reason, a
+      completed OS role, and a non-check-mode final phase.
+
+- name: Validate controlled reboot command structures
+  ansible.builtin.assert:
+    that:
+      - item is sequence
+      - item is not string
+      - item | length > 0
+    fail_msg: "Each configured reboot health command must be a non-empty argv list."
+  loop: "{{ os_base_reboot_precheck_commands + os_base_reboot_postcheck_commands }}"
+  loop_control:
+    label: "{{ item | join(' ') if item is sequence and item is not string else item }}"
+
+- name: Detect operating-system reboot requirement
+  become: true
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: os_base_controlled_reboot_marker
+
+- name: Inspect reboot-required package reason
+  become: true
+  ansible.builtin.slurp:
+    src: /var/run/reboot-required.pkgs
+  register: os_base_reboot_required_packages
+  when: os_base_controlled_reboot_marker.stat.exists
+
+- name: Decide whether approved reboot will run
+  ansible.builtin.set_fact:
+    os_base_controlled_reboot_will_run: >-
+      {{
+        (not (os_base_reboot_only_if_required | bool))
+        or os_base_controlled_reboot_marker.stat.exists
+      }}
+
+- name: Require custom workload gates for an actual reboot
+  ansible.builtin.assert:
+    that:
+      - os_base_reboot_precheck_commands | length > 0
+      - os_base_reboot_postcheck_commands | length > 0
+    fail_msg: >-
+      An actual reboot requires at least one custom precheck and one custom
+      postcheck argv command for the provisioned workload.
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Audit dpkg before reboot
+  become: true
+  ansible.builtin.command:
+    argv: [dpkg, --audit]
+  register: os_base_pre_reboot_dpkg_audit
+  changed_when: false
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Require healthy dpkg state before reboot
+  ansible.builtin.assert:
+    that:
+      - os_base_pre_reboot_dpkg_audit.stdout | trim | length == 0
+    fail_msg: "dpkg is inconsistent; refusing reboot."
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Prove APT and dpkg locks are available
+  become: true
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - >-
+        import fcntl;
+        paths=['/var/lib/dpkg/lock-frontend','/var/lib/dpkg/lock',
+        '/var/lib/apt/lists/lock','/var/cache/apt/archives/lock'];
+        handles=[open(path,'r+') for path in paths];
+        [fcntl.lockf(handle,fcntl.LOCK_EX|fcntl.LOCK_NB) for handle in handles]
+  changed_when: false
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Validate global fstab before reboot
+  ansible.builtin.include_tasks: validate_fstab.yml
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Require active SSH before reboot
+  become: true
+  ansible.builtin.command:
+    argv: [systemctl, is-active, "{{ os_base_reboot_ssh_service }}"]
+  changed_when: false
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Validate provisioning sudo identity
+  ansible.builtin.assert:
+    that:
+      - os_base_reboot_provisioning_user | string | trim | length > 0
+      - os_base_reboot_provisioning_user is match('^[a-z_][a-z0-9_-]*[$]?$')
+    fail_msg: "A valid provisioning user is required to verify sudo before reboot."
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Prove the active Ansible connection can still elevate
+  become: true
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_facts['python']['executable'] | default('/usr/bin/python3') }}"
+      - -c
+      - "import os; raise SystemExit(0 if os.geteuid() == 0 else 1)"
+  changed_when: false
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Validate required services before reboot
+  ansible.builtin.include_tasks: validate_service.yml
+  loop: "{{ os_base_effective_services | selectattr('presence', 'equalto', 'required') | list }}"
+  loop_control:
+    loop_var: os_base_service
+    label: "{{ os_base_service.name }}"
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Validate required mounts before reboot
+  ansible.builtin.include_tasks: validate_mount.yml
+  loop: >-
+    {{
+      os_base_mounts
+      | rejectattr('state', 'defined')
+      | list
+      + (
+        os_base_mounts
+        | selectattr('state', 'defined')
+        | selectattr('state', 'equalto', 'mounted')
+        | list
+      )
+    }}
+  loop_control:
+    loop_var: os_base_mount
+    label: "{{ os_base_mount.path }}"
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Run custom pre-reboot workload health gates
+  become: true
+  ansible.builtin.command:
+    argv: "{{ item }}"
+  loop: "{{ os_base_reboot_precheck_commands }}"
+  loop_control:
+    label: "{{ item | join(' ') }}"
+  changed_when: false
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Read boot identity before reboot
+  ansible.builtin.command:
+    argv: [cat, /proc/sys/kernel/random/boot_id]
+  register: os_base_boot_id_before
+  changed_when: false
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Read kernel selected for next boot
+  become: true
+  ansible.builtin.command:
+    argv: [readlink, --canonicalize, /vmlinuz]
+  register: os_base_next_kernel
+  changed_when: false
+  failed_when:
+    - os_base_reboot_validate_latest_kernel | bool
+    - os_base_next_kernel.rc != 0
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Perform explicitly approved controlled reboot
+  become: true
+  ansible.builtin.reboot:
+    reboot_timeout: "{{ os_base_reboot_timeout }}"
+    connect_timeout: "{{ os_base_reboot_connect_timeout }}"
+    post_reboot_delay: 10
+    test_command: /usr/bin/true
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Refresh facts after controlled reboot
+  ansible.builtin.setup:
+    gather_subset: [min, hardware]
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Read boot identity after reboot
+  ansible.builtin.command:
+    argv: [cat, /proc/sys/kernel/random/boot_id]
+  register: os_base_boot_id_after
+  changed_when: false
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Prove the running kernel belongs to an installed package
+  become: true
+  ansible.builtin.command:
+    argv:
+      - dpkg-query
+      - --search
+      - "/boot/vmlinuz-{{ ansible_facts['kernel'] }}"
+  register: os_base_running_kernel_package
+  changed_when: false
+  when:
+    - os_base_controlled_reboot_will_run | bool
+    - os_base_reboot_validate_latest_kernel | bool
+
+- name: Validate new boot identity and running kernel
+  ansible.builtin.assert:
+    that:
+      - os_base_boot_id_after.stdout | trim != os_base_boot_id_before.stdout | trim
+      - ansible_facts['kernel'] | string | length > 0
+      - >-
+        not (os_base_reboot_validate_latest_kernel | bool)
+        or (os_base_next_kernel.stdout | basename | regex_replace('^vmlinuz-', '')) == ansible_facts['kernel']
+      - >-
+        not (os_base_reboot_validate_latest_kernel | bool)
+        or os_base_running_kernel_package.rc == 0
+    fail_msg: >-
+      Reboot did not produce a new boot identity or the running kernel does not
+      match the kernel selected by /vmlinuz.
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Verify reboot-required marker was cleared
+  become: true
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: os_base_post_reboot_marker
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Require cleared reboot marker
+  ansible.builtin.assert:
+    that:
+      - not os_base_post_reboot_marker.stat.exists
+    fail_msg: "The reboot-required marker remains after reboot."
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Validate host identity after reboot
+  ansible.builtin.include_tasks: validate_host_identity.yml
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Audit package database after reboot
+  become: true
+  ansible.builtin.command:
+    argv: [dpkg, --audit]
+  register: os_base_post_reboot_dpkg_audit
+  changed_when: false
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Require healthy package database after reboot
+  ansible.builtin.assert:
+    that:
+      - os_base_post_reboot_dpkg_audit.stdout | trim | length == 0
+    fail_msg: "dpkg reports inconsistent state after reboot."
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Inspect failed systemd units after reboot
+  become: true
+  ansible.builtin.command:
+    argv: [systemctl, --failed, --no-legend, --plain]
+  register: os_base_post_reboot_failed_units
+  changed_when: false
+  failed_when: false
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Require no failed systemd units after reboot
+  ansible.builtin.assert:
+    that:
+      - os_base_post_reboot_failed_units.stdout | trim | length == 0
+    fail_msg: >-
+      Failed systemd units after reboot: {{ os_base_post_reboot_failed_units.stdout }}
+  when:
+    - os_base_controlled_reboot_will_run | bool
+    - os_base_fail_on_systemd_failed_units | bool
+
+- name: Validate global fstab after reboot
+  ansible.builtin.include_tasks: validate_fstab.yml
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Validate Chrony after reboot
+  ansible.builtin.include_tasks: validate_time.yml
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Validate normalized services after reboot
+  ansible.builtin.include_tasks: validate_service.yml
+  loop: "{{ os_base_effective_services }}"
+  loop_control:
+    loop_var: os_base_service
+    label: "{{ os_base_service.name }}"
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Validate mount persistence after reboot
+  ansible.builtin.include_tasks: validate_mount.yml
+  loop: "{{ os_base_mounts }}"
+  loop_control:
+    loop_var: os_base_mount
+    label: "{{ os_base_mount.path }}"
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Rebuild post-reboot capacity paths
+  ansible.builtin.set_fact:
+    os_base_effective_capacity_paths: >-
+      {{
+        os_base_capacity_paths
+        + (os_base_mounts | rejectattr('state', 'defined') | list)
+        + (
+          os_base_mounts
+          | selectattr('state', 'defined')
+          | selectattr('state', 'equalto', 'mounted')
+          | list
+        )
+      }}
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Validate capacity and inodes after reboot
+  ansible.builtin.include_tasks: validate_capacity.yml
+  loop: "{{ os_base_effective_capacity_paths }}"
+  loop_control:
+    loop_var: os_base_capacity
+    label: "{{ os_base_capacity.path }}"
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Validate swap after reboot
+  ansible.builtin.include_tasks: validate_swap.yml
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Run custom post-reboot workload health gates
+  become: true
+  ansible.builtin.command:
+    argv: "{{ item }}"
+  loop: "{{ os_base_reboot_postcheck_commands }}"
+  loop_control:
+    label: "{{ item | join(' ') }}"
+  changed_when: false
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Record successful controlled reboot evidence
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ os_base_reboot_record_path }}"
+    owner: root
+    group: root
+    mode: "0600"
+    content: >-
+      {{
+        {
+          'reason': os_base_reboot_reason,
+          'required_marker_present': os_base_controlled_reboot_marker.stat.exists,
+          'required_packages': (
+            os_base_reboot_required_packages.content | default('') | b64decode
+          ).splitlines(),
+          'boot_id_before': os_base_boot_id_before.stdout | trim,
+          'boot_id_after': os_base_boot_id_after.stdout | trim,
+          'kernel_after': ansible_facts['kernel'],
+          'completed_at': ansible_facts['date_time']['iso8601']
+        }
+        | to_nice_yaml(indent=2, sort_keys=true)
+      }}
+  when: os_base_controlled_reboot_will_run | bool
+
+- name: Report skipped controlled reboot
+  ansible.builtin.debug:
+    msg: >-
+      Controlled reboot was approved but skipped because no reboot-required
+      marker exists and os_base_reboot_only_if_required=true.
+  when: not (os_base_controlled_reboot_will_run | bool)

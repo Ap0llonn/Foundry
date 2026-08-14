@@ -1,0 +1,17 @@
+---
+- name: Write Foundry APT ownership manifest atomically
+  ansible.builtin.copy:
+    dest: "{{ os_base_apt_ownership_manifest }}"
+    owner: root
+    group: root
+    mode: "0600"
+    content: >-
+      {{
+        {
+          'version': 1,
+          'keyrings': os_base_manifest_keyrings | unique | sort,
+          'repositories': os_base_manifest_repositories | unique | sort,
+          'holds': os_base_manifest_holds | unique | sort
+        }
+        | to_nice_yaml(indent=2, sort_keys=true)
+      }}

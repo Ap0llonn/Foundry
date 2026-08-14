@@ -8,7 +8,9 @@
     os_base_expected_packages: >-
       {{
         os_base_packages
+        + os_base_package_control_packages
         + ['locales', os_base_time_package]
+        + ([os_base_dns_package] if os_base_dns_tools_required | default(true) | bool else [])
       }}
 
 - name: Validate required packages
@@ -19,6 +21,80 @@
       Missing required packages:
       {{ os_base_expected_packages | difference(ansible_facts.packages.keys() | list) | join(', ') }}.
     success_msg: "All required OS baseline packages are installed."
+
+- name: Validate effective host identity
+  ansible.builtin.include_tasks: validate_host_identity.yml
+
+- name: Resolve configured FQDN IPv4 records through DNS
+  ansible.builtin.command:
+    argv: [dig, +short, A, "{{ os_base_fqdn }}"]
+  register: os_base_fqdn_ipv4_resolution
+  changed_when: false
+  check_mode: false
+  when: os_base_hostname_validate_dns | bool
+
+- name: Resolve configured FQDN IPv6 records through DNS
+  ansible.builtin.command:
+    argv: [dig, +short, AAAA, "{{ os_base_fqdn }}"]
+  register: os_base_fqdn_ipv6_resolution
+  changed_when: false
+  check_mode: false
+  when: os_base_hostname_validate_dns | bool
+
+- name: Build explicit DNS address result
+  ansible.builtin.set_fact:
+    os_base_fqdn_dns_addresses: >-
+      {{
+        (
+          os_base_fqdn_ipv4_resolution.stdout_lines
+          + os_base_fqdn_ipv6_resolution.stdout_lines
+        )
+        | ansible.utils.ipaddr
+        | unique
+        | list
+      }}
+  when: os_base_hostname_validate_dns | bool
+
+- name: Validate configured FQDN addresses
+  ansible.builtin.assert:
+    that:
+      - os_base_fqdn_dns_addresses | length > 0
+      - >-
+        os_base_hostname_expected_addresses | length == 0
+        or os_base_hostname_expected_addresses
+           | difference(os_base_fqdn_dns_addresses)
+           | length == 0
+    fail_msg: "FQDN does not resolve to all expected addresses."
+  when: os_base_hostname_validate_dns | bool
+
+- name: Validate reverse DNS for expected addresses
+  ansible.builtin.command:
+    argv: [dig, +short, -x, "{{ item }}"]
+  loop: "{{ os_base_hostname_expected_addresses }}"
+  loop_control:
+    label: "{{ item }}"
+  register: os_base_reverse_dns_checks
+  changed_when: false
+  check_mode: false
+  when:
+    - os_base_hostname_validate_dns | bool
+    - os_base_hostname_validate_reverse_dns | bool
+
+- name: Require reverse DNS to contain configured FQDN
+  ansible.builtin.assert:
+    that:
+      - >-
+        (os_base_fqdn | lower | regex_replace('\.$', ''))
+        in (
+          item.stdout_lines
+          | map('lower')
+          | map('regex_replace', '\\.$', '')
+          | list
+        )
+    fail_msg: "Reverse DNS for {{ item.item }} does not contain {{ os_base_fqdn }}."
+  loop: "{{ os_base_reverse_dns_checks.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item }}"
 
 - name: Inspect required system directories
   ansible.builtin.stat:
@@ -41,67 +117,134 @@
   loop_control:
     label: "{{ item.item.path }}"
 
-- name: Refresh mount facts
-  ansible.builtin.setup:
-    gather_subset:
-      - hardware
-    filter:
-      - ansible_mounts
-  when: os_base_mounts | length > 0
+- name: Validate global fstab
+  ansible.builtin.include_tasks: validate_fstab.yml
 
-- name: Validate required mounted filesystems
-  ansible.builtin.assert:
-    that:
-      - item.path in (ansible_mounts | map(attribute='mount') | list)
-    fail_msg: "Required filesystem is not mounted: {{ item.path }}."
+- name: Validate live mounts and persistent fstab declarations
+  ansible.builtin.include_tasks: validate_mount.yml
   loop: "{{ os_base_mounts }}"
   loop_control:
-    label: "{{ item.path }}"
-  when: (item.state | default('mounted')) == 'mounted'
+    loop_var: os_base_mount
+    label: "{{ os_base_mount.path }}"
 
-- name: Wait for clock synchronization
+- name: Build capacity validation paths
+  ansible.builtin.set_fact:
+    os_base_effective_capacity_paths: >-
+      {{
+        os_base_capacity_paths
+        + (
+          os_base_mounts
+          | selectattr('state', 'undefined')
+          | list
+        )
+        + (
+          os_base_mounts
+          | selectattr('state', 'defined')
+          | selectattr('state', 'equalto', 'mounted')
+          | list
+        )
+      }}
+
+- name: Validate filesystem capacity and inode policy
+  ansible.builtin.include_tasks: validate_capacity.yml
+  loop: "{{ os_base_effective_capacity_paths }}"
+  loop_control:
+    loop_var: os_base_capacity
+    label: "{{ os_base_capacity.path }}"
+
+- name: Validate swap policy
+  ansible.builtin.include_tasks: validate_swap.yml
+
+- name: Validate synchronized and authenticated time source
+  ansible.builtin.include_tasks: validate_time.yml
+
+- name: Read generated locale inventory
   ansible.builtin.command:
-    argv:
-      - chronyc
-      - tracking
-  environment:
-    LC_ALL: C
-  register: os_base_clock_check
+    argv: [locale, -a]
+  register: os_base_locale_inventory
   changed_when: false
-  retries: 12
-  delay: 5
-  until:
-    - os_base_clock_check.rc == 0
-    - os_base_clock_check.stdout is search('(?m)^Leap status\s*:\s*Normal$')
+  check_mode: false
 
-- name: Gather system service facts
-  ansible.builtin.service_facts:
+- name: Read localectl locale policy
+  ansible.builtin.command:
+    argv: [localectl, status, --no-pager]
+  register: os_base_localectl_check
+  changed_when: false
+  check_mode: false
 
-- name: Validate essential services
+- name: Validate locale in a fresh login session
+  become: true
+  ansible.builtin.command:
+    argv: [su, --login, root, --command, locale]
+  register: os_base_login_locale_check
+  changed_when: false
+  check_mode: false
+
+- name: Validate generated and fresh-session locale policy
   ansible.builtin.assert:
     that:
-      - (item + '.service') in ansible_facts.services
-      - ansible_facts.services[item + '.service'].state == 'running'
-    fail_msg: "Essential service is not running: {{ item }}."
-  loop: "{{ os_base_effective_essential_services }}"
-  loop_control:
-    label: "{{ item }}"
+      - >-
+        (os_base_locale | lower | replace('-', ''))
+        in (os_base_locale_inventory.stdout | lower | replace('-', ''))
+      - "('LANG=' + os_base_locale) in os_base_localectl_check.stdout"
+      - "('LANG=' + os_base_locale) in os_base_login_locale_check.stdout_lines"
+      - "'LC_ALL=' in os_base_login_locale_check.stdout_lines"
+      - "('LC_ALL=' + os_base_locale) not in os_base_login_locale_check.stdout_lines"
+    fail_msg: "Locale is not generated or fresh sessions do not inherit LANG safely."
 
-- name: Validate unnecessary services are stopped
+- name: Validate every configured locale category
   ansible.builtin.assert:
     that:
-      - ansible_facts.services[item + '.service'].state != 'running'
-    fail_msg: "Unnecessary service is still running: {{ item }}."
-  loop: "{{ os_base_disabled_services }}"
+      - (item.key + '=' + item.value) in os_base_localectl_check.stdout
+      - (item.key + '=' + item.value) in os_base_login_locale_check.stdout_lines
+    fail_msg: >-
+      Configured locale category {{ item.key }} is missing from localectl or a fresh login.
+  loop: "{{ os_base_locale_categories | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Validate normalized system services
+  ansible.builtin.include_tasks: validate_service.yml
+  loop: "{{ os_base_effective_services }}"
+  loop_control:
+    loop_var: os_base_service
+    label: "{{ os_base_service.name }}"
+
+- name: Inspect conflicting time providers after convergence
+  ansible.builtin.command:
+    argv: [systemctl, show, "{{ item }}.service", --property=LoadState, --property=ActiveState, --property=UnitFileState]
+  loop: "{{ os_base_time_conflicting_services }}"
   loop_control:
     label: "{{ item }}"
+  register: os_base_time_conflict_validation
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Validate conflicting time providers are absent or masked
+  ansible.builtin.assert:
+    that:
+      - >-
+        item.rc != 0
+        or 'LoadState=not-found' in item.stdout
+        or (
+          'ActiveState=inactive' in item.stdout
+          and (
+            'UnitFileState=masked' in item.stdout
+            or 'UnitFileState=masked-runtime' in item.stdout
+          )
+        )
+    fail_msg: "Conflicting time provider remains usable: {{ item.item }}."
+  loop: "{{ os_base_time_conflict_validation.results }}"
+  loop_control:
+    label: "{{ item.item }}"
 
 - name: Check whether a reboot is required
   ansible.builtin.stat:
     path: /var/run/reboot-required
   register: os_base_reboot_required_file
 
-- name: Expose reboot requirement
+- name: Expose reboot requirement without authorizing reboot
   ansible.builtin.set_fact:
     os_base_reboot_required: "{{ os_base_reboot_required_file.stat.exists }}"
 
@@ -109,5 +252,9 @@
   ansible.builtin.debug:
     msg:
       - "OS baseline validation: OK"
-      - "Clock synchronized: yes"
+      - "Operation mode: {{ os_base_operation_mode }}"
+      - "Clock synchronized within {{ os_base_time_max_offset_seconds }} seconds: yes"
       - "Reboot required: {{ os_base_reboot_required | ternary('yes', 'no') }}"
+      - >-
+        Reboot executed by this role: no. Use tasks/10_controlled_reboot.yml
+        in an explicitly approved final playbook phase.

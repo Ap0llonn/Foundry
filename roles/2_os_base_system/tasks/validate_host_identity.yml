@@ -1,0 +1,52 @@
+---
+- name: Read configured static hostname
+  ansible.builtin.command:
+    argv: [hostnamectl, --static]
+  register: os_base_hostname_check
+  changed_when: false
+  check_mode: false
+
+- name: Read effective local FQDN
+  ansible.builtin.command:
+    argv: [hostname, --fqdn]
+  register: os_base_fqdn_check
+  changed_when: false
+  check_mode: false
+
+- name: Read local hostname mappings
+  ansible.builtin.slurp:
+    src: /etc/hosts
+  register: os_base_hosts_check
+  when: os_base_hostname_manage_etc_hosts | bool
+
+- name: Inspect cloud-init hostname directory
+  ansible.builtin.stat:
+    path: /etc/cloud/cloud.cfg.d
+  register: os_base_cloud_init_validation_directory
+
+- name: Inspect Foundry cloud-init hostname policy
+  ansible.builtin.stat:
+    path: /etc/cloud/cloud.cfg.d/99-foundry-hostname.cfg
+  register: os_base_cloud_init_hostname_policy
+
+- name: Validate effective host identity policy
+  ansible.builtin.assert:
+    that:
+      - os_base_hostname_check.stdout | trim == os_base_hostname
+      - os_base_fqdn_check.stdout | trim == os_base_fqdn
+      - >-
+        not (os_base_hostname_manage_etc_hosts | bool)
+        or (
+          os_base_hostname_hosts_address + ' ' + os_base_fqdn
+          + ((' ' + os_base_hostname) if os_base_fqdn != os_base_hostname else '')
+        ) in (os_base_hosts_check.content | b64decode).splitlines()
+      - >-
+        not (os_base_hostname_manage_cloud_init | bool)
+        or not (os_base_cloud_init_validation_directory.stat.isdir | default(false))
+        or os_base_cloud_init_hostname_policy.stat.exists
+      - >-
+        os_base_hostname_manage_cloud_init | bool
+        or not os_base_cloud_init_hostname_policy.stat.exists
+    fail_msg: >-
+      Static hostname, FQDN, /etc/hosts, or cloud-init hostname ownership does
+      not match the Foundry policy.
