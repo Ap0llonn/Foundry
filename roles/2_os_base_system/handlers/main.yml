@@ -1,0 +1,8 @@
+---
+- name: Generate configured locale
+  become: true
+  ansible.builtin.command:
+    argv:
+      - locale-gen
+      - "{{ os_base_locale }}"
+  changed_when: true

@@ -1,0 +1,30 @@
+---
+- name: Read current timezone
+  ansible.builtin.command:
+    argv:
+      - timedatectl
+      - show
+      - --property=Timezone
+      - --value
+  register: os_base_current_timezone
+  changed_when: false
+
+- name: Set system timezone
+  ansible.builtin.command:
+    argv:
+      - timedatectl
+      - set-timezone
+      - "{{ os_base_timezone }}"
+  when: os_base_current_timezone.stdout != os_base_timezone
+  changed_when: true
+
+- name: Install clock synchronization package
+  ansible.builtin.apt:
+    name: "{{ os_base_time_package }}"
+    state: present
+
+- name: Enable and start clock synchronization
+  ansible.builtin.systemd_service:
+    name: "{{ os_base_time_service }}"
+    enabled: true
+    state: started

@@ -1,0 +1,62 @@
+---
+# 2.1 - Matrice de support. Surcharger ces valeurs dans l'inventaire lorsque
+# la politique de support du projet évolue.
+os_base_supported_versions:
+  Ubuntu:
+    - "22"
+    - "24"
+    - "26"
+  Debian:
+    - "12"
+    - "13"
+
+os_base_supported_architectures:
+  - x86_64
+  - aarch64
+
+# 2.2 - Gestion APT.
+os_base_apt_cache_valid_time: 3600
+os_base_upgrade_packages: true
+os_base_apt_upgrade_mode: dist
+os_base_enable_security_updates: true
+os_base_autoremove_packages: true
+os_base_autoclean_packages: true
+
+# 2.3 - Baseline minimale; ajouter uniquement les outils réellement utilisés.
+os_base_packages:
+  - ca-certificates
+  - curl
+  - git
+  - unzip
+
+# 2.4 - L'identité Ansible devient l'identité système par défaut.
+os_base_hostname: "{{ inventory_hostname }}"
+
+# 2.5 - Temps standardisé.
+os_base_timezone: Etc/UTC
+os_base_time_package: chrony
+os_base_time_service: chrony
+
+# 2.6 - Locale UTF-8 cohérente.
+os_base_locale: en_CA.UTF-8
+
+# 2.7 - Éléments propres à l'infrastructure. Exemples de structures:
+# os_base_mounts:
+#   - path: /data
+#     src: /dev/disk/by-uuid/xxxx
+#     fstype: ext4
+#     opts: defaults
+#     state: mounted
+# os_base_directories:
+#   - path: /data/apps
+#     owner: root
+#     group: root
+#     mode: "0755"
+os_base_mounts: []
+os_base_directories: []
+
+# 2.8 - Chrony est essentiel à cette baseline. Les services additionnels sont
+# fournis par l'inventaire selon le type de VM.
+os_base_essential_services:
+  - "{{ os_base_time_service }}"
+os_base_disabled_services: []

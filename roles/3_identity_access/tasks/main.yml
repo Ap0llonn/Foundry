@@ -1,0 +1,32 @@
+---
+# Couche 3 - Identity & access
+# Ce fichier orchestre uniquement les modules internes du rôle.
+
+- name: 3.1 Validate identity configuration
+  ansible.builtin.import_tasks: 01_validate.yml
+  tags: [identity_access, identity_validation]
+
+- name: 3.2 Manage Foundry authorization groups
+  ansible.builtin.import_tasks: 02_groups.yml
+  become: true
+  tags: [identity_access, identity_groups]
+
+- name: 3.3 Manage human Linux users
+  ansible.builtin.import_tasks: 03_users.yml
+  become: true
+  tags: [identity_access, identity_users]
+
+- name: 3.4 Manage SSH public-key authorization
+  ansible.builtin.import_tasks: 04_ssh.yml
+  become: true
+  tags: [identity_access, identity_ssh]
+
+- name: 3.5 Reconcile administrative and group privileges
+  ansible.builtin.import_tasks: 05_privileges.yml
+  become: true
+  tags: [identity_access, identity_privileges]
+
+- name: 3.6 Validate resulting identity state
+  ansible.builtin.import_tasks: 06_validation.yml
+  become: true
+  tags: [identity_access, identity_result]

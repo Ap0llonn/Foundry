@@ -1,0 +1,140 @@
+---
+- name: Validate identity configuration root
+  ansible.builtin.assert:
+    that:
+      - identity | default({}) is mapping
+      - (identity | default({})).keys() | difference(['users']) | length == 0
+      - identity_access_users is sequence
+      - identity_access_users is not string
+      - identity_access_users is not mapping
+    fail_msg: "identity must contain only a users list."
+
+- name: Validate identity user entry shape
+  ansible.builtin.assert:
+    that:
+      - item is mapping
+      - item.name is defined
+    fail_msg: "Every identity.users entry must be an object containing name."
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name | default('invalid entry') }}"
+
+- name: Validate identity user properties
+  ansible.builtin.assert:
+    that:
+      - item.keys() | difference(identity_access_allowed_user_properties) | length == 0
+      - item.name is string
+      - item.name is match('^[a-z_][a-z0-9_-]{0,31}$')
+      - (item.state | default('present')) in identity_access_allowed_states
+      - (item.admin | default(false)) is boolean
+      - (item.groups | default([])) is sequence
+      - (item.groups | default([])) is not string
+      - (item.ssh_keys | default([])) is sequence
+      - (item.ssh_keys | default([])) is not string
+      - item.name not in identity_access_protected_accounts
+    fail_msg: "Invalid identity configuration for user {{ item.name }}."
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Validate authorization group value types
+  ansible.builtin.assert:
+    that:
+      - (item.groups | default([]) | select('string') | list | length) == (item.groups | default([]) | length)
+    fail_msg: "All groups for {{ item.name }} must be strings."
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Validate SSH public-key value types
+  ansible.builtin.assert:
+    that:
+      - (item.ssh_keys | default([]) | select('string') | list | length) == (item.ssh_keys | default([]) | length)
+    fail_msg: "All ssh_keys for {{ item.name }} must be public-key strings."
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Reject duplicate usernames
+  ansible.builtin.assert:
+    that:
+      - identity_access_users | map(attribute='name') | list | unique | length == identity_access_users | length
+    fail_msg: "identity.users contains duplicate usernames."
+
+- name: Validate Foundry authorization groups
+  ansible.builtin.assert:
+    that:
+      - item.groups | default([]) | intersect(identity_access_privileged_groups) | length == 0
+      - item.groups | default([]) | difference(identity_access_group_map.keys() | list) | length == 0
+      - item.groups | default([]) | unique | length == item.groups | default([]) | length
+    fail_msg: >-
+      User {{ item.name }} has duplicate, privileged, or unknown groups.
+      Allowed Foundry groups: {{ identity_access_group_map.keys() | list | join(', ') }}.
+      Administrative access must use admin: true.
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Validate SSH public-key format and per-user uniqueness
+  ansible.builtin.assert:
+    that:
+      - >-
+        item.ssh_keys | default([]) | select('match', identity_access_ssh_public_key_pattern)
+        | list | length == item.ssh_keys | default([]) | length
+      - item.ssh_keys | default([]) | unique | length == item.ssh_keys | default([]) | length
+    fail_msg: "Malformed or duplicate SSH public key for user {{ item.name }}."
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Reject contradictory absent-user configuration
+  ansible.builtin.assert:
+    that:
+      - not (item.admin | default(false) | bool)
+      - item.groups | default([]) | length == 0
+      - item.ssh_keys | default([]) | length == 0
+    fail_msg: >-
+      User {{ item.name }} is absent but still declares privileges or SSH keys.
+      An absent entry may contain only name and state.
+  when: (item.state | default('present')) == 'absent'
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Protect the active Ansible provisioning identity
+  ansible.builtin.assert:
+    that:
+      - (item.state | default('present')) == 'present'
+      - item.admin | default(false) | bool
+      - item.ssh_keys | default([]) | length > 0
+    fail_msg: >-
+      Refusing to modify provisioning user {{ item.name }}: it must remain
+      present, administrative, and have at least one configured SSH public key.
+  when: item.name == (ansible_user | default(''))
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Initialize global SSH public-key validation
+  ansible.builtin.set_fact:
+    identity_access_all_ssh_keys: []
+
+- name: Collect configured SSH public keys
+  ansible.builtin.set_fact:
+    identity_access_all_ssh_keys: >-
+      {{ identity_access_all_ssh_keys + (item.ssh_keys | default([])) }}
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Reject SSH public keys shared by multiple accounts
+  ansible.builtin.assert:
+    that:
+      - identity_access_all_ssh_keys | unique | length == identity_access_all_ssh_keys | length
+    fail_msg: "The same SSH public key is assigned to multiple user accounts."
+
+- name: Validate administrative system group exists
+  ansible.builtin.getent:
+    database: group
+    key: "{{ identity_access_admin_group }}"
+    fail_key: true

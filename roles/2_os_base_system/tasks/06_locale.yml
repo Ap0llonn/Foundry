@@ -1,0 +1,31 @@
+---
+- name: Validate UTF-8 locale
+  become: true
+  ansible.builtin.assert:
+    that:
+      - os_base_locale | upper is search('UTF-8$')
+    fail_msg: "os_base_locale must be an UTF-8 locale, for example en_CA.UTF-8."
+
+- name: Install locale support
+  ansible.builtin.apt:
+    name: locales
+    state: present
+
+- name: Enable configured locale generation
+  ansible.builtin.lineinfile:
+    path: /etc/locale.gen
+    regexp: '^#?\s*{{ os_base_locale | regex_escape }}\s+UTF-8$'
+    line: "{{ os_base_locale }} UTF-8"
+    state: present
+  notify: Generate configured locale
+
+- name: Set system default locale
+  ansible.builtin.copy:
+    dest: /etc/default/locale
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      LANG={{ os_base_locale }}
+      LC_ALL={{ os_base_locale }}
+  notify: Generate configured locale

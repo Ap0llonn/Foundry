@@ -1,0 +1,27 @@
+---
+- name: Create managed SSH directories
+  ansible.builtin.file:
+    path: "{{ identity_access_default_home_root }}/{{ item.name }}/.ssh"
+    state: directory
+    owner: "{{ item.name }}"
+    group: "{{ item.name }}"
+    mode: "0700"
+  when: (item.state | default('present')) == 'present'
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Reconcile managed SSH public keys
+  ansible.builtin.copy:
+    dest: "{{ identity_access_default_home_root }}/{{ item.name }}/.ssh/authorized_keys"
+    owner: "{{ item.name }}"
+    group: "{{ item.name }}"
+    mode: "0600"
+    content: |
+      {% for ssh_key in item.ssh_keys | default([]) %}
+      {{ ssh_key }}
+      {% endfor %}
+  when: (item.state | default('present')) == 'present'
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }}"

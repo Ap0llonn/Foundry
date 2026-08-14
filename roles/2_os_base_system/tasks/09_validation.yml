@@ -1,0 +1,114 @@
+---
+- name: Gather installed package facts
+  ansible.builtin.package_facts:
+    manager: auto
+
+- name: Build expected package list
+  ansible.builtin.set_fact:
+    os_base_expected_packages: >-
+      {{
+        os_base_packages
+        + ['locales', os_base_time_package]
+        + (['unattended-upgrades'] if os_base_enable_security_updates | bool else [])
+      }}
+
+- name: Validate required packages
+  ansible.builtin.assert:
+    that:
+      - os_base_expected_packages | difference(ansible_facts.packages.keys() | list) | length == 0
+    fail_msg: >-
+      Missing required packages:
+      {{ os_base_expected_packages | difference(ansible_facts.packages.keys() | list) | join(', ') }}.
+    success_msg: "All required OS baseline packages are installed."
+
+- name: Inspect required system directories
+  ansible.builtin.stat:
+    path: "{{ item.path }}"
+  loop: "{{ os_base_directories }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: os_base_directory_checks
+
+- name: Validate required system directories
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isdir
+      - item.stat.pw_name == (item.item.owner | default('root'))
+      - item.stat.gr_name == (item.item.group | default('root'))
+      - item.stat.mode == (item.item.mode | default('0755'))
+    fail_msg: "Invalid directory baseline: {{ item.item.path }}."
+  loop: "{{ os_base_directory_checks.results }}"
+  loop_control:
+    label: "{{ item.item.path }}"
+
+- name: Refresh mount facts
+  ansible.builtin.setup:
+    gather_subset:
+      - hardware
+    filter:
+      - ansible_mounts
+  when: os_base_mounts | length > 0
+
+- name: Validate required mounted filesystems
+  ansible.builtin.assert:
+    that:
+      - item.path in (ansible_mounts | map(attribute='mount') | list)
+    fail_msg: "Required filesystem is not mounted: {{ item.path }}."
+  loop: "{{ os_base_mounts }}"
+  loop_control:
+    label: "{{ item.path }}"
+  when: (item.state | default('mounted')) == 'mounted'
+
+- name: Wait for clock synchronization
+  ansible.builtin.command:
+    argv:
+      - chronyc
+      - tracking
+  environment:
+    LC_ALL: C
+  register: os_base_clock_check
+  changed_when: false
+  retries: 12
+  delay: 5
+  until:
+    - os_base_clock_check.rc == 0
+    - os_base_clock_check.stdout is search('(?m)^Leap status\s*:\s*Normal$')
+
+- name: Gather system service facts
+  ansible.builtin.service_facts:
+
+- name: Validate essential services
+  ansible.builtin.assert:
+    that:
+      - (item + '.service') in ansible_facts.services
+      - ansible_facts.services[item + '.service'].state == 'running'
+    fail_msg: "Essential service is not running: {{ item }}."
+  loop: "{{ os_base_effective_essential_services }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Validate unnecessary services are stopped
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.services[item + '.service'].state != 'running'
+    fail_msg: "Unnecessary service is still running: {{ item }}."
+  loop: "{{ os_base_disabled_services }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Check whether a reboot is required
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: os_base_reboot_required_file
+
+- name: Expose reboot requirement
+  ansible.builtin.set_fact:
+    os_base_reboot_required: "{{ os_base_reboot_required_file.stat.exists }}"
+
+- name: Report OS baseline validation result
+  ansible.builtin.debug:
+    msg:
+      - "OS baseline validation: OK"
+      - "Clock synchronized: yes"
+      - "Reboot required: {{ os_base_reboot_required | ternary('yes', 'no') }}"

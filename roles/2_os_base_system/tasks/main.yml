@@ -1,0 +1,51 @@
+---
+# Couche 2 - OS / Base system
+# Ce fichier orchestre seulement les sous-étapes. Chaque responsabilité est
+# implémentée dans un fichier dédié afin de rester testable et remplaçable.
+
+- name: 2.1 OS validation
+  ansible.builtin.import_tasks: 01_os_validation.yml
+  tags: [os_base, os_validation]
+
+- name: 2.2 Package management
+  ansible.builtin.import_tasks: 02_package_management.yml
+  become: true
+  tags: [os_base, package_management]
+
+- name: 2.3 Base packages
+  ansible.builtin.import_tasks: 03_base_packages.yml
+  become: true
+  tags: [os_base, base_packages]
+
+- name: 2.4 Host identity
+  ansible.builtin.import_tasks: 04_host_identity.yml
+  become: true
+  tags: [os_base, host_identity]
+
+- name: 2.5 Time
+  ansible.builtin.import_tasks: 05_time.yml
+  become: true
+  tags: [os_base, time]
+
+- name: 2.6 Locale
+  ansible.builtin.import_tasks: 06_locale.yml
+  become: true
+  tags: [os_base, locale]
+
+- name: 2.7 Filesystem baseline
+  ansible.builtin.import_tasks: 07_filesystem_baseline.yml
+  become: true
+  tags: [os_base, filesystem]
+
+- name: 2.8 System services
+  ansible.builtin.import_tasks: 08_system_services.yml
+  become: true
+  tags: [os_base, system_services]
+
+- name: Apply pending OS baseline handlers
+  ansible.builtin.meta: flush_handlers
+  tags: [os_base, validation]
+
+- name: 2.9 Validation
+  ansible.builtin.import_tasks: 09_validation.yml
+  tags: [os_base, validation]

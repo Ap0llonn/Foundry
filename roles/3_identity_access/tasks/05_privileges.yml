@@ -1,0 +1,18 @@
+---
+- name: Reconcile Foundry and administrative group membership
+  ansible.builtin.user:
+    name: "{{ item.name }}"
+    groups: >-
+      {{
+        (
+          (item.groups | default([]) | map('extract', identity_access_group_map) | list)
+          + ([identity_access_admin_group] if item.admin | default(false) | bool else [])
+        )
+        | unique
+        | list
+      }}
+    append: false
+  when: (item.state | default('present')) == 'present'
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }}"

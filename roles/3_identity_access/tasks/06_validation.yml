@@ -1,0 +1,142 @@
+---
+- name: Gather account database
+  ansible.builtin.getent:
+    database: passwd
+
+- name: Gather group database
+  ansible.builtin.getent:
+    database: group
+
+- name: Validate present Linux accounts
+  ansible.builtin.assert:
+    that:
+      - item.name in ansible_facts.getent_passwd
+      - ansible_facts.getent_passwd[item.name][4] == identity_access_default_home_root + '/' + item.name
+      - ansible_facts.getent_passwd[item.name][5] == identity_access_default_shell
+    fail_msg: "Linux account {{ item.name }} does not match the desired identity state."
+  when: (item.state | default('present')) == 'present'
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Validate explicitly absent Linux accounts
+  ansible.builtin.assert:
+    that:
+      - item.name not in ansible_facts.getent_passwd
+    fail_msg: "Linux account {{ item.name }} should be absent."
+  when: (item.state | default('present')) == 'absent'
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Validate Foundry authorization groups
+  ansible.builtin.assert:
+    that:
+      - item.value in ansible_facts.getent_group
+    fail_msg: "Foundry authorization group {{ item.value }} is missing."
+  loop: "{{ identity_access_group_map | dict2items }}"
+  loop_control:
+    label: "{{ item.key }} -> {{ item.value }}"
+
+- name: Inspect managed SSH directories
+  ansible.builtin.stat:
+    path: "{{ identity_access_default_home_root }}/{{ item.name }}/.ssh"
+  when: (item.state | default('present')) == 'present'
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: identity_access_ssh_directory_checks
+
+- name: Validate managed SSH directory ownership and permissions
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isdir
+      - item.stat.pw_name == item.item.name
+      - item.stat.gr_name == item.item.name
+      - item.stat.mode == '0700'
+    fail_msg: "Invalid .ssh directory for {{ item.item.name }}."
+  when: not item.skipped | default(false)
+  loop: "{{ identity_access_ssh_directory_checks.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Read managed authorized_keys files
+  ansible.builtin.slurp:
+    path: "{{ identity_access_default_home_root }}/{{ item.name }}/.ssh/authorized_keys"
+  when: (item.state | default('present')) == 'present'
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: identity_access_authorized_key_checks
+
+- name: Validate authorized_keys content, ownership, and permissions
+  ansible.builtin.assert:
+    that:
+      - item.source is defined
+      - (item.content | b64decode).splitlines() == (item.item.ssh_keys | default([]))
+    fail_msg: "authorized_keys does not match desired state for {{ item.item.name }}."
+  when: not item.skipped | default(false)
+  loop: "{{ identity_access_authorized_key_checks.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Inspect authorized_keys metadata
+  ansible.builtin.stat:
+    path: "{{ identity_access_default_home_root }}/{{ item.name }}/.ssh/authorized_keys"
+  when: (item.state | default('present')) == 'present'
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: identity_access_authorized_key_metadata
+
+- name: Validate authorized_keys ownership and permissions
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg
+      - item.stat.pw_name == item.item.name
+      - item.stat.gr_name == item.item.name
+      - item.stat.mode == '0600'
+    fail_msg: "Invalid authorized_keys metadata for {{ item.item.name }}."
+  when: not item.skipped | default(false)
+  loop: "{{ identity_access_authorized_key_metadata.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Read effective Linux group memberships
+  ansible.builtin.command:
+    argv:
+      - id
+      - -nG
+      - "{{ item.name }}"
+  changed_when: false
+  when: (item.state | default('present')) == 'present'
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: identity_access_group_membership_checks
+
+- name: Validate exact Linux group memberships
+  ansible.builtin.assert:
+    that:
+      - >-
+        item.stdout.split() | sort
+        ==
+        (
+          [item.item.name]
+          + (item.item.groups | default([]) | map('extract', identity_access_group_map) | list)
+          + ([identity_access_admin_group] if item.item.admin | default(false) | bool else [])
+        ) | unique | sort
+    fail_msg: "Linux group membership is incorrect for {{ item.item.name }}."
+  when: not item.skipped | default(false)
+  loop: "{{ identity_access_group_membership_checks.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Report identity validation result
+  ansible.builtin.debug:
+    msg:
+      - "Identity & access validation: OK"
+      - "Managed users: {{ identity_access_users | length }}"
+      - "Foundry authorization groups: {{ identity_access_group_map.keys() | list | join(', ') }}"

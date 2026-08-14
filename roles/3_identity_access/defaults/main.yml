@@ -1,0 +1,46 @@
+---
+# The global `identity.users` configuration is the source of truth. These
+# defaults translate Foundry concepts into the supported Linux implementation.
+identity_access_users: "{{ (identity | default({})).get('users', []) }}"
+
+identity_access_default_home_root: /home
+identity_access_default_shell: /bin/bash
+identity_access_admin_group: sudo
+
+# Foundry group names exposed in config map to Linux groups owned by Foundry.
+identity_access_group_map:
+  developer: foundry-developer
+  operator: foundry-operator
+  observer: foundry-observer
+
+# These groups carry privileges outside Foundry's authorization policy and may
+# not be requested through identity.users[].groups.
+identity_access_privileged_groups:
+  - adm
+  - docker
+  - lxd
+  - root
+  - sudo
+  - wheel
+
+# System identities must never be managed as human Foundry accounts.
+identity_access_protected_accounts:
+  - daemon
+  - halt
+  - nobody
+  - root
+  - shutdown
+  - sync
+
+identity_access_allowed_states:
+  - present
+  - absent
+
+identity_access_allowed_user_properties:
+  - name
+  - state
+  - admin
+  - groups
+  - ssh_keys
+
+identity_access_ssh_public_key_pattern: '^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com)\s+[A-Za-z0-9+/]+={0,3}(\s+.*)?$'

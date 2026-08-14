@@ -1,0 +1,24 @@
+---
+- name: Create or update present human users
+  ansible.builtin.user:
+    name: "{{ item.name }}"
+    state: present
+    group: "{{ item.name }}"
+    home: "{{ identity_access_default_home_root }}/{{ item.name }}"
+    shell: "{{ identity_access_default_shell }}"
+    create_home: true
+  when: (item.state | default('present')) == 'present'
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Remove explicitly absent human users while preserving their data
+  ansible.builtin.user:
+    name: "{{ item.name }}"
+    state: absent
+    remove: false
+    force: false
+  when: (item.state | default('present')) == 'absent'
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }}"

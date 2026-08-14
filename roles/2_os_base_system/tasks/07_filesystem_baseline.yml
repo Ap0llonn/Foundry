@@ -1,0 +1,33 @@
+---
+- name: Validate filesystem baseline definitions
+  ansible.builtin.assert:
+    that:
+      - os_base_mounts is sequence
+      - os_base_mounts is not string
+      - os_base_directories is sequence
+      - os_base_directories is not string
+    fail_msg: "os_base_mounts and os_base_directories must be lists."
+
+- name: Configure required filesystems and mounts
+  ansible.posix.mount:
+    path: "{{ item.path }}"
+    src: "{{ item.src }}"
+    fstype: "{{ item.fstype }}"
+    opts: "{{ item.opts | default('defaults') }}"
+    dump: "{{ item.dump | default('0') }}"
+    passno: "{{ item.passno | default('0') }}"
+    state: "{{ item.state | default('mounted') }}"
+  loop: "{{ os_base_mounts }}"
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Create required system directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+    mode: "{{ item.mode | default('0755') }}"
+  loop: "{{ os_base_directories }}"
+  loop_control:
+    label: "{{ item.path }}"

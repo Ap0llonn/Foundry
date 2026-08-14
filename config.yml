@@ -1,0 +1,13 @@
+---
+# Configuration globale de l'infrastructure.
+vm_ip: 149.56.96.110
+
+identity:
+  users:
+    - name: sam
+      state: present
+      admin: true
+      groups:
+        - developer
+      ssh_keys:
+        - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK7L42eQxouanToSk3tTqGdf82hRiMNmiulVqUHo4QG8 samuelcourchesne@Mac"

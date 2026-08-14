@@ -1,0 +1,8 @@
+---
+# Role: generic_app_flow
+# Inclut le rôle d'infrastructure choisi. Ne fait rien si aucune valeur
+# n'est fournie pour `infrastructure_type`.
+- name: Include selected infrastructure role
+  ansible.builtin.include_role:
+    name: "{{ infrastructure_type }}"
+  when: (infrastructure_type | default('') | string | length) > 0

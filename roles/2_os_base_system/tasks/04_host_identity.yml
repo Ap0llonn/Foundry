@@ -1,0 +1,13 @@
+---
+- name: Validate configured hostname
+  ansible.builtin.assert:
+    that:
+      - os_base_hostname | string | length > 0
+      - os_base_hostname | string | length <= 64
+      - os_base_hostname is match('^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$')
+    fail_msg: "os_base_hostname must be a non-empty valid hostname."
+
+- name: Set system hostname
+  ansible.builtin.hostname:
+    name: "{{ os_base_hostname }}"
+    use: systemd

@@ -1,0 +1,13 @@
+---
+- name: Validate base package list
+  ansible.builtin.assert:
+    that:
+      - os_base_packages is sequence
+      - os_base_packages is not string
+      - os_base_packages | length > 0
+    fail_msg: "os_base_packages must contain the required baseline packages."
+
+- name: Install base packages
+  ansible.builtin.apt:
+    name: "{{ os_base_packages }}"
+    state: present

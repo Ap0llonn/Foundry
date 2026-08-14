@@ -1,0 +1,30 @@
+---
+- name: Build effective essential service list
+  ansible.builtin.set_fact:
+    os_base_effective_essential_services: >-
+      {{
+        (
+          os_base_essential_services
+          + (['unattended-upgrades'] if os_base_enable_security_updates | bool else [])
+        )
+        | unique
+        | list
+      }}
+
+- name: Enable and start essential system services
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop: "{{ os_base_effective_essential_services }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Disable and stop unnecessary system services
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: false
+    state: stopped
+  loop: "{{ os_base_disabled_services }}"
+  loop_control:
+    label: "{{ item }}"

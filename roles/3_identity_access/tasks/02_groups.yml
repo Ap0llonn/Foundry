@@ -1,0 +1,19 @@
+---
+- name: Create Foundry authorization groups
+  ansible.builtin.group:
+    name: "{{ item.value }}"
+    state: present
+    system: false
+  loop: "{{ identity_access_group_map | dict2items }}"
+  loop_control:
+    label: "{{ item.key }} -> {{ item.value }}"
+
+- name: Create private primary groups for present users
+  ansible.builtin.group:
+    name: "{{ item.name }}"
+    state: present
+    system: false
+  when: (item.state | default('present')) == 'present'
+  loop: "{{ identity_access_users }}"
+  loop_control:
+    label: "{{ item.name }}"

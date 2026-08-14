@@ -1,0 +1,39 @@
+---
+- name: Gather facts required by the OS baseline
+  ansible.builtin.setup:
+    gather_subset:
+      - min
+      - hardware
+
+- name: Validate supported distribution
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution in os_base_supported_versions
+    fail_msg: >-
+      Unsupported distribution: {{ ansible_distribution }}.
+      Supported distributions: {{ os_base_supported_versions.keys() | list | join(', ') }}.
+    success_msg: "Supported distribution: {{ ansible_distribution }}"
+
+- name: Validate supported distribution version
+  ansible.builtin.assert:
+    that:
+      - (ansible_distribution_major_version | string) in os_base_supported_versions[ansible_distribution]
+    fail_msg: >-
+      Unsupported {{ ansible_distribution }} version: {{ ansible_distribution_version }}.
+      Supported major versions: {{ os_base_supported_versions[ansible_distribution] | join(', ') }}.
+    success_msg: "Supported version: {{ ansible_distribution_version }}"
+
+- name: Validate supported CPU architecture
+  ansible.builtin.assert:
+    that:
+      - ansible_architecture in os_base_supported_architectures
+    fail_msg: >-
+      Unsupported CPU architecture: {{ ansible_architecture }}.
+      Supported architectures: {{ os_base_supported_architectures | join(', ') }}.
+    success_msg: "Supported CPU architecture: {{ ansible_architecture }}"
+
+- name: Validate APT package manager availability
+  ansible.builtin.assert:
+    that:
+      - ansible_pkg_mgr == 'apt'
+    fail_msg: "This baseline currently requires APT; detected: {{ ansible_pkg_mgr }}."
