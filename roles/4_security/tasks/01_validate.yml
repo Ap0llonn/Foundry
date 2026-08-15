@@ -154,7 +154,7 @@
   ansible.builtin.assert:
     that:
       - item is string
-      - item | ansible.utils.ipaddr
+      - (item | ansible.utils.ipaddr) != false
     fail_msg: "Invalid management CIDR: {{ item }}."
   loop: "{{ security_management_allowed_cidrs }}"
 
@@ -182,7 +182,7 @@
     security_management_source_allowed: true
   when:
     - security_management_source_ip | length > 0
-    - security_management_source_ip | ansible.utils.ipaddr(item)
+    - (security_management_source_ip | ansible.utils.ipaddr(item)) != false
   loop: "{{ security_management_allowed_cidrs }}"
 
 - name: Prevent CIDR-restricted management lockout
@@ -225,7 +225,7 @@
   ansible.builtin.assert:
     that:
       - item is string
-      - item | ansible.utils.ipaddr
+      - (item | ansible.utils.ipaddr) != false
     fail_msg: "Invalid Fail2ban ignored source: {{ item }}."
   loop: "{{ security_resolved.fail2ban.ignore }}"
 

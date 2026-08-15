@@ -35,6 +35,24 @@
     checksum_algorithm: sha256
   register: runtime_docker_live_config_state
 
+- name: Read the existing Docker daemon configuration for exact recovery checks
+  ansible.builtin.slurp:
+    path: "{{ runtime_docker_daemon_config }}"
+  register: runtime_docker_live_config_raw
+  when: runtime_docker_live_config_state.stat.exists
+
+- name: Resolve exact accepted partial-bootstrap daemon documents
+  ansible.builtin.set_fact:
+    runtime_docker_live_config_document: >-
+      {{
+        (runtime_docker_live_config_raw.content | b64decode | from_json)
+        if runtime_docker_live_config_state.stat.exists else {}
+      }}
+    runtime_docker_partial_recovery_documents:
+      - "{{ runtime_docker_daemon_document }}"
+      - "{{ runtime_docker_daemon_document | combine({'live-restore': true}) }}"
+      - "{{ runtime_docker_daemon_document | combine({'live-restore': false}) }}"
+
 - name: Inspect Runtime ownership before daemon adoption
   ansible.builtin.stat:
     path: "{{ runtime_docker_ownership_manifest }}"
@@ -59,8 +77,8 @@
         or runtime_docker_manifest_state.stat.exists
         or (
           runtime_docker_partial_repository_state.stat.exists
-          and runtime_docker_live_config_state.stat.checksum
-              == runtime_docker_candidate_state.stat.checksum
+          and runtime_docker_live_config_document
+              in runtime_docker_partial_recovery_documents
         )
         or (
           runtime_resolved.docker.daemon_config_adoption == 'matching'
@@ -70,7 +88,9 @@
     fail_msg: >-
       {{ runtime_docker_daemon_config }} exists without Foundry ownership.
       Foundry refused to overwrite it. Review it and explicitly select
-      daemon_config_adoption: matching only when it already matches the desired policy.
+      daemon_config_adoption: matching only when it already matches the desired
+      policy. Interrupted-bootstrap recovery accepts only the complete current
+      Foundry document or its exact historical live-restore variant.
 
 - name: Identify running workloads before a daemon configuration change
   ansible.builtin.command:

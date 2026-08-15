@@ -79,11 +79,29 @@
   changed_when: false
   check_mode: false
 
-- name: Validate standalone Docker API exposure
+- name: Resolve exact Docker-owned TCP listener ports
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail &&
+      ss -H --tcp --listening --numeric --process |
+      awk '/dockerd/ { endpoint=$4; sub(/^.*:/, "", endpoint); print endpoint }' |
+      sort -nu
+    executable: /bin/bash
+  register: runtime_docker_validation_tcp_listener_ports
+  changed_when: false
+  check_mode: false
+
+- name: Validate Docker API and Swarm TCP exposure boundary
   ansible.builtin.assert:
     that:
-      - runtime_docker_validation_tcp_listeners.stdout is not search('dockerd')
-    fail_msg: Docker exposes an unexpected TCP API listener.
+      - >-
+        runtime_docker_validation_tcp_listener_ports.stdout_lines
+        == (['2377', '7946'] if runtime_swarm_requested else [])
+      - runtime_docker_validation_tcp_listeners.stdout is not search(':(2375|2376)\\s')
+    fail_msg: >-
+      Docker exposes an unexpected TCP listener. Standalone Runtime permits no
+      dockerd TCP listener; single-manager Swarm permits only 2377/tcp and
+      7946/tcp. Remote Docker API ports 2375/2376 are always forbidden.
 
 - name: Collect standalone Docker root capacity
   ansible.builtin.command:
@@ -162,6 +180,7 @@
       - runtime_docker_info.LoggingDriver == runtime_resolved.docker.logging.driver
       - runtime_docker_info.DockerRootDir == runtime_resolved.docker.data_root
       - runtime_docker_info.Driver in runtime_docker_allowed_storage_drivers
+      - runtime_docker_info.LiveRestoreEnabled | bool == (not runtime_swarm_requested)
       - runtime_docker_free_percent | int >= runtime_docker_min_free_percent | int
       - runtime_docker_free_inodes_percent | int >= runtime_docker_min_free_inodes_percent | int
     fail_msg: Docker Engine, API, Compose, containerd, logging, or storage validation failed.

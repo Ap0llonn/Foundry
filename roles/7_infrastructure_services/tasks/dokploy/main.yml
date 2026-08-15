@@ -411,12 +411,19 @@
       - docker
       - service
       - ls
-      - --filter
-      - "name={{ infrastructure_services_dokploy_service_name }}"
       - --format
-      - "{{ '{{.Replicas}}' }}"
-  register: infrastructure_services_dokploy_replicas
+      - "{{ '{{.Name}} {{.Replicas}}' }}"
+  register: infrastructure_services_dokploy_services
   changed_when: false
   retries: "{{ infrastructure_services_health_retries }}"
   delay: "{{ infrastructure_services_health_delay }}"
-  until: infrastructure_services_dokploy_replicas.stdout == '1/1'
+  until: >-
+    (
+      infrastructure_services_dokploy_services.stdout_lines
+      | select(
+          'equalto',
+          infrastructure_services_dokploy_service_name ~ ' 1/1'
+        )
+      | list
+      | length
+    ) == 1

@@ -30,13 +30,19 @@
         exec redis-cli ping
   register: infrastructure_services_redis_ping
   changed_when: false
-  failed_when: infrastructure_services_redis_ping.rc != 0 or infrastructure_services_redis_ping.stdout != 'PONG'
+  failed_when: >-
+    infrastructure_services_redis_ping.rc != 0
+    or infrastructure_services_redis_ping.stdout != 'PONG'
   loop: "{{ infrastructure_services_redis_instances }}"
   no_log: true
 
 - name: Inspect final Redis runtime contracts
   ansible.builtin.command:
-    argv: [docker, container, inspect, "{{ item.container_name }}"]
+    argv:
+      - docker
+      - container
+      - inspect
+      - "{{ item.container_name }}"
   register: infrastructure_services_redis_final_inspections
   changed_when: false
   loop: "{{ infrastructure_services_redis_instances }}"
@@ -46,23 +52,184 @@
   ansible.builtin.assert:
     that:
       - (item.stdout | from_json | first).State.Running
+
       - (item.stdout | from_json | first).State.Health.Status == 'healthy'
-      - (item.stdout | from_json | first).Config.Image == item.item.image
-      - (item.stdout | from_json | first).HostConfig.RestartPolicy.Name == 'unless-stopped'
-      - (item.stdout | from_json | first).HostConfig.PortBindings | default({}, true) | length == 0
-      - (item.stdout | from_json | first).NetworkSettings.Networks.keys() | list == [item.item.network_name]
-      - ((item.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.managed') == 'true'
-      - ((item.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.project') == project.name
-      - ((item.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.environment') == item.item.environment
-      - ((item.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.service') == 'redis'
-      - ((item.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.resource') == 'redis'
+
+      - (item.stdout | from_json | first).Config.Image
+        == item.item.image
+
+      - (item.stdout | from_json | first).HostConfig.RestartPolicy.Name
+        == 'unless-stopped'
+
       - >-
-        (item.item.persistence and
-         (item.stdout | from_json | first).Mounts | selectattr('Name', 'equalto', item.item.volume_name)
-         | selectattr('Destination', 'equalto', '/data') | list | length == 1)
-        or (not item.item.persistence and
+        (
+          (item.stdout | from_json | first).HostConfig.PortBindings
+          | default({}, true)
+          | length
+        ) == 0
+
+      - >-
+        (
+          (item.stdout | from_json | first).NetworkSettings.Networks.keys()
+          | list
+        ) == [item.item.network_name]
+
+      - >-
+        (
+          (item.stdout | from_json | first).Config.Labels
+          | default({}, true)
+        ).get('foundry.managed') == 'true'
+
+      - >-
+        (
+          (item.stdout | from_json | first).Config.Labels
+          | default({}, true)
+        ).get('foundry.project') == project.name
+
+      - >-
+        (
+          (item.stdout | from_json | first).Config.Labels
+          | default({}, true)
+        ).get('foundry.environment') == item.item.environment
+
+      - >-
+        (
+          (item.stdout | from_json | first).Config.Labels
+          | default({}, true)
+        ).get('foundry.service') == 'redis'
+
+      - >-
+        (
+          (item.stdout | from_json | first).Config.Labels
+          | default({}, true)
+        ).get('foundry.resource') == 'redis'
+
+      - >-
+        (
+          (item.stdout | from_json | first).Config.Env
+          | select('match', '^REDIS_PASSWORD=')
+          | list
+          | length
+        ) == 0
+
+      - >-
+        (
+          (item.stdout | from_json | first).Mounts
+          | selectattr('Type', 'equalto', 'bind')
+          | selectattr('Source', 'defined')
+          | selectattr('Source', 'equalto', item.item.configuration_file)
+          | selectattr(
+              'Destination',
+              'equalto',
+              '/usr/local/etc/redis/redis.conf'
+            )
+          | selectattr('RW', 'equalto', false)
+          | list
+          | length
+        ) == 1
+
+      - >-
+        (
+          item.item.persistence
+          and (
             (item.stdout | from_json | first).Mounts
-            | selectattr('Destination', 'equalto', '/data') | list | length == 0)
-    fail_msg: Redis failed its ownership, persistence, or network-isolation contract.
+            | selectattr('Type', 'equalto', 'volume')
+            | selectattr('Name', 'defined')
+            | selectattr('Name', 'equalto', item.item.volume_name)
+            | selectattr('Destination', 'equalto', '/data')
+            | selectattr('RW', 'equalto', true)
+            | list
+            | length
+          ) == 1
+        )
+        or
+        (
+          not item.item.persistence
+          and (
+            (item.stdout | from_json | first).Mounts
+            | selectattr('Destination', 'equalto', '/data')
+            | list
+            | length
+          ) == 0
+        )
+
+      - >-
+        (
+          (item.stdout | from_json | first).Config.Healthcheck.Test
+          ==
+          [
+            'CMD-SHELL',
+            infrastructure_services_redis_healthcheck_command
+          ]
+        )
+
+      - >-
+        (item.stdout | from_json | first).Config.Healthcheck.Interval
+        == 10000000000
+
+      - >-
+        (item.stdout | from_json | first).Config.Healthcheck.Timeout
+        == 5000000000
+
+      - >-
+        (item.stdout | from_json | first).Config.Healthcheck.Retries
+        == 12
+
+      - >-
+        (item.stdout | from_json | first).Config.Healthcheck.StartPeriod
+        == 10000000000
+
+      - >-
+        (
+          (item.stdout | from_json | first).Config.Cmd
+          ==
+          [
+            'redis-server',
+            '/usr/local/etc/redis/redis.conf'
+          ]
+        )
+
+      - >-
+        (
+          (item.stdout | from_json | first).HostConfig.Memory
+          ==
+          (
+            0
+            if item.item.resources.memory | default('') | length == 0
+            else (
+              (item.item.resources.memory[:-1] | int)
+              * {
+                  'b': 1,
+                  'k': 1024,
+                  'm': 1048576,
+                  'g': 1073741824
+                }[
+                  item.item.resources.memory[-1:] | lower
+                ]
+              if item.item.resources.memory[-1:] | lower
+                in ['b', 'k', 'm', 'g']
+              else item.item.resources.memory | int
+            )
+          )
+        )
+
+      - >-
+        (
+          (item.stdout | from_json | first).HostConfig.NanoCpus
+          ==
+          (
+            ((item.item.resources.cpus | float) * 1000000000) | int
+            if item.item.resources.cpus
+              | default('')
+              | string
+              | length > 0
+            else 0
+          )
+        )
+
+    fail_msg: >-
+      Redis failed its ownership, persistence,
+      configuration, health, or network-isolation contract.
+
   loop: "{{ infrastructure_services_redis_final_inspections.results }}"
   no_log: true

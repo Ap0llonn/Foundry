@@ -24,7 +24,8 @@
   changed_when: false
   failed_when: >-
     infrastructure_services_postgres_version_checks.rc != 0
-    or infrastructure_services_postgres_version_checks.stdout is not search('PostgreSQL 17[.]')
+    or infrastructure_services_postgres_version_checks.stdout
+    is not search('PostgreSQL\)\s+17(?:[.]|$)')
 
 - name: Create missing Foundry-owned PostgreSQL volumes
   ansible.builtin.command:

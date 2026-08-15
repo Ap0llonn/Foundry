@@ -1,30 +1,6 @@
 ---
-- name: Inspect attached container metadata
-  ansible.builtin.command:
-    argv: [docker, container, inspect, "{{ networking_attachment.container_id }}"]
-  register: networking_attachment_container_raw
-  changed_when: false
-  check_mode: false
-  no_log: true
-
-- name: Resolve attached container metadata
-  ansible.builtin.set_fact:
-    networking_attachment_container_name: >-
-      {{ (networking_attachment_container_raw.stdout | from_json | first).Name }}
-    networking_attachment_container_labels: >-
-      {{
-        (networking_attachment_container_raw.stdout | from_json | first).Config.Labels
-        | default({}, true)
-      }}
-  no_log: true
-
-- name: Reject cross-environment attachment of labeled Foundry workloads
-  ansible.builtin.assert:
-    that:
-      - >-
-        networking_attachment_container_labels.get(networking_label_managed) != 'true'
-        or networking_attachment_container_labels.get(networking_label_project) != project.name
-        or networking_attachment_container_labels.get(networking_label_environment) == networking_attachment.environment
-    fail_msg: >-
-      Foundry workload {{ networking_attachment_container_name }} is attached
-      across environment boundaries through {{ networking_attachment.network_name }}.
+- name: Validate attached containers
+  ansible.builtin.include_tasks: validate_attachment.yml
+  loop: "{{ networking_real_attachments }}"
+  loop_control:
+    loop_var: networking_attachment

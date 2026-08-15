@@ -133,8 +133,11 @@ network:
 management:
   # Dokploy requires this to be true and at least one CIDR before it can start;
   # this prevents an unauthorised visitor from claiming the first admin account.
-  restrict_by_cidr: false
-  allowed_cidrs: []
+  restrict_by_cidr: true
+  allowed_cidrs:
+    # Current public IP of the administrator workstation. Update this /32 when
+    # changing Internet connection, or replace it with the trusted VPN CIDR.
+    - 74.15.115.174/32
 
 security:
   ssh:
@@ -192,8 +195,9 @@ security:
 # for externally controlled credentials without enabling SSH password login.
 services:
   postgres:
-    enabled: false
-    environments: []
+    enabled: true
+    environments:
+      - prod
     major: 17
     credentials: {}
     resources:
@@ -201,8 +205,9 @@ services:
       cpus: ""
 
   redis:
-    enabled: false
-    environments: []
+    enabled: true
+    environments:
+      - prod
     version: "8.2"
     credentials: {}
     persistence: true
@@ -228,13 +233,13 @@ services:
 # Foundry never executes Dokploy's destructive installation script.
 platform:
   swarm:
-    enabled: false
+    enabled: true
     advertise_address: ""
     default_address_pool: 10.240.0.0/16
     subnet_size: 24
 
   traefik:
-    enabled: false
+    enabled: true
     http_port: 80
     https_port: 443
     tls:
@@ -242,7 +247,7 @@ platform:
       email: ""
 
   dokploy:
-    enabled: false
+    enabled: true
     management_port: 3000
     credentials: {}
     secret_version: v1

@@ -175,3 +175,7 @@ infrastructure_services_dokploy_service_name: dokploy
 infrastructure_services_dokploy_postgres_service_name: dokploy-postgres
 infrastructure_services_health_retries: 30
 infrastructure_services_health_delay: 2
+
+infrastructure_services_redis_healthcheck_command: >-
+  REDISCLI_AUTH="$(awk '$1 == "requirepass" {print $2}' /usr/local/etc/redis/redis.conf)"
+  redis-cli ping | grep -qx PONG

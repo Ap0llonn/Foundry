@@ -52,9 +52,11 @@
     modification_time: preserve
   when: foundry_platform_resolved.traefik.tls.enabled
 
-- name: Validate Traefik configuration with the pinned image
+- name: Validate Traefik candidate configuration with the pinned runtime
   ansible.builtin.command:
     argv:
+      - timeout
+      - 5s
       - docker
       - run
       - --rm
@@ -62,11 +64,13 @@
       - "{{ infrastructure_services_traefik_candidate }}:/etc/traefik/traefik.yml:ro"
       - --volume
       - "{{ infrastructure_services_traefik_dynamic_directory }}:{{ infrastructure_services_traefik_dynamic_directory }}:ro"
+      - --volume
+      - /var/run/docker.sock:/var/run/docker.sock:ro
       - "{{ foundry_platform_resolved.traefik.image }}"
-      - check-config
       - --configFile=/etc/traefik/traefik.yml
   register: infrastructure_services_traefik_config_validation
   changed_when: false
+  failed_when: infrastructure_services_traefik_config_validation.rc != 124
 
 - name: Activate only the validated Traefik candidate
   ansible.builtin.copy:

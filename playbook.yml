@@ -160,7 +160,7 @@
         name: 7_infrastructure_services
         tasks_from: plan/main
         apply:
-          tags: [infrastructure_services_plan]
+          tags: [always, infrastructure_services_plan]
       tags: [always, infrastructure_services_plan, security]
 
     - name: Validate complete Infrastructure Services intent before host mutation
@@ -168,7 +168,7 @@
         name: 7_infrastructure_services
         tasks_from: 01_validate
         apply:
-          tags: [infrastructure_services_validation]
+          tags: [always, infrastructure_services_validation]
       tags: [always, infrastructure_services_plan, infrastructure_services_validation]
 
   # Les couches seront ajoutées ici dans leur ordre d'exécution (1 à 9)
@@ -198,7 +198,7 @@
     - name: Revalidate final Security exposure after Docker workloads exist
       ansible.builtin.include_role:
         name: 4_security
-        tasks_from: validation/main
+        tasks_from: 07_validation
         apply:
           become: true
           tags: [security_result, infrastructure_services_result]

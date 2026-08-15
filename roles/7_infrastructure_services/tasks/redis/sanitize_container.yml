@@ -6,6 +6,7 @@
         infrastructure_services_redis_container_state + [{
           'container_name': redis_inspection.item.container_name,
           'exists': redis_inspection.rc == 0,
+
           'owned': (
             redis_inspection.rc == 0
             and ((redis_inspection.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.managed') == 'true'
@@ -14,52 +15,142 @@
             and ((redis_inspection.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.service') == 'redis'
             and ((redis_inspection.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.resource') == 'redis'
           ),
+
           'compatible': (
             redis_inspection.rc == 0
+
             and ((redis_inspection.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.managed') == 'true'
             and ((redis_inspection.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.project') == project.name
             and ((redis_inspection.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.environment') == redis_inspection.item.environment
             and ((redis_inspection.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.service') == 'redis'
             and ((redis_inspection.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.resource') == 'redis'
             and ((redis_inspection.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.config-sha256') == redis_inspection.item.configuration_hash
-            and (redis_inspection.stdout | from_json | first).Config.Image == redis_inspection.item.image
-            and (redis_inspection.stdout | from_json | first).HostConfig.RestartPolicy.Name == 'unless-stopped'
-            and (redis_inspection.stdout | from_json | first).HostConfig.PortBindings | default({}, true) | length == 0
-            and (redis_inspection.stdout | from_json | first).NetworkSettings.Networks.keys() | list == [redis_inspection.item.network_name]
-            and (redis_inspection.stdout | from_json | first).Config.Env
-                | select('match', '^REDIS_PASSWORD=') | list | length == 0
-            and (redis_inspection.stdout | from_json | first).Mounts
-                | selectattr('Source', 'equalto', redis_inspection.item.configuration_file)
-                | selectattr('Destination', 'equalto', '/usr/local/etc/redis/redis.conf') | list | length == 1
-            and (redis_inspection.stdout | from_json | first).Config.Healthcheck.Test
-                == ['CMD-SHELL', 'REDISCLI_AUTH="$(awk ''$1 == "requirepass" {print $2}'' /usr/local/etc/redis/redis.conf)" redis-cli ping | grep -qx PONG']
-            and (redis_inspection.stdout | from_json | first).Config.Healthcheck.Interval == 10000000000
-            and (redis_inspection.stdout | from_json | first).Config.Healthcheck.Timeout == 5000000000
-            and (redis_inspection.stdout | from_json | first).Config.Healthcheck.Retries == 12
-            and (redis_inspection.stdout | from_json | first).Config.Healthcheck.StartPeriod == 10000000000
-            and (redis_inspection.stdout | from_json | first).Config.Cmd
-                == ['redis-server', '/usr/local/etc/redis/redis.conf']
+
+            and (redis_inspection.stdout | from_json | first).Config.Image
+                == redis_inspection.item.image
+
+            and (redis_inspection.stdout | from_json | first).HostConfig.RestartPolicy.Name
+                == 'unless-stopped'
+
             and (
-              (redis_inspection.item.persistence
-               and (redis_inspection.stdout | from_json | first).Mounts
-                   | selectattr('Name', 'equalto', redis_inspection.item.volume_name)
-                   | selectattr('Destination', 'equalto', '/data') | list | length == 1)
-              or (not redis_inspection.item.persistence
-                  and (redis_inspection.stdout | from_json | first).Mounts
-                      | selectattr('Destination', 'equalto', '/data') | list | length == 0)
+              (redis_inspection.stdout | from_json | first).HostConfig.PortBindings
+              | default({}, true)
+              | length
+            ) == 0
+
+            and (
+              (redis_inspection.stdout | from_json | first).NetworkSettings.Networks.keys()
+              | list
+            ) == [redis_inspection.item.network_name]
+
+            and (
+              (redis_inspection.stdout | from_json | first).Config.Env
+              | select('match', '^REDIS_PASSWORD=')
+              | list
+              | length
+            ) == 0
+
+            and (
+              (redis_inspection.stdout | from_json | first).Mounts
+              | selectattr('Type', 'equalto', 'bind')
+              | selectattr('Source', 'defined')
+              | selectattr('Source', 'equalto', redis_inspection.item.configuration_file)
+              | selectattr('Destination', 'equalto', '/usr/local/etc/redis/redis.conf')
+              | selectattr('RW', 'equalto', false)
+              | list
+              | length
+            ) == 1
+
+            and (
+              (redis_inspection.stdout | from_json | first).Config.Healthcheck.Test
+              ==
+              [
+                'CMD-SHELL',
+                infrastructure_services_redis_healthcheck_command
+              ]
             )
-            and (redis_inspection.stdout | from_json | first).HostConfig.Memory == (
-              0 if redis_inspection.item.resources.memory | default('') | length == 0
-              else (
-                (redis_inspection.item.resources.memory[:-1] | int)
-                * {'b': 1, 'k': 1024, 'm': 1048576, 'g': 1073741824}[redis_inspection.item.resources.memory[-1:] | lower]
-                if redis_inspection.item.resources.memory[-1:] | lower in ['b', 'k', 'm', 'g']
-                else redis_inspection.item.resources.memory | int
+
+            and (redis_inspection.stdout | from_json | first).Config.Healthcheck.Interval
+                == 10000000000
+
+            and (redis_inspection.stdout | from_json | first).Config.Healthcheck.Timeout
+                == 5000000000
+
+            and (redis_inspection.stdout | from_json | first).Config.Healthcheck.Retries
+                == 12
+
+            and (redis_inspection.stdout | from_json | first).Config.Healthcheck.StartPeriod
+                == 10000000000
+
+            and (
+              (redis_inspection.stdout | from_json | first).Config.Cmd
+              ==
+              [
+                'redis-server',
+                '/usr/local/etc/redis/redis.conf'
+              ]
+            )
+
+            and (
+              (
+                redis_inspection.item.persistence
+                and (
+                  (redis_inspection.stdout | from_json | first).Mounts
+                  | selectattr('Type', 'equalto', 'volume')
+                  | selectattr('Name', 'defined')
+                  | selectattr('Name', 'equalto', redis_inspection.item.volume_name)
+                  | selectattr('Destination', 'equalto', '/data')
+                  | selectattr('RW', 'equalto', true)
+                  | list
+                  | length
+                ) == 1
+              )
+              or
+              (
+                not redis_inspection.item.persistence
+                and (
+                  (redis_inspection.stdout | from_json | first).Mounts
+                  | selectattr('Destination', 'equalto', '/data')
+                  | list
+                  | length
+                ) == 0
               )
             )
-            and (redis_inspection.stdout | from_json | first).HostConfig.NanoCpus == (
-              ((redis_inspection.item.resources.cpus | float) * 1000000000) | int
-              if redis_inspection.item.resources.cpus | default('') | string | length > 0 else 0
+
+            and (
+              (redis_inspection.stdout | from_json | first).HostConfig.Memory
+              ==
+              (
+                0
+                if redis_inspection.item.resources.memory | default('') | length == 0
+                else (
+                  (redis_inspection.item.resources.memory[:-1] | int)
+                  * {
+                      'b': 1,
+                      'k': 1024,
+                      'm': 1048576,
+                      'g': 1073741824
+                    }[
+                      redis_inspection.item.resources.memory[-1:] | lower
+                    ]
+                  if redis_inspection.item.resources.memory[-1:] | lower
+                    in ['b', 'k', 'm', 'g']
+                  else redis_inspection.item.resources.memory | int
+                )
+              )
+            )
+
+            and (
+              (redis_inspection.stdout | from_json | first).HostConfig.NanoCpus
+              ==
+              (
+                ((redis_inspection.item.resources.cpus | float) * 1000000000) | int
+                if redis_inspection.item.resources.cpus
+                  | default('')
+                  | string
+                  | length > 0
+                else 0
+              )
             )
           )
         }]

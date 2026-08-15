@@ -62,12 +62,53 @@
     mode: "0644"
   register: runtime_docker_repository_result
 
-- name: Refresh APT metadata after repository changes
+- name: Inspect cached Docker Engine versions
+  ansible.builtin.command:
+    argv: [apt-cache, madison, docker-ce]
+  environment:
+    LC_ALL: C
+  register: runtime_docker_cached_engine_versions
+  changed_when: false
+  check_mode: false
+
+- name: Refresh APT metadata when the repository or certified version is new
   ansible.builtin.apt:
     update_cache: true
-    cache_valid_time: 3600
+    cache_valid_time: >-
+      {{
+        0
+        if runtime_docker_repository_result.changed
+           or runtime_docker_packages['docker-ce']
+              not in runtime_docker_cached_engine_versions.stdout
+        else 3600
+      }}
     lock_timeout: "{{ runtime_docker_apt_lock_timeout }}"
   register: runtime_docker_apt_cache_result
   retries: "{{ runtime_docker_apt_retries }}"
   delay: "{{ runtime_docker_apt_retry_delay }}"
   until: runtime_docker_apt_cache_result is succeeded
+
+- name: Inspect exact certified Docker package availability
+  ansible.builtin.command:
+    argv: [apt-cache, madison, "{{ item.key }}"]
+  environment:
+    LC_ALL: C
+  register: runtime_docker_package_availability
+  changed_when: false
+  check_mode: false
+  loop: "{{ runtime_docker_packages | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}={{ item.value }}"
+
+- name: Require every certified Docker package before installation
+  ansible.builtin.assert:
+    that:
+      - item.item.value in item.stdout
+    fail_msg: >-
+      The official Docker repository does not provide certified package
+      {{ item.item.key }}={{ item.item.value }} for
+      {{ ansible_facts.distribution_release }}/{{ ansible_facts.architecture }}.
+      No Docker package installation was attempted.
+  loop: "{{ runtime_docker_package_availability.results }}"
+  loop_control:
+    label: "{{ item.item.key }}={{ item.item.value }}"

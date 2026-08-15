@@ -12,7 +12,7 @@
   ansible.builtin.assert:
     that:
       - runtime_swarm_advertise_address | length > 0
-      - runtime_swarm_advertise_address | ansible.utils.ipaddr
+      - (runtime_swarm_advertise_address | ansible.utils.ipaddr) != false
       - runtime_swarm_config.get('default_address_pool', runtime_swarm_default_address_pool) is string
       - runtime_swarm_config.get('subnet_size', runtime_swarm_default_subnet_size) | int >= 16
       - runtime_swarm_config.get('subnet_size', runtime_swarm_default_subnet_size) | int <= 28
@@ -28,6 +28,22 @@
 - name: Parse current Swarm state
   ansible.builtin.set_fact:
     runtime_swarm_before: "{{ runtime_swarm_info_before.stdout | from_json }}"
+
+- name: Read effective Docker live-restore state before Swarm bootstrap
+  ansible.builtin.command:
+    argv: [docker, info, --format, "{{ '{{.LiveRestoreEnabled}}' }}"]
+  register: runtime_swarm_live_restore_state
+  changed_when: false
+  check_mode: false
+
+- name: Require a Swarm-compatible Docker daemon policy
+  ansible.builtin.assert:
+    that:
+      - runtime_swarm_live_restore_state.stdout | trim == 'false'
+    fail_msg: >-
+      Docker live-restore is enabled, which is incompatible with Swarm mode.
+      Run the complete Runtime convergence so Foundry can validate, apply, and
+      restart the owned daemon configuration before initializing Swarm.
 
 - name: Inspect Foundry Swarm ownership manifest
   ansible.builtin.stat:

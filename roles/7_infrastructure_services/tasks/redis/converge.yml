@@ -1,8 +1,18 @@
 ---
 - name: Inspect immutable Redis images before container mutation
   ansible.builtin.command:
-    argv: [docker, image, inspect, "{{ item }}"]
-  loop: "{{ infrastructure_services_redis_instances | map(attribute='image') | unique | list }}"
+    argv:
+      - docker
+      - image
+      - inspect
+      - "{{ item }}"
+  loop: >-
+    {{
+      infrastructure_services_redis_instances
+      | map(attribute='image')
+      | unique
+      | list
+    }}
   register: infrastructure_services_redis_image_inspections
   changed_when: false
   failed_when: false
@@ -10,7 +20,11 @@
 
 - name: Pull missing immutable Redis images before replacement
   ansible.builtin.command:
-    argv: [docker, image, pull, "{{ item.item }}"]
+    argv:
+      - docker
+      - image
+      - pull
+      - "{{ item.item }}"
   loop: "{{ infrastructure_services_redis_image_inspections.results }}"
   loop_control:
     label: "{{ item.item }}"
@@ -18,13 +32,26 @@
 
 - name: Verify the tested Redis version before stateful mutation
   ansible.builtin.command:
-    argv: [docker, run, --rm, "{{ item }}", redis-server, --version]
-  loop: "{{ infrastructure_services_redis_instances | map(attribute='image') | unique | list }}"
+    argv:
+      - docker
+      - run
+      - --rm
+      - "{{ item }}"
+      - redis-server
+      - --version
+  loop: >-
+    {{
+      infrastructure_services_redis_instances
+      | map(attribute='image')
+      | unique
+      | list
+    }}
   register: infrastructure_services_redis_version_checks
   changed_when: false
   failed_when: >-
     infrastructure_services_redis_version_checks.rc != 0
-    or infrastructure_services_redis_version_checks.stdout is not search('v=8[.]2[.]')
+    or infrastructure_services_redis_version_checks.stdout
+       is not search('v=8[.]2[.]')
 
 - name: Create missing Foundry-owned persistent Redis volumes
   ansible.builtin.command:
@@ -44,14 +71,24 @@
       - foundry.resource=redis-data
       - "{{ item.0.volume_name }}"
   loop: >-
-    {{ infrastructure_services_redis_instances | selectattr('persistence') | list
-       | zip(infrastructure_services_redis_volume_inspections.results) | list }}
+    {{
+      infrastructure_services_redis_instances
+      | selectattr('persistence')
+      | list
+      | zip(infrastructure_services_redis_volume_inspections.results)
+      | list
+    }}
   when: item.1.rc != 0
   no_log: true
 
 - name: Remove drifted Foundry-owned Redis containers while preserving volumes
   ansible.builtin.command:
-    argv: [docker, container, rm, --force, "{{ item }}"]
+    argv:
+      - docker
+      - container
+      - rm
+      - --force
+      - "{{ item }}"
   loop: "{{ infrastructure_services_redis_recreate_names }}"
   loop_control:
     label: "{{ item }}"
@@ -60,23 +97,100 @@
   ansible.builtin.command:
     argv: >-
       {{
-        ['docker', 'run', '--detach', '--name', item.container_name,
-         '--restart', 'unless-stopped',
-         '--network', item.network_name, '--network-alias', 'redis',
-         '--label', 'foundry.managed=true',
-         '--label', 'foundry.project=' + project.name,
-         '--label', 'foundry.environment=' + item.environment,
-         '--label', 'foundry.service=redis',
-         '--label', 'foundry.resource=redis',
-         '--label', 'foundry.config-sha256=' + item.configuration_hash,
-         '--health-cmd', 'REDISCLI_AUTH="$(awk ''$1 == "requirepass" {print $2}'' /usr/local/etc/redis/redis.conf)" redis-cli ping | grep -qx PONG',
-         '--health-interval', '10s', '--health-timeout', '5s',
-         '--health-retries', '12', '--health-start-period', '10s']
-        + ['--volume', item.configuration_file + ':/usr/local/etc/redis/redis.conf:ro']
-        + (['--volume', item.volume_name + ':/data'] if item.persistence else [])
-        + (['--memory', item.resources.memory] if item.resources.memory | default('') | length > 0 else [])
-        + (['--cpus', item.resources.cpus | string] if item.resources.cpus | default('') | string | length > 0 else [])
-        + [item.image, 'redis-server', '/usr/local/etc/redis/redis.conf']
+        [
+          'docker',
+          'run',
+          '--detach',
+
+          '--name',
+          item.container_name,
+
+          '--restart',
+          'unless-stopped',
+
+          '--network',
+          item.network_name,
+
+          '--network-alias',
+          'redis',
+
+          '--label',
+          'foundry.managed=true',
+
+          '--label',
+          'foundry.project=' + project.name,
+
+          '--label',
+          'foundry.environment=' + item.environment,
+
+          '--label',
+          'foundry.service=redis',
+
+          '--label',
+          'foundry.resource=redis',
+
+          '--label',
+          'foundry.config-sha256=' + item.configuration_hash,
+
+          '--health-cmd',
+          infrastructure_services_redis_healthcheck_command,
+
+          '--health-interval',
+          '10s',
+
+          '--health-timeout',
+          '5s',
+
+          '--health-retries',
+          '12',
+
+          '--health-start-period',
+          '10s'
+        ]
+
+        + [
+          '--volume',
+          item.configuration_file
+          + ':/usr/local/etc/redis/redis.conf:ro'
+        ]
+
+        + (
+          [
+            '--volume',
+            item.volume_name + ':/data'
+          ]
+          if item.persistence
+          else []
+        )
+
+        + (
+          [
+            '--memory',
+            item.resources.memory
+          ]
+          if item.resources.memory
+             | default('')
+             | length > 0
+          else []
+        )
+
+        + (
+          [
+            '--cpus',
+            item.resources.cpus | string
+          ]
+          if item.resources.cpus
+             | default('')
+             | string
+             | length > 0
+          else []
+        )
+
+        + [
+          item.image,
+          'redis-server',
+          '/usr/local/etc/redis/redis.conf'
+        ]
       }}
   loop: "{{ infrastructure_services_redis_instances }}"
   when: >-
@@ -86,7 +200,11 @@
 
 - name: Start stopped compatible Redis containers
   ansible.builtin.command:
-    argv: [docker, container, start, "{{ item.item.container_name }}"]
+    argv:
+      - docker
+      - container
+      - start
+      - "{{ item.item.container_name }}"
   loop: "{{ infrastructure_services_redis_container_inspections.results }}"
   when:
     - item.rc == 0

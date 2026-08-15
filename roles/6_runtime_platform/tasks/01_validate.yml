@@ -11,6 +11,14 @@
     runtime_resolved: >-
       {{ runtime_defaults | combine(runtime | default({}), recursive=true) }}
 
+- name: Resolve whether the host requires Swarm-compatible daemon policy
+  ansible.builtin.set_fact:
+    runtime_swarm_requested: >-
+      {{
+        (platform | default({})).get('swarm', {}).get('enabled', false) | bool
+        or (platform | default({})).get('dokploy', {}).get('enabled', false) | bool
+      }}
+
 - name: Resolve the complete Foundry-owned daemon configuration
   ansible.builtin.set_fact:
     runtime_docker_daemon_document:
@@ -19,7 +27,9 @@
       log-opts:
         max-size: "{{ runtime_resolved.docker.logging.max_size }}"
         max-file: "{{ runtime_resolved.docker.logging.max_files | string }}"
-      live-restore: true
+      # Docker live-restore applies only to standalone containers. Docker 29
+      # rejects Swarm initialization while it is enabled.
+      live-restore: "{{ not runtime_swarm_requested }}"
 
 - name: Validate runtime option names and values
   ansible.builtin.assert:

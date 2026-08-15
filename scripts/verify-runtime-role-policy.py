@@ -54,6 +54,8 @@ require(all(version for version in defaults["runtime_docker_packages"].values())
 tasks = "\n".join(path.read_text() for path in (RUNTIME / "tasks").rglob("*.yml"))
 for required in [
     "ansible.builtin.deb822_repository",
+    "Inspect cached Docker Engine versions",
+    "Require every certified Docker package before installation",
     "checksum:",
     "ansible.builtin.dpkg_selections",
     "download_only: true",
@@ -61,6 +63,9 @@ for required in [
     "--validate",
     "daemon_config_adoption",
     "maintenance_window",
+    "runtime_swarm_requested",
+    "LiveRestoreEnabled",
+    "Remote Docker API ports 2375/2376 are always forbidden",
     "docker, compose, version",
     "DockerRootDir",
     "runtime_docker_socket_state.stat.issock",
@@ -87,6 +92,7 @@ configuration = (RUNTIME / "tasks/configuration/main.yml").read_text()
 require(configuration.index("--validate") < configuration.index("Install the validated Docker daemon configuration"), "daemon config is applied before validation")
 require("rescue:" in configuration and "Restore the previous Docker daemon configuration" in configuration, "daemon rollback is absent")
 require("partial-run recovery" in configuration, "interrupted first-bootstrap recovery is absent")
+require("runtime_docker_partial_recovery_documents" in configuration, "partial-bootstrap daemon documents are not bounded")
 
 playbook = yaml.safe_load((ROOT / "playbook.yml").read_text())
 standardize = next(play for play in playbook if play.get("name") == "Standardize infrastructure")

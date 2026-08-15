@@ -91,6 +91,18 @@
   changed_when: false
   check_mode: false
 
+- name: Resolve active Docker-owned TCP listener ports
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail &&
+      ss -H --tcp --listening --numeric --process |
+      awk '/dockerd/ { endpoint=$4; sub(/^.*:/, "", endpoint); print endpoint }' |
+      sort -nu
+    executable: /bin/bash
+  register: runtime_docker_tcp_listener_ports
+  changed_when: false
+  check_mode: false
+
 - name: Inspect the effective Docker systemd unit
   ansible.builtin.command:
     argv: [systemctl, cat, "{{ runtime_docker_service }}"]
@@ -101,8 +113,12 @@
 - name: Reject Docker remote TCP API exposure
   ansible.builtin.assert:
     that:
-      - runtime_docker_tcp_listeners.stdout is not search('dockerd')
+      - >-
+        runtime_docker_tcp_listener_ports.stdout_lines
+        == (['2377', '7946'] if runtime_swarm_requested else [])
+      - runtime_docker_tcp_listeners.stdout is not search(':(2375|2376)\\s')
       - runtime_docker_systemd_unit.stdout is not search('tcp://')
     fail_msg: >-
-      Docker is listening on or configured for a TCP API. Runtime V1 permits only
-      the privileged local Unix socket.
+      Docker exposes an unexpected TCP listener or remote API. Runtime permits
+      only the privileged local Unix socket plus the exact 2377/7946 listeners
+      required when Foundry's single-manager Swarm is enabled.

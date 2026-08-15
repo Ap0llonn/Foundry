@@ -33,7 +33,14 @@
     that:
       - item.comment in security_ufw_numbered_status.stdout
       - (item.port | string) + '/' + item.protocol in security_ufw_numbered_status.stdout
-      - item.source == 'any' or item.source in security_ufw_numbered_status.stdout
+      - >-
+        item.source == 'any'
+        or item.source in security_ufw_numbered_status.stdout
+        or (
+          item.source is match('.*/(32|128)$')
+          and (item.source | ansible.utils.ipaddr('address'))
+              in security_ufw_numbered_status.stdout
+        )
       - >-
         not security_resolved.firewall.ipv6
         or item.source != 'any'
@@ -78,6 +85,14 @@
 
 - name: Resolve declared exposure socket identities
   ansible.builtin.set_fact:
+    security_expected_internal_listener_ids: >-
+      {{
+        ['tcp|2377', 'tcp|7946', 'udp|4789', 'udp|7946']
+        if (
+          (platform | default({})).get('swarm', {}).get('enabled', false) | bool
+          or (platform | default({})).get('dokploy', {}).get('enabled', false) | bool
+        ) else []
+      }}
     security_declared_listener_ids: >-
       {{
         security_network_exposure_config
@@ -93,8 +108,29 @@
             | map(attribute='protocol')
             | zip(security_network_exposure_config | map(attribute='port') | map('string'))
             | map('join', '|') | list
+            + (
+                ['tcp|2377', 'tcp|7946', 'udp|4789', 'udp|7946']
+                if (
+                  (platform | default({})).get('swarm', {}).get('enabled', false) | bool
+                  or (platform | default({})).get('dokploy', {}).get('enabled', false) | bool
+                ) else []
+              )
           ) | sort
       }}
+
+- name: Ensure internal single-node Swarm listeners are not allowed through UFW
+  ansible.builtin.assert:
+    that:
+      - >-
+        security_ufw_numbered_status.stdout is not search(
+          '(?m)^\\[\\s*[0-9]+\\]\\s+(2377/tcp|7946/tcp|7946/udp|4789/udp)\\s+ALLOW IN'
+        )
+    fail_msg: >-
+      Single-node Swarm control or overlay ports must remain blocked by UFW;
+      Foundry does not expose them until a future approved multi-node policy exists.
+  when:
+    - security_resolved.firewall.enabled
+    - security_expected_internal_listener_ids | length > 0
 
 - name: Fail on unexpected public listeners when policy requires it
   ansible.builtin.assert:
