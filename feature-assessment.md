@@ -203,3 +203,6 @@ A VM should not be called production-ready until all applicable checks below pas
 ## Assessment maintenance
 
 Review this file whenever a role gains a feature, a supported operating-system version changes, or an exposure/access policy changes. Close an item only when its automated acceptance test exists and passes—not only when configuration has been added.
+
+
+devrait pas avoir de prefix matching pour foundry

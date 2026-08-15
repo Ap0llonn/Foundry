@@ -103,14 +103,27 @@ networking_tasks = "\n".join(path.read_text() for path in (NETWORKING / "tasks")
 require("ansible.builtin.apt:" not in networking_tasks, "Networking still installs packages")
 require("ansible.builtin.systemd_service:" not in networking_tasks, "Networking still owns Docker services")
 require("networking_runtime_ownership_manifest" in networking_tasks, "Networking does not consume Runtime ownership")
+service_tasks = (RUNTIME / "tasks/service/main.yml").read_text()
+docker_validation_tasks = (RUNTIME / "tasks/validation/main.yml").read_text()
+runtime_main = (RUNTIME / "tasks/main.yml").read_text()
+require("Reject Docker remote TCP API exposure" in service_tasks, "Docker API boundary validation is missing")
+require("2377" not in service_tasks and "7946" not in service_tasks, "Docker API validation owns Swarm ports")
+require("2377" not in docker_validation_tasks and "7946" not in docker_validation_tasks, "Docker contract validation owns Swarm ports")
+require(runtime_main.index("service/main.yml") < runtime_main.index("swarm/main.yml"), "Docker security validation must precede Swarm initialization")
+
 swarm_tasks = (RUNTIME / "tasks/swarm/main.yml").read_text()
 for required in [
     "- docker\n      - swarm\n      - init",
     "runtime_swarm_state_file",
     "single-manager",
     "Refuse adoption of an active external Swarm",
+    "Validate Swarm network listeners",
+    "2377",
+    "7946",
+    "4789",
 ]:
     require(required in swarm_tasks, f"missing safe Dokploy Swarm evidence: {required}")
+require(swarm_tasks.index("Validate Swarm network listeners") > swarm_tasks.index("Initialize the Foundry single-manager Swarm"), "Swarm ports must be validated after initialization")
 
 config = yaml.safe_load((ROOT / "config.yml").read_text())
 require(config.get("runtime", {}).get("docker", {}).get("enabled") is True, "global config does not enable Runtime Docker")

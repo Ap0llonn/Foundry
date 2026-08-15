@@ -16,11 +16,17 @@
       - runtime_swarm_config.get('default_address_pool', runtime_swarm_default_address_pool) is string
       - runtime_swarm_config.get('subnet_size', runtime_swarm_default_subnet_size) | int >= 16
       - runtime_swarm_config.get('subnet_size', runtime_swarm_default_subnet_size) | int <= 28
-    fail_msg: Dokploy requires an explicit/reachable Swarm advertise address and valid address pool.
+    fail_msg: >-
+      Dokploy requires an explicit/reachable Swarm advertise address
+      and valid address pool.
 
 - name: Inspect current Swarm state
   ansible.builtin.command:
-    argv: [docker, info, --format, "{{ '{{json .Swarm}}' }}"]
+    argv:
+      - docker
+      - info
+      - --format
+      - "{{ '{{json .Swarm}}' }}"
   register: runtime_swarm_info_before
   changed_when: false
   check_mode: false
@@ -31,7 +37,11 @@
 
 - name: Read effective Docker live-restore state before Swarm bootstrap
   ansible.builtin.command:
-    argv: [docker, info, --format, "{{ '{{.LiveRestoreEnabled}}' }}"]
+    argv:
+      - docker
+      - info
+      - --format
+      - "{{ '{{.LiveRestoreEnabled}}' }}"
   register: runtime_swarm_live_restore_state
   changed_when: false
   check_mode: false
@@ -42,8 +52,8 @@
       - runtime_swarm_live_restore_state.stdout | trim == 'false'
     fail_msg: >-
       Docker live-restore is enabled, which is incompatible with Swarm mode.
-      Run the complete Runtime convergence so Foundry can validate, apply, and
-      restart the owned daemon configuration before initializing Swarm.
+      Run the complete Runtime convergence so Foundry can validate, apply,
+      and restart the owned daemon configuration before initializing Swarm.
 
 - name: Inspect Foundry Swarm ownership manifest
   ansible.builtin.stat:
@@ -53,18 +63,24 @@
 - name: Refuse adoption of an active external Swarm
   ansible.builtin.assert:
     that:
-      - runtime_swarm_before.LocalNodeState != 'active' or runtime_swarm_manifest_check.stat.exists
+      - >-
+        runtime_swarm_before.LocalNodeState != 'active'
+        or runtime_swarm_manifest_check.stat.exists
     fail_msg: >-
-      Docker already belongs to a Swarm that Foundry does not own. Foundry will
-      not leave, overwrite, or adopt it. Migrate it explicitly before enabling Dokploy.
+      Docker already belongs to a Swarm that Foundry does not own.
+      Foundry will not leave, overwrite, or adopt it.
+      Migrate it explicitly before enabling Dokploy.
 
 - name: Refuse automatic replacement of missing Foundry Swarm state
   ansible.builtin.assert:
     that:
-      - runtime_swarm_before.LocalNodeState == 'active' or not runtime_swarm_manifest_check.stat.exists
+      - >-
+        runtime_swarm_before.LocalNodeState == 'active'
+        or not runtime_swarm_manifest_check.stat.exists
     fail_msg: >-
       The Foundry Swarm manifest exists but Docker reports no active Swarm.
-      Recovery is required; refusing to initialize a different cluster automatically.
+      Recovery is required; refusing to initialize a different cluster
+      automatically.
 
 - name: Initialize the Foundry single-manager Swarm
   ansible.builtin.command:
@@ -78,12 +94,28 @@
       - "{{ runtime_swarm_config.get('default_address_pool', runtime_swarm_default_address_pool) }}"
       - --default-addr-pool-mask-length
       - "{{ runtime_swarm_config.get('subnet_size', runtime_swarm_default_subnet_size) | string }}"
+  register: runtime_swarm_init
   when: runtime_swarm_before.LocalNodeState == 'inactive'
   no_log: true
 
-- name: Inspect active Swarm identity
+# ---------------------------------------------------------------------------
+# IMPORTANT:
+# Immediately capture and persist ownership after swarm init.
+# This prevents a failed later task from leaving:
+#
+#   Swarm active
+#   manifest missing
+#
+# which would look like an external Swarm on the next convergence.
+# ---------------------------------------------------------------------------
+
+- name: Inspect active Swarm identity immediately after bootstrap
   ansible.builtin.command:
-    argv: [docker, info, --format, "{{ '{{json .Swarm}}' }}"]
+    argv:
+      - docker
+      - info
+      - --format
+      - "{{ '{{json .Swarm}}' }}"
   register: runtime_swarm_info_after
   changed_when: false
   check_mode: false
@@ -94,6 +126,17 @@
     runtime_swarm_after: "{{ runtime_swarm_info_after.stdout | from_json }}"
   no_log: true
 
+- name: Require Swarm to be active before ownership persistence
+  ansible.builtin.assert:
+    that:
+      - runtime_swarm_after.LocalNodeState == 'active'
+      - runtime_swarm_after.ControlAvailable | bool
+      - runtime_swarm_after.Cluster.ID | default('') | length > 0
+      - runtime_swarm_after.NodeID | default('') | length > 0
+    fail_msg: >-
+      Swarm initialization did not produce a valid active manager identity.
+  no_log: true
+
 - name: Read existing Foundry Swarm manifest
   ansible.builtin.slurp:
     path: "{{ runtime_swarm_state_file }}"
@@ -101,23 +144,148 @@
   when: runtime_swarm_manifest_check.stat.exists
   no_log: true
 
-- name: Resolve expected Foundry Swarm identity
+- name: Resolve expected Foundry Swarm ownership manifest
   ansible.builtin.set_fact:
     runtime_swarm_manifest: >-
       {{
-        (runtime_swarm_manifest_raw.content | b64decode | from_yaml)
+        (
+          runtime_swarm_manifest_raw.content
+          | b64decode
+          | from_yaml
+        )
         if runtime_swarm_manifest_check.stat.exists
         else {
           'managed_by': 'foundry',
           'cluster_id': runtime_swarm_after.Cluster.ID,
           'node_id': runtime_swarm_after.NodeID,
           'advertise_address': runtime_swarm_advertise_address,
-          'default_address_pool': runtime_swarm_config.get('default_address_pool', runtime_swarm_default_address_pool),
-          'subnet_size': runtime_swarm_config.get('subnet_size', runtime_swarm_default_subnet_size) | int,
+          'default_address_pool': runtime_swarm_config.get(
+            'default_address_pool',
+            runtime_swarm_default_address_pool
+          ),
+          'subnet_size': (
+            runtime_swarm_config.get(
+              'subnet_size',
+              runtime_swarm_default_subnet_size
+            )
+            | int
+          ),
           'topology': 'single-manager'
         }
       }}
   no_log: true
+
+- name: Persist new Foundry Swarm ownership immediately after initialization
+  ansible.builtin.copy:
+    dest: "{{ runtime_swarm_state_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+    content: "{{ runtime_swarm_manifest | to_nice_yaml(indent=2) }}"
+  when:
+    - runtime_swarm_before.LocalNodeState == 'inactive'
+    - runtime_swarm_after.LocalNodeState == 'active'
+  no_log: true
+
+# Refresh manifest existence after a first-time initialization.
+- name: Reinspect Foundry Swarm ownership manifest
+  ansible.builtin.stat:
+    path: "{{ runtime_swarm_state_file }}"
+  register: runtime_swarm_manifest_check_after
+
+- name: Require Foundry Swarm ownership manifest
+  ansible.builtin.assert:
+    that:
+      - runtime_swarm_manifest_check_after.stat.exists
+    fail_msg: >-
+      Foundry initialized Swarm but failed to persist its ownership manifest.
+
+# ---------------------------------------------------------------------------
+# Runtime listener validation
+# ---------------------------------------------------------------------------
+
+- name: Collect active Swarm TCP listener state
+  ansible.builtin.command:
+    argv:
+      - ss
+      - --tcp
+      - --listening
+      - --numeric
+      - --process
+  register: runtime_swarm_tcp_listeners
+  changed_when: false
+  check_mode: false
+
+- name: Resolve exact Docker-owned Swarm TCP listener ports
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail &&
+      ss -H --tcp --listening --numeric --process |
+      awk '/dockerd/ {
+        endpoint=$4;
+        sub(/^.*:/, "", endpoint);
+        print endpoint
+      }' |
+      sort -nu
+    executable: /bin/bash
+  register: runtime_swarm_tcp_listener_ports
+  changed_when: false
+  check_mode: false
+  retries: 12
+  delay: 1
+  until: >-
+    runtime_swarm_tcp_listener_ports.stdout_lines
+    == ['2377', '7946']
+
+- name: Collect active Swarm UDP listener state
+  ansible.builtin.command:
+    argv:
+      - ss
+      - --udp
+      - --listening
+      - --numeric
+      - --process
+  register: runtime_swarm_udp_listeners
+  changed_when: false
+  check_mode: false
+
+- name: Resolve exact Docker-owned Swarm UDP listener ports
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail &&
+      ss -H --udp --listening --numeric --process |
+      awk '/dockerd/ {
+        endpoint=$4;
+        sub(/^.*:/, "", endpoint);
+        print endpoint
+      }' |
+      sort -nu
+    executable: /bin/bash
+  register: runtime_swarm_udp_listener_ports
+  changed_when: false
+  check_mode: false
+  retries: 12
+  delay: 1
+  until: runtime_swarm_udp_listener_ports.stdout_lines == ['7946']
+
+- name: Validate Swarm daemon listeners
+  ansible.builtin.assert:
+    that:
+      - runtime_swarm_after.LocalNodeState == 'active'
+      - runtime_swarm_tcp_listener_ports.stdout_lines == ['2377', '7946']
+      - runtime_swarm_udp_listener_ports.stdout_lines == ['7946']
+      - runtime_swarm_tcp_listeners.stdout is search(':2377\\s')
+      - runtime_swarm_tcp_listeners.stdout is search(':7946\\s')
+      - runtime_swarm_udp_listeners.stdout is search(':7946\\s')
+    fail_msg: >-
+      Active Swarm daemon listeners are incomplete or unexpected.
+      Foundry requires dockerd on 2377/tcp, 7946/tcp, and 7946/udp.
+      The 4789/udp overlay datapath is validated separately by
+      networking/security rather than as a dockerd-owned listener.
+
+# ---------------------------------------------------------------------------
+# Ownership validation
+# ---------------------------------------------------------------------------
 
 - name: Validate Foundry owns the active single-manager Swarm
   ansible.builtin.assert:
@@ -127,23 +295,49 @@
       - runtime_swarm_manifest.managed_by == 'foundry'
       - runtime_swarm_manifest.cluster_id == runtime_swarm_after.Cluster.ID
       - runtime_swarm_manifest.node_id == runtime_swarm_after.NodeID
-      - runtime_swarm_manifest.advertise_address == runtime_swarm_advertise_address
-      - runtime_swarm_manifest.default_address_pool == runtime_swarm_config.get('default_address_pool', runtime_swarm_default_address_pool)
-      - runtime_swarm_manifest.subnet_size | int == runtime_swarm_config.get('subnet_size', runtime_swarm_default_subnet_size) | int
-    fail_msg: Active Swarm identity does not match the Foundry ownership manifest.
+      - >-
+        runtime_swarm_manifest.advertise_address
+        == runtime_swarm_advertise_address
+      - >-
+        runtime_swarm_manifest.default_address_pool
+        ==
+        runtime_swarm_config.get(
+          'default_address_pool',
+          runtime_swarm_default_address_pool
+        )
+      - >-
+        runtime_swarm_manifest.subnet_size | int
+        ==
+        runtime_swarm_config.get(
+          'subnet_size',
+          runtime_swarm_default_subnet_size
+        ) | int
+    fail_msg: >-
+      Active Swarm identity does not match the Foundry ownership manifest.
   no_log: true
 
-- name: Persist Foundry Swarm ownership manifest
+# Re-write only if normalization/formatting requires it.
+- name: Persist normalized Foundry Swarm ownership manifest
   ansible.builtin.copy:
     dest: "{{ runtime_swarm_state_file }}"
     owner: root
     group: root
     mode: "0600"
     content: "{{ runtime_swarm_manifest | to_nice_yaml(indent=2) }}"
+  no_log: true
+
+# ---------------------------------------------------------------------------
+# Topology validation
+# ---------------------------------------------------------------------------
 
 - name: Inspect single-manager node status
   ansible.builtin.command:
-    argv: [docker, node, ls, --format, "{{ '{{json .}}' }}"]
+    argv:
+      - docker
+      - node
+      - ls
+      - --format
+      - "{{ '{{json .}}' }}"
   register: runtime_swarm_nodes
   changed_when: false
   check_mode: false
@@ -152,7 +346,24 @@
   ansible.builtin.assert:
     that:
       - runtime_swarm_nodes.stdout_lines | length == 1
-      - (runtime_swarm_nodes.stdout_lines | first | from_json).Status == 'Ready'
-      - (runtime_swarm_nodes.stdout_lines | first | from_json).Availability == 'Active'
-      - (runtime_swarm_nodes.stdout_lines | first | from_json).ManagerStatus is search('Leader')
-    fail_msg: Foundry V1 supports exactly one Ready/Active Swarm manager/leader for Dokploy.
+      - >-
+        (
+          runtime_swarm_nodes.stdout_lines
+          | first
+          | from_json
+        ).Status == 'Ready'
+      - >-
+        (
+          runtime_swarm_nodes.stdout_lines
+          | first
+          | from_json
+        ).Availability == 'Active'
+      - >-
+        (
+          runtime_swarm_nodes.stdout_lines
+          | first
+          | from_json
+        ).ManagerStatus is search('Leader')
+    fail_msg: >-
+      Foundry V1 supports exactly one Ready/Active
+      Swarm manager/leader for Dokploy.
