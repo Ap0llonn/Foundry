@@ -6,6 +6,7 @@
       - services | default({}) is mapping
       - platform | default({}) is mapping
       - domains | default({}) is mapping
+      - database_access | default({}) is mapping
       - project | default({}) is mapping
       - environments | default([]) is sequence
       - environments | default([]) is not string
@@ -21,6 +22,8 @@
       {{ platform_defaults | combine(platform | default({}), recursive=true) }}
     foundry_domains_resolved: >-
       {{ domains_defaults | combine(domains | default({}), recursive=true) }}
+    foundry_database_access_resolved: >-
+      {{ database_access_defaults | combine(database_access | default({}), recursive=true) }}
     infrastructure_services_environment_names: >-
       {{ environments | default([]) | map(attribute='name') | list }}
   no_log: true
@@ -59,6 +62,9 @@
         ((domains | default({})).get('cloudflare', {}).get('security', {}).get('rate_limit', {})).keys()
         | difference(infrastructure_services_allowed_cloudflare_rate_limit_keys)
         | length == 0
+      - (database_access | default({})).keys() | difference(database_access_allowed_keys) | length == 0
+      - ((database_access | default({})).get('tunnel', {})).keys() | difference(database_access_allowed_tunnel_keys) | length == 0
+      - ((database_access | default({})).get('tailscale', {})).keys() | difference(database_access_allowed_tailscale_keys) | length == 0
     fail_msg: Infrastructure Services contains an unsupported option. Consult roles/7_infrastructure_services/Doc.MD.
 
 - name: Validate environment and project contracts
@@ -107,6 +113,58 @@
       - foundry_services_resolved.redis.persistence is boolean
       - foundry_services_resolved.redis.maxmemory_policy in infrastructure_services_allowed_redis_policies
     fail_msg: Invalid PostgreSQL, Redis, or object-storage configuration shape.
+  no_log: true
+
+- name: Validate database access configuration
+  ansible.builtin.assert:
+    that:
+      - foundry_database_access_resolved is mapping
+      - foundry_database_access_resolved.enabled is boolean
+      - foundry_database_access_resolved.mode in ['tunnel', 'tailscale']
+      - foundry_database_access_resolved.environment is string
+      - foundry_database_access_resolved.environment in infrastructure_services_environment_names
+      - foundry_database_access_resolved.tunnel is mapping
+      - foundry_database_access_resolved.tunnel.allowed_cidrs is sequence
+      - foundry_database_access_resolved.tunnel.allowed_cidrs is not string
+      - foundry_database_access_resolved.tunnel.local_port is number
+      - foundry_database_access_resolved.tunnel.local_port | int >= 1024
+      - foundry_database_access_resolved.tunnel.local_port | int <= 65535
+      - foundry_database_access_resolved.tailscale is mapping
+      - foundry_database_access_resolved.tailscale.auth_key is string
+      - foundry_database_access_resolved.tailscale.hostname is string
+      - foundry_database_access_resolved.tailscale.hostname | length == 0 or foundry_database_access_resolved.tailscale.hostname is match(infrastructure_services_identifier_pattern)
+      - foundry_database_access_resolved.tailscale.port is number
+      - foundry_database_access_resolved.tailscale.port | int >= 1
+      - foundry_database_access_resolved.tailscale.port | int <= 65535
+      - foundry_database_access_resolved.tailscale.cidr is string
+      - (foundry_database_access_resolved.tailscale.cidr | ansible.utils.ipaddr) != false
+      - foundry_database_access_resolved.tailscale.cidr not in ['0.0.0.0/0', '::/0']
+      - not foundry_database_access_resolved.enabled or foundry_services_resolved.postgres.enabled
+      - >-
+        not foundry_database_access_resolved.enabled
+        or foundry_database_access_resolved.environment in (
+          foundry_services_resolved.postgres.environments
+          if foundry_services_resolved.postgres.environments | length > 0
+          else infrastructure_services_environment_names
+        )
+      - not foundry_database_access_resolved.enabled or foundry_database_access_resolved.mode != 'tunnel' or foundry_database_access_resolved.tunnel.allowed_cidrs | length > 0
+      - not foundry_database_access_resolved.enabled or foundry_database_access_resolved.mode != 'tailscale' or foundry_database_access_resolved.tailscale.auth_key | length >= 20
+    fail_msg: >-
+      Database access requires a PostgreSQL environment and either a non-empty
+      tunnel CIDR whitelist or a secure Tailscale auth key.
+  no_log: true
+
+- name: Validate database access CIDR whitelist
+  ansible.builtin.assert:
+    that:
+      - item is string
+      - (item | ansible.utils.ipaddr) != false
+      - item not in ['0.0.0.0/0', '::/0']
+    fail_msg: Database access tunnel CIDRs must be valid and must not be wildcard Internet ranges.
+  loop: "{{ foundry_database_access_resolved.tunnel.allowed_cidrs }}"
+  when:
+    - foundry_database_access_resolved.enabled
+    - foundry_database_access_resolved.mode == 'tunnel'
   no_log: true
 
 - name: Validate PostgreSQL credential overrides
@@ -300,6 +358,7 @@
         or foundry_platform_resolved.traefik.enabled
         or foundry_platform_resolved.dokploy.enabled
         or foundry_platform_resolved.swarm.enabled
+        or foundry_database_access_resolved.enabled
       }}
 
 - name: Validate required host exposure is declared before Security convergence

@@ -11,7 +11,8 @@
     - foundry_services_resolved.redis.enabled
       or foundry_services_resolved.object_storage.enabled
       or infrastructure_services_resolved.minio.enabled
-  tags: [infrastructure_services, infrastructure_services_resolution]
+      or foundry_database_access_resolved.enabled
+  tags: [infrastructure_services, infrastructure_services_resolution, database_access]
 
 - name: 7.3 Configure optional Cloudflare DNS and edge security
   ansible.builtin.import_tasks: cloudflare/main.yml
@@ -119,7 +120,7 @@
   ansible.builtin.import_tasks: postgres/main.yml
   become: true
   when: foundry_services_resolved.postgres.enabled
-  tags: [infrastructure_services, postgres, dokploy]
+  tags: [infrastructure_services, postgres, dokploy, database_access]
 
 - name: 7.20 Create and reconcile Redis services through Dokploy
   ansible.builtin.import_tasks: redis/main.yml
@@ -127,7 +128,13 @@
   when: foundry_services_resolved.redis.enabled
   tags: [infrastructure_services, redis, dokploy]
 
-- name: 7.21 Publish non-secret service and backup contracts
+- name: 7.21 Configure PostgreSQL developer access
+  ansible.builtin.import_tasks: database_access/main.yml
+  become: true
+  when: foundry_database_access_resolved.enabled
+  tags: [infrastructure_services, database_access]
+
+- name: 7.22 Publish non-secret service and backup contracts
   ansible.builtin.import_tasks: output/main.yml
   become: true
   when: infrastructure_services_any_enabled

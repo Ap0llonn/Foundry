@@ -98,6 +98,19 @@ domains_defaults:
         mitigation_timeout: 10
         action: block
 
+database_access_defaults:
+  enabled: false
+  mode: tunnel
+  environment: dev
+  tunnel:
+    allowed_cidrs: []
+    local_port: 15432
+  tailscale:
+    auth_key: ""
+    hostname: ""
+    port: 5432
+    cidr: 100.64.0.0/10
+
 infrastructure_services_allowed_root_keys: [minio]
 infrastructure_services_allowed_minio_keys: [enabled, run_as_uid, run_as_gid, instances]
 infrastructure_services_allowed_minio_instance_keys:
@@ -188,6 +201,10 @@ infrastructure_services_allowed_cloudflare_rate_limit_keys:
   - period
   - mitigation_timeout
   - action
+
+database_access_allowed_keys: [enabled, mode, environment, tunnel, tailscale]
+database_access_allowed_tunnel_keys: [allowed_cidrs, local_port]
+database_access_allowed_tailscale_keys: [auth_key, hostname, port, cidr]
 infrastructure_services_allowed_domain_styles: [hyphen, nested]
 infrastructure_services_allowed_redis_policies:
   - noeviction
@@ -235,6 +252,11 @@ infrastructure_services_cloudflare_api_url: https://api.cloudflare.com/client/v4
 infrastructure_services_cloudflare_management_rule_ref: foundry_dokploy_management_allowlist
 infrastructure_services_cloudflare_managed_waf_rule_ref: foundry_cloudflare_managed_waf
 infrastructure_services_cloudflare_rate_limit_rule_ref: foundry_dokploy_auth_rate_limit
+infrastructure_services_database_access_proxy_image: "alpine/socat@sha256:a14bb3dc5f83391a83bae7eeb0bf013ed206f939172aae2b72f54669ee7f5685"
+infrastructure_services_database_access_proxy_container_name: "foundry-{{ project.name }}-database-access"
+infrastructure_services_database_access_proxy_port: 15432
+infrastructure_services_database_access_tailscale_keyring: /usr/share/keyrings/tailscale-archive-keyring.gpg
+infrastructure_services_database_access_tailscale_repo: "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/debian bookworm main"
 
 infrastructure_services_redis_healthcheck_command: >-
   REDISCLI_AUTH="$(awk '$1 == "requirepass" {print $2}' /usr/local/etc/redis/redis.conf)"

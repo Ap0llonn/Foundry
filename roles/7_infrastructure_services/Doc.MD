@@ -77,6 +77,45 @@ values are suppressed with `no_log`, excluded from resolved outputs, and are
 not committed to configuration. PostgreSQL and Redis credentials are sent only
 in protected Dokploy API requests.
 
+## PostgreSQL developer access
+
+Developer database access is disabled by default and targets one PostgreSQL
+environment at a time. Select exactly one mode:
+
+```yaml
+database_access:
+  enabled: true
+  mode: tunnel                 # tunnel or tailscale
+  environment: dev
+
+  tunnel:
+    allowed_cidrs:
+      - 203.0.113.10/32         # SSH sources allowed to create the tunnel
+    local_port: 15432
+
+  tailscale:
+    auth_key: "{{ vault_tailscale_auth_key }}"
+    hostname: ""
+    port: 5432
+    cidr: 100.64.0.0/10
+```
+
+In `tunnel` mode, Foundry creates a TCP proxy bound only to VM localhost.
+The developer runs `scripts/foundry-db-tunnel.sh`, which forwards local port
+`15432` through SSH. The configured tunnel CIDRs are added to the SSH source
+allow-list; SSH public-key authentication is still required.
+
+In `tailscale` mode, Foundry installs and authenticates Tailscale on the VM,
+then binds the PostgreSQL proxy only to the VM's Tailscale IPv4 address. The
+developer installs Tailscale, joins the tailnet, and connects to the reported
+Tailscale address and port. Tailscale ACLs should restrict the developer group
+to the selected environment and port.
+
+The proxy forwards only to the selected Dokploy PostgreSQL service. Dokploy
+places API-managed database services on its internal Dokploy network, so the
+proxy uses that internal network while publishing only the Tailscale/localhost
+listener. PostgreSQL is never exposed through Traefik or Cloudflare.
+
 ## Domains and environment names
 
 Domain configuration is optional:

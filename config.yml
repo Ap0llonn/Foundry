@@ -166,6 +166,26 @@ management:
     # changing Internet connection, or replace it with the trusted VPN CIDR.
     - 173.177.149.212/32
 
+# Private PostgreSQL developer access. Only one mode may be active at a time:
+# - tunnel: SSH forwarding through a localhost-only database proxy;
+# - tailscale: a Tailscale-only database proxy on the VM.
+database_access:
+  enabled: true
+  mode: tailscale
+  environment: dev
+  tunnel:
+    # These sources are added to the SSH management allow-list because the
+    # tunnel is established through SSH. A public key is still required.
+    allowed_cidrs:
+      - 173.177.149.212/32
+    local_port: 15432
+  tailscale:
+    # Supply this through Vault or a secure extra variable when mode=tailscale.
+    auth_key: "tskey-auth-kuYRxgQT1J11CNTRL-rAaCQ3wUxuWbaHKgPFTXuWs5g35kB4pz"
+    hostname: "foundry-db"
+    port: 5432
+    cidr: 100.64.0.0/10
+
 security:
   ssh:
     enabled: true

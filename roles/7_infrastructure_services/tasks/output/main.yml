@@ -73,6 +73,28 @@
         swarm:
           enabled: "{{ infrastructure_services_swarm_enabled }}"
           topology: "{{ 'single-manager' if infrastructure_services_swarm_enabled else none }}"
+      database_access:
+        enabled: "{{ foundry_database_access_resolved.enabled }}"
+        mode: "{{ foundry_database_access_resolved.mode if foundry_database_access_resolved.enabled else none }}"
+        environment: "{{ foundry_database_access_resolved.environment if foundry_database_access_resolved.enabled else none }}"
+        host: >-
+          {{
+            '127.0.0.1'
+            if foundry_database_access_resolved.mode == 'tunnel'
+            else foundry_database_access_tailscale_ip
+            if foundry_database_access_resolved.enabled
+            else none
+          }}
+        port: >-
+          {{
+            foundry_database_access_resolved.tunnel.local_port
+            if foundry_database_access_resolved.mode == 'tunnel'
+            else foundry_database_access_resolved.tailscale.port
+            if foundry_database_access_resolved.enabled
+            else none
+          }}
+        tunnel_script: >-
+          scripts/foundry-db-tunnel.sh
 
 - name: Persist non-secret resolved infrastructure map
   ansible.builtin.copy:

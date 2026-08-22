@@ -133,16 +133,28 @@
     security_legacy_dokploy_management_listener_ids: ["tcp|3000"]
   when: security_legacy_dokploy_management_listener_is_owned
 
-- name: Resolve declared exposure socket identities
+- name: Resolve expected internal listener identities
   ansible.builtin.set_fact:
     security_expected_internal_listener_ids: >-
       {{
-        ['tcp|2377', 'tcp|7946', 'udp|4789', 'udp|7946']
-        if (
-          (platform | default({})).get('swarm', {}).get('enabled', false) | bool
-          or (platform | default({})).get('dokploy', {}).get('enabled', false) | bool
-        ) else []
+        (
+          ['tcp|2377', 'tcp|7946', 'udp|4789', 'udp|7946']
+          if (
+            (platform | default({})).get('swarm', {}).get('enabled', false) | bool
+            or (platform | default({})).get('dokploy', {}).get('enabled', false) | bool
+          ) else []
+        )
+        + (
+          ['udp|41641']
+          if (
+            (database_access | default({})).get('enabled', false) | bool
+            and (database_access | default({})).get('mode', 'tunnel') == 'tailscale'
+          ) else []
+        )
       }}
+
+- name: Resolve declared exposure socket identities
+  ansible.builtin.set_fact:
     security_declared_listener_ids: >-
       {{
         security_network_exposure_config
@@ -158,13 +170,8 @@
             | map(attribute='protocol')
             | zip(security_network_exposure_config | map(attribute='port') | map('string'))
             | map('join', '|') | list
-            + (
-                ['tcp|2377', 'tcp|7946', 'udp|4789', 'udp|7946']
-                if (
-                  (platform | default({})).get('swarm', {}).get('enabled', false) | bool
-                  or (platform | default({})).get('dokploy', {}).get('enabled', false) | bool
-                ) else []
-              ) + security_legacy_dokploy_management_listener_ids
+            + security_expected_internal_listener_ids
+            + security_legacy_dokploy_management_listener_ids
           ) | sort
       }}
 

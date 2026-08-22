@@ -1,0 +1,149 @@
+---
+- name: Resolve the PostgreSQL database access target
+  ansible.builtin.set_fact:
+    infrastructure_services_database_access_environment: "{{ foundry_database_access_resolved.environment }}"
+    infrastructure_services_database_access_network: >-
+      {{ infrastructure_services_dokploy_api_network }}
+    infrastructure_services_database_access_service: >-
+      {{ infrastructure_services_dokploy_postgres_contracts[foundry_database_access_resolved.environment].service_name }}
+    infrastructure_services_database_access_container_name: >-
+      {{ infrastructure_services_database_access_proxy_container_name }}
+  no_log: true
+
+- name: Configure Tailscale for PostgreSQL access
+  ansible.builtin.include_tasks: database_access/tailscale.yml
+  when: foundry_database_access_resolved.mode == 'tailscale'
+
+- name: Resolve the database access listener contract
+  ansible.builtin.set_fact:
+    infrastructure_services_database_access_bind_address: >-
+      {{
+        '127.0.0.1'
+        if foundry_database_access_resolved.mode == 'tunnel'
+        else foundry_database_access_tailscale_ip
+      }}
+    infrastructure_services_database_access_published_port: >-
+      {{
+        foundry_database_access_resolved.tunnel.local_port
+        if foundry_database_access_resolved.mode == 'tunnel'
+        else foundry_database_access_resolved.tailscale.port
+      }}
+  no_log: true
+
+- name: Inspect the immutable database access proxy image
+  ansible.builtin.command:
+    argv: [docker, image, inspect, "{{ infrastructure_services_database_access_proxy_image }}"]
+  register: infrastructure_services_database_access_proxy_image_inspection
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Pull the immutable database access proxy image
+  ansible.builtin.command:
+    argv: [docker, image, pull, "{{ infrastructure_services_database_access_proxy_image }}"]
+  when: infrastructure_services_database_access_proxy_image_inspection.rc != 0
+  no_log: true
+
+- name: Inspect the existing database access proxy
+  ansible.builtin.command:
+    argv: [docker, container, inspect, "{{ infrastructure_services_database_access_container_name }}"]
+  register: infrastructure_services_database_access_proxy_inspection
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Refuse an external database access proxy collision
+  ansible.builtin.assert:
+    that:
+      - >-
+        infrastructure_services_database_access_proxy_inspection.rc != 0
+        or (
+          ((infrastructure_services_database_access_proxy_inspection.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.managed') == 'true'
+          and ((infrastructure_services_database_access_proxy_inspection.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.project') == project.name
+          and ((infrastructure_services_database_access_proxy_inspection.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.service') == 'database-access'
+        )
+    fail_msg: Same-name database access proxy is external; refusing adoption.
+  no_log: true
+
+- name: Resolve the database access proxy fingerprint
+  ansible.builtin.set_fact:
+    infrastructure_services_database_access_proxy_hash: >-
+      {{ {
+        'image': infrastructure_services_database_access_proxy_image,
+        'network': infrastructure_services_database_access_network,
+        'service': infrastructure_services_database_access_service,
+        'mode': foundry_database_access_resolved.mode,
+        'bind_address': infrastructure_services_database_access_bind_address,
+        'published_port': infrastructure_services_database_access_published_port
+      } | to_json | hash('sha256') }}
+
+- name: Resolve whether the database access proxy must be recreated
+  ansible.builtin.set_fact:
+    infrastructure_services_database_access_proxy_recreate: >-
+      {{
+        infrastructure_services_database_access_proxy_inspection.rc == 0
+        and ((infrastructure_services_database_access_proxy_inspection.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.config-sha256')
+            != infrastructure_services_database_access_proxy_hash
+      }}
+  no_log: true
+
+- name: Remove a drifted database access proxy
+  ansible.builtin.command:
+    argv: [docker, container, rm, --force, "{{ infrastructure_services_database_access_container_name }}"]
+  when: infrastructure_services_database_access_proxy_recreate
+  no_log: true
+
+- name: Create the database access proxy
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --detach
+      - --name
+      - "{{ infrastructure_services_database_access_container_name }}"
+      - --restart
+      - unless-stopped
+      - --network
+      - "{{ infrastructure_services_database_access_network }}"
+      - --publish
+      - "{{ infrastructure_services_database_access_bind_address }}:{{ infrastructure_services_database_access_published_port }}:{{ infrastructure_services_database_access_proxy_port }}"
+      - --label
+      - foundry.managed=true
+      - --label
+      - "foundry.project={{ project.name }}"
+      - --label
+      - "foundry.environment={{ infrastructure_services_database_access_environment }}"
+      - --label
+      - foundry.service=database-access
+      - --label
+      - "foundry.config-sha256={{ infrastructure_services_database_access_proxy_hash }}"
+      - "{{ infrastructure_services_database_access_proxy_image }}"
+      - TCP-LISTEN:15432,fork,reuseaddr,bind=0.0.0.0
+      - "TCP:{{ infrastructure_services_database_access_service }}:5432"
+  when:
+    - infrastructure_services_database_access_proxy_inspection.rc != 0
+      or infrastructure_services_database_access_proxy_recreate
+  register: infrastructure_services_database_access_proxy_create
+  changed_when: true
+  no_log: true
+
+- name: Wait for the database access proxy to run
+  ansible.builtin.command:
+    argv: [docker, container, inspect, --format, "{{ '{{.State.Running}}' }}", "{{ infrastructure_services_database_access_container_name }}"]
+  register: infrastructure_services_database_access_proxy_running
+  changed_when: false
+  retries: 10
+  delay: 2
+  until: infrastructure_services_database_access_proxy_running.stdout == 'true'
+  no_log: true
+
+- name: Validate the database access proxy isolation contract
+  ansible.builtin.assert:
+    that:
+      - (infrastructure_services_database_access_proxy_running.stdout | trim) == 'true'
+      - >-
+        ((infrastructure_services_database_access_proxy_inspection.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.managed') == 'true'
+        or infrastructure_services_database_access_proxy_create.rc == 0
+    fail_msg: Database access proxy failed to start with Foundry ownership.
+  when: not infrastructure_services_database_access_proxy_recreate
+  no_log: true

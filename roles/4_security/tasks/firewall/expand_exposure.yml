@@ -3,7 +3,10 @@
   ansible.builtin.set_fact:
     security_firewall_exposure_sources: >-
       {{
-        security_management_allowed_cidrs
+        security_firewall_exposure.source_cidrs
+        if security_firewall_exposure.source_cidrs is defined
+           and security_firewall_exposure.source_cidrs | length > 0
+        else security_management_allowed_cidrs
         if security_firewall_exposure.scope == 'management'
            and security_management_restrict_by_cidr
         else ['any']

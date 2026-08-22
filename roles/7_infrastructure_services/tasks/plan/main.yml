@@ -7,6 +7,7 @@
       - platform | default({}) is mapping
       - domains | default({}) is mapping
       - network | default({}) is mapping
+      - database_access | default({}) is mapping
       - (network | default({})).get('exposure', []) is sequence
       - (network | default({})).get('exposure', []) is not string
     fail_msg: platform, domains, and network.exposure must use the documented mappings/list.
@@ -15,6 +16,7 @@
   ansible.builtin.set_fact:
     foundry_platform_plan: "{{ platform_defaults | combine(platform | default({}), recursive=true) }}"
     foundry_domain_plan: "{{ domains_defaults | combine(domains | default({}), recursive=true) }}"
+    foundry_database_access_plan: "{{ database_access_defaults | combine(database_access | default({}), recursive=true) }}"
     foundry_platform_exposure_requirements: []
   no_log: true
 
@@ -63,6 +65,20 @@
     - foundry_platform_plan.dokploy.enabled
     - foundry_domain_plan.base | length == 0
 
+- name: Plan Tailscale database exposure
+  ansible.builtin.set_fact:
+    foundry_platform_exposure_requirements: >-
+      {{ foundry_platform_exposure_requirements + [{
+        'name': 'database-access',
+        'port': foundry_database_access_plan.tailscale.port | int,
+        'protocol': 'tcp',
+        'scope': 'management',
+        'source_cidrs': [foundry_database_access_plan.tailscale.cidr]
+      }] }}
+  when:
+    - foundry_database_access_plan.enabled
+    - foundry_database_access_plan.mode == 'tailscale'
+
 - name: Validate predeclared platform exposure does not conflict
   ansible.builtin.assert:
     that:
@@ -70,7 +86,8 @@
         item.name not in ((network | default({})).get('exposure', []) | map(attribute='name') | list)
         or (((network | default({})).get('exposure', []) | selectattr('name', 'equalto', item.name) | first).port | int == item.port
             and ((network | default({})).get('exposure', []) | selectattr('name', 'equalto', item.name) | first).protocol == item.protocol
-            and ((network | default({})).get('exposure', []) | selectattr('name', 'equalto', item.name) | first).scope == item.scope)
+            and ((network | default({})).get('exposure', []) | selectattr('name', 'equalto', item.name) | first).scope == item.scope
+            and (((network | default({})).get('exposure', []) | selectattr('name', 'equalto', item.name) | first).get('source_cidrs', []) == item.get('source_cidrs', [])))
     fail_msg: "network.exposure already contains a conflicting {{ item.name }} declaration."
   loop: "{{ foundry_platform_exposure_requirements }}"
   loop_control:
