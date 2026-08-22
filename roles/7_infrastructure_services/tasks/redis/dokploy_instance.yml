@@ -1,0 +1,340 @@
+---
+- name: Resolve Foundry Redis ownership description
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_redis_description: >-
+      Foundry Redis ({{ redis_instance.environment }})
+    infrastructure_services_dokploy_redis_args: >-
+      {{
+        (['--maxmemory', redis_instance.maxmemory]
+         if redis_instance.maxmemory | default('') | length > 0
+            and redis_instance.maxmemory != '0'
+         else [])
+        + ['--maxmemory-policy', redis_instance.maxmemory_policy]
+      }}
+
+- name: Require healthy Dokploy API context for Redis
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_dokploy_api_key | default('') | length > 0
+      - infrastructure_services_dokploy_api_url | default('') | length > 0
+      - infrastructure_services_dokploy_api_network | default('') | length > 0
+      - infrastructure_services_dokploy_environment_map[redis_instance.environment] | default('') | length > 0
+    fail_msg: >-
+      Dokploy Redis requires the dynamically generated API key and the
+      resolved Dokploy environment identifier.
+
+- name: Read matching Dokploy Redis services
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - >-
+        {{ infrastructure_services_dokploy_api_url }}/api/redis.search?name={{ redis_instance.service_name }}&environmentId={{ infrastructure_services_dokploy_environment_map[redis_instance.environment] }}&limit=100
+  register: infrastructure_services_dokploy_redis_search_raw
+  changed_when: false
+
+- name: Parse matching Dokploy Redis services
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_redis_search_response: >-
+      {{ infrastructure_services_dokploy_redis_search_raw.stdout | from_json }}
+
+- name: Resolve matching Dokploy Redis service items
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_redis_search: >-
+      {{
+        infrastructure_services_dokploy_redis_search_response.get('items', [])
+        if infrastructure_services_dokploy_redis_search_response is mapping
+        else []
+      }}
+
+- name: Require a list response from Dokploy Redis search
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_dokploy_redis_search_response is mapping
+      - infrastructure_services_dokploy_redis_search_response.get('items', []) is sequence
+      - infrastructure_services_dokploy_redis_search_response.get('items', []) is not string
+    fail_msg: Dokploy returned an unexpected Redis search response.
+
+- name: Keep only the exact Dokploy Redis resource identity
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_redis_search: >-
+      {{
+        infrastructure_services_dokploy_redis_search
+        | selectattr('name', 'equalto', redis_instance.service_name)
+        | selectattr('environmentId', 'equalto', infrastructure_services_dokploy_environment_map[redis_instance.environment])
+        | list
+      }}
+
+- name: Reject ambiguous Dokploy Redis ownership
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_dokploy_redis_search | length <= 1
+    fail_msg: >-
+      More than one Dokploy Redis service matches
+      '{{ redis_instance.service_name }}' in environment
+      '{{ redis_instance.environment }}'; refusing ambiguous ownership.
+
+- name: Create missing Dokploy Redis service
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --request
+      - POST
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - --header
+      - "Content-Type: application/json"
+      - --data
+      - >-
+        {{ {
+          'name': redis_instance.service_name,
+          'appName': redis_instance.service_name,
+          'databasePassword': redis_instance.password,
+          'dockerImage': redis_instance.image,
+          'environmentId': infrastructure_services_dokploy_environment_map[redis_instance.environment],
+          'description': infrastructure_services_dokploy_redis_description
+        } | to_json }}
+      - "{{ infrastructure_services_dokploy_api_url }}/api/redis.create"
+  register: infrastructure_services_dokploy_redis_create
+  when: infrastructure_services_dokploy_redis_search | length == 0
+  changed_when: true
+
+- name: Re-read Dokploy Redis services after reconciliation
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - >-
+        {{ infrastructure_services_dokploy_api_url }}/api/redis.search?name={{ redis_instance.service_name }}&environmentId={{ infrastructure_services_dokploy_environment_map[redis_instance.environment] }}&limit=100
+  register: infrastructure_services_dokploy_redis_search_after_raw
+  changed_when: false
+
+- name: Parse Dokploy Redis search after reconciliation
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_redis_search_after_response: >-
+      {{ infrastructure_services_dokploy_redis_search_after_raw.stdout | from_json }}
+
+- name: Resolve Dokploy Redis service items after reconciliation
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_redis_search_after: >-
+      {{
+        infrastructure_services_dokploy_redis_search_after_response.get('items', [])
+        if infrastructure_services_dokploy_redis_search_after_response is mapping
+        else []
+      }}
+
+- name: Keep only the exact Dokploy Redis identity after reconciliation
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_redis_search_after: >-
+      {{
+        infrastructure_services_dokploy_redis_search_after
+        | selectattr('name', 'equalto', redis_instance.service_name)
+        | selectattr('environmentId', 'equalto', infrastructure_services_dokploy_environment_map[redis_instance.environment])
+        | list
+      }}
+
+- name: Require the Dokploy Redis service
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_dokploy_redis_search_after | length == 1
+    fail_msg: >-
+      Dokploy Redis '{{ redis_instance.service_name }}' could not be resolved
+      uniquely after reconciliation.
+
+- name: Resolve Dokploy Redis service identity
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_redis_service: >-
+      {{ infrastructure_services_dokploy_redis_search_after | first }}
+    infrastructure_services_dokploy_redis_id: >-
+      {{
+        (infrastructure_services_dokploy_redis_search_after | first).get(
+          'redisId',
+          (infrastructure_services_dokploy_redis_search_after | first).get('id', '')
+        )
+      }}
+
+- name: Require resolved Dokploy Redis identity
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_dokploy_redis_id | string | length > 0
+    fail_msg: >-
+      Dokploy Redis '{{ redis_instance.service_name }}' exists but its
+      identifier could not be resolved.
+
+- name: Read Dokploy Redis service details
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - >-
+        {{ infrastructure_services_dokploy_api_url }}/api/redis.one?redisId={{ infrastructure_services_dokploy_redis_id }}
+  register: infrastructure_services_dokploy_redis_details_raw
+  changed_when: false
+
+- name: Parse Dokploy Redis service details
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_redis_details: >-
+      {{ infrastructure_services_dokploy_redis_details_raw.stdout | from_json }}
+
+- name: Refuse to adopt an unowned Dokploy Redis service
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_dokploy_redis_details.get('environmentId', '') == infrastructure_services_dokploy_environment_map[redis_instance.environment]
+      - infrastructure_services_dokploy_redis_details.get('description', '') == infrastructure_services_dokploy_redis_description
+    fail_msg: >-
+      Dokploy Redis '{{ redis_instance.service_name }}' exists but is not
+      marked as owned by Foundry for this environment.
+
+- name: Detect Dokploy Redis configuration drift
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_redis_needs_update: >-
+      {{
+        infrastructure_services_dokploy_redis_details.get('name', '') != redis_instance.service_name
+        or infrastructure_services_dokploy_redis_details.get('dockerImage', '') != redis_instance.image
+        or infrastructure_services_dokploy_redis_details.get('description', '') != infrastructure_services_dokploy_redis_description
+        or (infrastructure_services_dokploy_redis_details.get('memoryLimit', '') | default('', true) | string) != (redis_instance.resources.memory | string)
+        or (infrastructure_services_dokploy_redis_details.get('cpuLimit', '') | default('', true) | string) != (redis_instance.resources.cpus | string)
+        or infrastructure_services_dokploy_redis_details.get('command', '') | default('', true) != 'redis-server'
+        or infrastructure_services_dokploy_redis_details.get('args', []) | default([], true) != infrastructure_services_dokploy_redis_args
+      }}
+
+- name: Update drifted Dokploy Redis service
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --request
+      - POST
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - --header
+      - "Content-Type: application/json"
+      - --data
+      - >-
+        {{ {
+          'redisId': infrastructure_services_dokploy_redis_id,
+          'name': redis_instance.service_name,
+          'appName': redis_instance.service_name,
+          'dockerImage': redis_instance.image,
+          'description': infrastructure_services_dokploy_redis_description,
+          'command': 'redis-server',
+          'args': infrastructure_services_dokploy_redis_args,
+          'memoryLimit': (redis_instance.resources.memory if redis_instance.resources.memory | length > 0 else none),
+          'cpuLimit': (redis_instance.resources.cpus if redis_instance.resources.cpus | length > 0 else none)
+        } | to_json }}
+      - "{{ infrastructure_services_dokploy_api_url }}/api/redis.update"
+  register: infrastructure_services_dokploy_redis_update
+  when: infrastructure_services_dokploy_redis_needs_update
+  changed_when: true
+
+- name: Deploy newly created or changed Dokploy Redis service
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --request
+      - POST
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - --header
+      - "Content-Type: application/json"
+      - --data
+      - "{{ {'redisId': infrastructure_services_dokploy_redis_id} | to_json }}"
+      - "{{ infrastructure_services_dokploy_api_url }}/api/redis.deploy"
+  register: infrastructure_services_dokploy_redis_deploy
+  when: >-
+    infrastructure_services_dokploy_redis_create is changed
+    or infrastructure_services_dokploy_redis_needs_update
+    or infrastructure_services_dokploy_redis_details.get('applicationStatus', 'idle') not in ['running', 'done']
+  changed_when: true
+
+- name: Wait for Dokploy Redis service to leave an error state
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - >-
+        {{ infrastructure_services_dokploy_api_url }}/api/redis.one?redisId={{ infrastructure_services_dokploy_redis_id }}
+  register: infrastructure_services_dokploy_redis_final
+  changed_when: false
+  retries: 30
+  delay: 2
+  until:
+    - (infrastructure_services_dokploy_redis_final.stdout | from_json).get('applicationStatus', '') in ['running', 'done']
+
+- name: Parse final Dokploy Redis service details
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_redis_final_details: >-
+      {{ infrastructure_services_dokploy_redis_final.stdout | from_json }}
+
+- name: Store resolved Dokploy Redis service contract
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_redis_contracts: >-
+      {{
+        infrastructure_services_dokploy_redis_contracts | default({})
+        | combine({
+            redis_instance.environment: {
+              'redis_id': infrastructure_services_dokploy_redis_id,
+              'service_name': infrastructure_services_dokploy_redis_final_details.get('appName', redis_instance.service_name),
+              'environment_id': infrastructure_services_dokploy_environment_map[redis_instance.environment]
+            }
+          })
+      }}

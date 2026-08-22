@@ -21,6 +21,7 @@ for relative in [
     "tasks/discovery/main.yml",
     "tasks/networks/main.yml",
     "tasks/validation/main.yml",
+    "tasks/validation/validate_attachments.yml",
 ]:
     require((NETWORKING / relative).is_file(), f"missing {relative}")
 
@@ -51,6 +52,8 @@ require("ansible.builtin.systemd_service" not in networking_tasks, "Networking m
 require("networking_runtime_ownership_manifest" in docker_tasks, "Runtime ownership contract is not required")
 require("networking_docker_binary" in docker_tasks, "Docker daemon is not validated")
 require("item.Containers" in networking_tasks, "stale attachment safety is missing")
+require("validate_attachments.yml" in (NETWORKING / "tasks/validation/main.yml").read_text(), "attachment validation includes the implementation file")
+require("networking_real_attachments" not in networking_tasks, "stale recursive attachment orchestrator remains")
 require("--attachable" in networking_tasks, "Swarm overlays must be attachable")
 require("Scope == 'swarm'" in networking_tasks, "overlay scope validation is missing")
 

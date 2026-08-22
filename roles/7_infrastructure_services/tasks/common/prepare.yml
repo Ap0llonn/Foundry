@@ -38,7 +38,7 @@
   no_log: true
 
 - name: Resolve Redis instances and stable credentials
-  ansible.builtin.include_tasks: common/resolve_redis_instance.yml
+  ansible.builtin.include_tasks: common/resolve_dokploy_redis_instance.yml
   loop: "{{ infrastructure_services_redis_environments }}"
   loop_control:
     loop_var: infrastructure_services_instance_environment

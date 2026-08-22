@@ -1,0 +1,159 @@
+---
+- name: Resolve Cloudflare zone security setting declarations
+  ansible.builtin.set_fact:
+    infrastructure_services_cloudflare_zone_settings:
+      - id: ssl
+        value: "{{ foundry_domains_resolved.cloudflare.security.ssl_mode }}"
+      - id: always_use_https
+        value: "{{ 'on' if foundry_domains_resolved.cloudflare.security.always_use_https else 'off' }}"
+      - id: min_tls_version
+        value: "{{ foundry_domains_resolved.cloudflare.security.min_tls_version }}"
+      - id: tls_1_3
+        value: "{{ 'on' if foundry_domains_resolved.cloudflare.security.tls_1_3 else 'off' }}"
+
+- name: Reconcile Cloudflare zone security settings
+  ansible.builtin.include_tasks: setting.yml
+  loop: "{{ infrastructure_services_cloudflare_zone_settings }}"
+  loop_control:
+    loop_var: infrastructure_services_cloudflare_zone_setting
+    label: "{{ infrastructure_services_cloudflare_zone_setting.id }}"
+
+- name: Read Cloudflare managed rulesets available to the zone
+  ansible.builtin.uri:
+    url: "{{ infrastructure_services_cloudflare_api_url }}/zones/{{ infrastructure_services_cloudflare_zone_id }}/rulesets"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ foundry_domains_resolved.cloudflare.api_token }}"
+      Content-Type: application/json
+    return_content: true
+    status_code: 200
+    validate_certs: true
+  delegate_to: localhost
+  become: false
+  register: infrastructure_services_cloudflare_available_rulesets_response
+  changed_when: false
+  when: foundry_domains_resolved.cloudflare.security.managed_waf
+  no_log: true
+
+- name: Require Cloudflare managed rulesets discovery
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_cloudflare_available_rulesets_response.json.success | default(false)
+    fail_msg: Cloudflare could not list the managed rulesets available to the configured zone.
+  when: foundry_domains_resolved.cloudflare.security.managed_waf
+  no_log: true
+
+- name: Report Cloudflare managed ruleset catalogue
+  ansible.builtin.debug:
+    msg: >-
+      {{
+        infrastructure_services_cloudflare_available_rulesets_response.json.result | default([])
+        | selectattr('kind', 'equalto', 'managed')
+        | map(attribute='name')
+        | list
+      }}
+    verbosity: 1
+  when: foundry_domains_resolved.cloudflare.security.managed_waf
+
+- name: Resolve the best Cloudflare managed WAF available to the zone
+  ansible.builtin.set_fact:
+    infrastructure_services_cloudflare_selected_managed_waf_ruleset: >-
+      {{
+        (
+          (
+            infrastructure_services_cloudflare_available_rulesets_response.json.result | default([])
+            | selectattr('kind', 'equalto', 'managed')
+            | selectattr('name', 'equalto', 'Cloudflare Managed Ruleset')
+            | list
+          )
+          + (
+            infrastructure_services_cloudflare_available_rulesets_response.json.result | default([])
+            | selectattr('kind', 'equalto', 'managed')
+            | selectattr('name', 'equalto', 'Cloudflare Managed Free Ruleset')
+            | list
+          )
+        ) | first | default({}, true)
+      }}
+  when: foundry_domains_resolved.cloudflare.security.managed_waf
+  no_log: true
+
+- name: Require an entitled Cloudflare managed WAF
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_cloudflare_selected_managed_waf_ruleset.id | default('') | length > 0
+    fail_msg: >-
+      The configured Cloudflare zone is not entitled to either the Cloudflare Managed
+      Ruleset or the Cloudflare Managed Free Ruleset.
+  when: foundry_domains_resolved.cloudflare.security.managed_waf
+  no_log: true
+
+- name: Resolve Foundry Cloudflare managed WAF rule
+  ansible.builtin.set_fact:
+    infrastructure_services_cloudflare_rule_phase: http_request_firewall_managed
+    infrastructure_services_cloudflare_rule_set_name: Foundry managed WAF
+    infrastructure_services_cloudflare_rule_set_description: Enables Cloudflare managed WAF for Foundry.
+    infrastructure_services_cloudflare_rule_declaration:
+      ref: "{{ infrastructure_services_cloudflare_managed_waf_rule_ref }}"
+      description: Foundry-managed Cloudflare WAF.
+      expression: "true"
+      action: execute
+      action_parameters:
+        id: "{{ infrastructure_services_cloudflare_selected_managed_waf_ruleset.id }}"
+      enabled: true
+  when: foundry_domains_resolved.cloudflare.security.managed_waf
+
+- name: Reconcile Foundry Cloudflare managed WAF rule
+  ansible.builtin.import_tasks: rule.yml
+  when: foundry_domains_resolved.cloudflare.security.managed_waf
+
+- name: Resolve Cloudflare Dokploy management access rule
+  ansible.builtin.set_fact:
+    infrastructure_services_cloudflare_rule_phase: http_request_firewall_custom
+    infrastructure_services_cloudflare_rule_set_name: Foundry Dokploy access control
+    infrastructure_services_cloudflare_rule_set_description: Restricts Dokploy administration while allowing ACME HTTP-01 validation.
+    infrastructure_services_cloudflare_rule_declaration:
+      ref: "{{ infrastructure_services_cloudflare_management_rule_ref }}"
+      description: Restrict Dokploy administration to Foundry management CIDRs; allow ACME HTTP-01.
+      expression: >-
+        {{
+          'http.host eq "' + foundry_domains_resolved.dokploy_label + '.' + foundry_domains_resolved.base
+          + '" and not starts_with(http.request.uri.path, "/.well-known/acme-challenge/")'
+          + ' and not ip.src in {' + ((management | default({})).get('allowed_cidrs', []) | join(' ')) + '}'
+        }}
+      action: block
+      enabled: true
+  when: foundry_platform_resolved.dokploy.enabled
+
+- name: Reconcile Cloudflare Dokploy management access rule
+  ansible.builtin.import_tasks: rule.yml
+  when: foundry_platform_resolved.dokploy.enabled
+
+- name: Resolve Cloudflare Dokploy authentication rate-limit rule
+  ansible.builtin.set_fact:
+    infrastructure_services_cloudflare_rule_phase: http_ratelimit
+    infrastructure_services_cloudflare_rule_set_name: Foundry Dokploy rate limiting
+    infrastructure_services_cloudflare_rule_set_description: Limits abusive Dokploy authentication requests.
+    infrastructure_services_cloudflare_rule_declaration:
+      ref: "{{ infrastructure_services_cloudflare_rate_limit_rule_ref }}"
+      description: Limit Dokploy authentication requests per client IP.
+      expression: >-
+        {{
+          'http.host eq "' + foundry_domains_resolved.dokploy_label + '.' + foundry_domains_resolved.base
+          + '" and starts_with(http.request.uri.path, "/api/auth/")'
+        }}
+      action: "{{ foundry_domains_resolved.cloudflare.security.rate_limit.action }}"
+      ratelimit:
+        characteristics: [ip.src, cf.colo.id]
+        period: "{{ foundry_domains_resolved.cloudflare.security.rate_limit.period | int }}"
+        requests_per_period: "{{ foundry_domains_resolved.cloudflare.security.rate_limit.requests_per_period | int }}"
+        mitigation_timeout: "{{ foundry_domains_resolved.cloudflare.security.rate_limit.mitigation_timeout | int }}"
+      enabled: true
+  when:
+    - foundry_platform_resolved.dokploy.enabled
+    - foundry_domains_resolved.cloudflare.security.rate_limit.enabled
+
+- name: Reconcile Cloudflare Dokploy authentication rate-limit rule
+  ansible.builtin.import_tasks: rule.yml
+  when:
+    - foundry_platform_resolved.dokploy.enabled
+    - foundry_domains_resolved.cloudflare.security.rate_limit.enabled

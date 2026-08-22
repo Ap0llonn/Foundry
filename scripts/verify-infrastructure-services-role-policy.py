@@ -30,6 +30,8 @@ required_files = [
     "tasks/traefik/main.yml",
     "tasks/dokploy/main.yml",
     "tasks/dokploy/validate.yml",
+    "tasks/dokploy/bootstrap.yml",
+    "tasks/dokploy/configure.yml",
     "tasks/output/main.yml",
     "tasks/validation/main.yml",
     "templates/traefik.yml.j2",
@@ -68,9 +70,16 @@ for required in [
     "ingress/main.yml",
     "traefik/main.yml",
     "dokploy/main.yml",
+    "dokploy/validate.yml",
+    "dokploy/bootstrap.yml",
+    "dokploy/configure.yml",
     "output/main.yml",
 ]:
     require(required in main, f"orchestrator omits {required}")
+
+require(main.index("dokploy/validate.yml") < main.index("dokploy/bootstrap.yml"), "Dokploy bootstrap runs before health validation")
+require(main.index("dokploy/bootstrap.yml") < main.index("dokploy/configure.yml"), "Dokploy configure runs before bootstrap")
+require(main.index("dokploy/configure.yml") < main.index("output/main.yml"), "Dokploy output is published before configure")
 
 validation = (ROLE / "tasks/01_validate.yml").read_text()
 for required in [
@@ -101,6 +110,8 @@ require("exposedByDefault: false" in traefik, "Traefik exposes undeclared servic
 require("docker:" in traefik and "swarm:" in traefik, "Dokploy requires both Docker and Swarm providers")
 require("dashboard: false" in traefik, "Traefik dashboard is not disabled")
 dokploy = (ROLE / "tasks/dokploy/main.yml").read_text()
+dokploy_bootstrap = (ROLE / "tasks/dokploy/bootstrap.yml").read_text()
+dokploy_validation = (ROLE / "tasks/dokploy/validate.yml").read_text()
 for required in [
     "ipallowlist.sourcerange",
     "foundry.managed=true",
@@ -108,6 +119,9 @@ for required in [
     "dokploy-postgres",
 ]:
     require(required in dokploy, f"Dokploy safety contract lacks {required}")
+require("infrastructure_services_dokploy_internal_endpoint" in dokploy_bootstrap, "Dokploy bootstrap does not use the internal endpoint")
+require("infrastructure_services_dokploy_internal_endpoint" in dokploy_validation, "Dokploy health validation does not use the internal endpoint")
+require("infrastructure_services_dokploy_endpoint" in dokploy_validation, "Dokploy validation does not report the resolved public endpoint")
 
 config = yaml.safe_load((ROOT / "config.yml").read_text())
 require("services" in config and "platform" in config and "domains" in config, "global high-level config is incomplete")

@@ -16,6 +16,7 @@
     foundry_platform_plan: "{{ platform_defaults | combine(platform | default({}), recursive=true) }}"
     foundry_domain_plan: "{{ domains_defaults | combine(domains | default({}), recursive=true) }}"
     foundry_platform_exposure_requirements: []
+  no_log: true
 
 - name: Plan Traefik HTTP exposure
   ansible.builtin.set_fact:
@@ -85,4 +86,3 @@
   loop_control:
     label: "{{ item.name }}"
   when: item.name not in ((network | default({})).get('exposure', []) | map(attribute='name') | list)
-

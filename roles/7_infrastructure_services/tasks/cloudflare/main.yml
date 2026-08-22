@@ -1,0 +1,72 @@
+---
+# Cloudflare is intentionally managed from the Ansible controller. The API
+# token therefore never reaches the VM, Docker, or Dokploy.
+- name: Read the configured Cloudflare zone
+  ansible.builtin.uri:
+    url: >-
+      {{ infrastructure_services_cloudflare_api_url }}/zones?name={{ foundry_domains_resolved.cloudflare.zone | urlencode }}&status=active
+    method: GET
+    headers:
+      Authorization: "Bearer {{ foundry_domains_resolved.cloudflare.api_token }}"
+      Content-Type: application/json
+    return_content: true
+    status_code: 200
+    validate_certs: true
+  delegate_to: localhost
+  become: false
+  register: infrastructure_services_cloudflare_zone_response
+  changed_when: false
+  no_log: true
+
+- name: Require one active Cloudflare zone
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_cloudflare_zone_response.json.success | default(false)
+      - infrastructure_services_cloudflare_zone_response.json.result | default([]) | length == 1
+    fail_msg: >-
+      Cloudflare did not return exactly one active zone for
+      domains.cloudflare.zone. Check the zone name and API-token permissions.
+  no_log: true
+
+- name: Resolve Cloudflare zone identity and proxy mode
+  ansible.builtin.set_fact:
+    infrastructure_services_cloudflare_zone_id: >-
+      {{ infrastructure_services_cloudflare_zone_response.json.result[0].id }}
+    infrastructure_services_cloudflare_proxy_enabled: >-
+      {{ foundry_domains_resolved.cloudflare.proxied }}
+  no_log: true
+
+- name: Read current Cloudflare origin network ranges
+  ansible.builtin.uri:
+    url: "{{ infrastructure_services_cloudflare_api_url }}/ips"
+    method: GET
+    return_content: true
+    status_code: 200
+    validate_certs: true
+  delegate_to: localhost
+  become: false
+  register: infrastructure_services_cloudflare_ips_response
+  changed_when: false
+
+- name: Resolve Cloudflare trusted origin CIDRs
+  ansible.builtin.set_fact:
+    infrastructure_services_cloudflare_origin_cidrs: >-
+      {{
+        ((infrastructure_services_cloudflare_ips_response.json.result | default({}, true)).ipv4_cidrs | default([]))
+        + ((infrastructure_services_cloudflare_ips_response.json.result | default({}, true)).ipv6_cidrs | default([]))
+      }}
+
+- name: Require Cloudflare origin CIDRs for proxied traffic
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_cloudflare_ips_response.json.success | default(false)
+      - infrastructure_services_cloudflare_origin_cidrs | length > 0
+    fail_msg: Could not retrieve Cloudflare's published origin CIDR ranges.
+  when: infrastructure_services_cloudflare_proxy_enabled
+
+- name: Reconcile Cloudflare DNS records
+  ansible.builtin.import_tasks: dns.yml
+
+- name: Reconcile Cloudflare edge security controls
+  ansible.builtin.import_tasks: security.yml
+  when: foundry_domains_resolved.cloudflare.security.enabled

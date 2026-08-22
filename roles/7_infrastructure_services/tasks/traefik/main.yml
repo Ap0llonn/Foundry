@@ -91,7 +91,8 @@
         'http_port': foundry_platform_resolved.traefik.http_port,
         'https_port': (foundry_platform_resolved.traefik.https_port if foundry_platform_resolved.traefik.tls.enabled else none),
         'management_port': (foundry_platform_resolved.dokploy.management_port if foundry_platform_resolved.dokploy.enabled and not infrastructure_services_domain_enabled else none),
-        'tls': foundry_platform_resolved.traefik.tls.enabled
+        'tls': foundry_platform_resolved.traefik.tls.enabled,
+        'tls_email': (foundry_platform_resolved.traefik.tls.email if foundry_platform_resolved.traefik.tls.enabled else none)
       } | to_json | hash('sha256') }}
 
 - name: Inspect desired Traefik container

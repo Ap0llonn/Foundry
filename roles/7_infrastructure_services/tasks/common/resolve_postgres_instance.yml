@@ -32,7 +32,7 @@
 
 - name: Generate missing PostgreSQL password
   ansible.builtin.command:
-    argv: [openssl, rand, -base64, "36"]
+    argv: [openssl, rand, -hex, "24"]
   register: infrastructure_services_postgres_generated_password
   changed_when: true
   when:
@@ -88,9 +88,7 @@
     infrastructure_services_postgres_instances: >-
       {{ infrastructure_services_postgres_instances + [{
         'environment': infrastructure_services_instance_environment,
-        'network_name': infrastructure_services_network_state.resolved_networks[infrastructure_services_instance_environment],
-        'container_name': 'foundry-' + project.name + '-' + infrastructure_services_instance_environment + '-postgres',
-        'volume_name': 'foundry-' + project.name + '-' + infrastructure_services_instance_environment + '-postgres-data',
+        'service_name': 'foundry-' + infrastructure_services_instance_environment + '-postgres',
         'image': foundry_services_resolved.postgres.image,
         'user': foundry_services_resolved.postgres.user,
         'database': foundry_services_resolved.postgres.database,

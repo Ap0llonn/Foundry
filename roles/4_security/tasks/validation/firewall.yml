@@ -83,6 +83,56 @@
   changed_when: false
   check_mode: false
 
+- name: Inspect the legacy Dokploy Traefik listener during domain migration
+  ansible.builtin.command:
+    argv:
+      - docker
+      - container
+      - inspect
+      - dokploy-traefik
+  register: security_legacy_dokploy_traefik_inspect
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: true
+  when:
+    - "'tcp|3000' in security_public_listeners.stdout_lines"
+    - (platform | default({})).get('dokploy', {}).get('enabled', false) | bool
+    - (domains | default({})).get('base', '') | length > 0
+
+- name: Read the legacy Dokploy Traefik metadata
+  ansible.builtin.set_fact:
+    security_legacy_dokploy_traefik_metadata: >-
+      {{ security_legacy_dokploy_traefik_inspect.stdout | from_json | first | default({}, true) }}
+  when:
+    - security_legacy_dokploy_traefik_inspect is defined
+    - security_legacy_dokploy_traefik_inspect.rc | default(-1) == 0
+  no_log: true
+
+- name: Initialize legacy Dokploy management listener recognition
+  ansible.builtin.set_fact:
+    security_legacy_dokploy_management_listener_is_owned: false
+    security_legacy_dokploy_management_listener_ids: []
+
+- name: Recognize only the Foundry-owned legacy Dokploy management listener
+  ansible.builtin.set_fact:
+    security_legacy_dokploy_management_listener_is_owned: true
+  when:
+    - security_legacy_dokploy_traefik_metadata is defined
+    - (security_legacy_dokploy_traefik_metadata.Config.Labels | default({})).get('foundry.managed') == 'true'
+    - (security_legacy_dokploy_traefik_metadata.Config.Labels | default({})).get('foundry.project') == project.name
+    - (security_legacy_dokploy_traefik_metadata.Config.Labels | default({})).get('foundry.service') == 'traefik'
+    - >-
+      ((security_legacy_dokploy_traefik_metadata.NetworkSettings.Ports | default({})).get('3000/tcp', [])
+       | selectattr('HostIp', 'equalto', '0.0.0.0')
+       | selectattr('HostPort', 'equalto', '3000') | list | length) == 1
+  no_log: true
+
+- name: Permit the recognized legacy Dokploy management listener for one convergence
+  ansible.builtin.set_fact:
+    security_legacy_dokploy_management_listener_ids: ["tcp|3000"]
+  when: security_legacy_dokploy_management_listener_is_owned
+
 - name: Resolve declared exposure socket identities
   ansible.builtin.set_fact:
     security_expected_internal_listener_ids: >-
@@ -114,7 +164,7 @@
                   (platform | default({})).get('swarm', {}).get('enabled', false) | bool
                   or (platform | default({})).get('dokploy', {}).get('enabled', false) | bool
                 ) else []
-              )
+              ) + security_legacy_dokploy_management_listener_ids
           ) | sort
       }}
 

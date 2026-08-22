@@ -1,0 +1,450 @@
+---
+# ---------------------------------------------------------------------------
+# Dokploy bootstrap
+#
+# Responsibility:
+# - Detect whether initial Dokploy onboarding is still required
+# - Create the first owner only when required
+# - Generate and persist the API key used by later Dokploy configuration
+# - Preserve idempotence on subsequent runs
+#
+# Preconditions:
+# - Dokploy is healthy
+# - Dokploy service is reachable on the ingress network
+# - bootstrap credentials are already resolved securely
+#
+# This file does NOT create projects/environments/services.
+# That belongs to dokploy/configure.yml.
+# ---------------------------------------------------------------------------
+
+- name: Resolve Dokploy bootstrap credentials
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_bootstrap: >-
+      {{ foundry_platform_resolved.dokploy.bootstrap | default({}, true) }}
+  
+
+- name: Require Dokploy bootstrap credentials
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_dokploy_bootstrap is defined
+      - infrastructure_services_dokploy_bootstrap is mapping
+
+      - infrastructure_services_dokploy_bootstrap.get('email', '') is string
+      - infrastructure_services_dokploy_bootstrap.get('email', '') | length > 0
+
+      - infrastructure_services_dokploy_bootstrap.get('password', '') is string
+      - infrastructure_services_dokploy_bootstrap.get('password', '') | length >= 8
+
+      - infrastructure_services_dokploy_bootstrap.get('name', '') is string
+      - infrastructure_services_dokploy_bootstrap.get('name', '') | length > 0
+
+      - infrastructure_services_dokploy_bootstrap.get('last_name', '') is string
+      - infrastructure_services_dokploy_bootstrap.get('last_name', '') | length > 0
+
+    fail_msg: >-
+      Dokploy bootstrap requires email, password, name, and last_name.
+  no_log: true
+
+
+# ---------------------------------------------------------------------------
+# Detect onboarding state
+# ---------------------------------------------------------------------------
+
+- name: Inspect Dokploy onboarding state
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ foundry_platform_resolved.traefik.ingress_network }}"
+      - curlimages/curl:8.15.0
+      - --silent
+      - --output
+      - /dev/null
+      - --write-out
+      - "%{http_code} %{redirect_url}"
+      - "{{ infrastructure_services_dokploy_internal_endpoint }}/register"
+  register: infrastructure_services_dokploy_onboarding_probe
+  changed_when: false
+  failed_when: infrastructure_services_dokploy_onboarding_probe.rc != 0
+
+
+- name: Validate Dokploy onboarding response
+  ansible.builtin.assert:
+    that:
+      - >-
+        infrastructure_services_dokploy_onboarding_probe.stdout
+        is match('^(200|301|302|307|308)( |$)')
+    fail_msg: >-
+      Dokploy returned an unexpected onboarding response:
+      {{ infrastructure_services_dokploy_onboarding_probe.stdout }}
+
+
+- name: Resolve Dokploy onboarding requirement
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_onboarding_required: >-
+      {{
+        infrastructure_services_dokploy_onboarding_probe.stdout
+        is match('^200( |$)')
+      }}
+
+
+# ---------------------------------------------------------------------------
+# Create initial owner
+# ---------------------------------------------------------------------------
+
+- name: Bootstrap initial Dokploy owner
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ foundry_platform_resolved.traefik.ingress_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --request
+      - POST
+      - --header
+      - "Content-Type: application/json"
+      - --data
+      - >-
+        {{
+          {
+            'email': infrastructure_services_dokploy_bootstrap.email,
+            'password': infrastructure_services_dokploy_bootstrap.password,
+            'name': infrastructure_services_dokploy_bootstrap.name,
+            'lastName': infrastructure_services_dokploy_bootstrap.last_name
+          }
+          | to_json
+        }}
+      - "{{ infrastructure_services_dokploy_internal_endpoint }}/api/auth/sign-up/email"
+  register: infrastructure_services_dokploy_signup
+  changed_when: true
+  when: infrastructure_services_dokploy_onboarding_required
+
+
+- name: Parse initial Dokploy signup response
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_signup_response: >-
+      {{
+        infrastructure_services_dokploy_signup.stdout
+        | from_json
+      }}
+  when: infrastructure_services_dokploy_onboarding_required
+  no_log: true
+
+
+- name: Validate initial Dokploy owner bootstrap response
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_dokploy_signup_response is mapping
+      - infrastructure_services_dokploy_signup_response.get('token', '') | length > 0
+
+      - infrastructure_services_dokploy_signup_response.get('user', {}) is mapping
+
+      - >-
+        infrastructure_services_dokploy_signup_response
+        .get('user', {})
+        .get('email', '')
+        ==
+        infrastructure_services_dokploy_bootstrap.email
+
+      - >-
+        infrastructure_services_dokploy_signup_response
+        .get('user', {})
+        .get('id', '')
+        | length > 0
+
+    fail_msg: >-
+      Dokploy signup succeeded at the HTTP layer but returned an unexpected
+      bootstrap response.
+  when: infrastructure_services_dokploy_onboarding_required
+  no_log: true
+
+
+# ---------------------------------------------------------------------------
+# Re-probe after signup
+# ---------------------------------------------------------------------------
+
+- name: Reinspect Dokploy onboarding state after bootstrap
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ foundry_platform_resolved.traefik.ingress_network }}"
+      - curlimages/curl:8.15.0
+      - --silent
+      - --output
+      - /dev/null
+      - --write-out
+      - "%{http_code} %{redirect_url}"
+      - "{{ infrastructure_services_dokploy_internal_endpoint }}/register"
+  register: infrastructure_services_dokploy_onboarding_probe_after
+  changed_when: false
+  when: infrastructure_services_dokploy_onboarding_required
+
+
+- name: Require Dokploy onboarding to be completed
+  ansible.builtin.assert:
+    that:
+      - >-
+        infrastructure_services_dokploy_onboarding_probe_after.stdout
+        is match('^(301|302|307|308)( |$)')
+    fail_msg: >-
+      Foundry created the initial Dokploy user, but Dokploy still reports the
+      registration flow as available.
+  when: infrastructure_services_dokploy_onboarding_required
+
+
+# ---------------------------------------------------------------------------
+# Resolve bootstrap output
+# ---------------------------------------------------------------------------
+
+- name: Record Dokploy bootstrap state
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_bootstrap_completed: true
+
+    infrastructure_services_dokploy_bootstrap_token: >-
+      {{
+        infrastructure_services_dokploy_signup_response.get('token', '')
+        if infrastructure_services_dokploy_onboarding_required
+        else ''
+      }}
+
+    infrastructure_services_dokploy_bootstrap_user_id: >-
+      {{
+        infrastructure_services_dokploy_signup_response
+        .get('user', {})
+        .get('id', '')
+        if infrastructure_services_dokploy_onboarding_required
+        else ''
+      }}
+  no_log: true
+
+
+# ---------------------------------------------------------------------------
+# Resolve a persistent Dokploy API key
+# ---------------------------------------------------------------------------
+
+- name: Resolve Dokploy API key state path
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_api_key_file: >-
+      {{ infrastructure_services_secret_directory }}/{{ project.name }}/dokploy/api-key-{{ foundry_platform_resolved.dokploy.secret_version }}
+  no_log: true
+
+- name: Inspect Dokploy API key state
+  ansible.builtin.stat:
+    path: "{{ infrastructure_services_dokploy_api_key_file }}"
+    follow: false
+  register: infrastructure_services_dokploy_api_key_file_check
+  no_log: true
+
+- name: Refuse unsafe existing Dokploy API key state
+  ansible.builtin.assert:
+    that:
+      - not infrastructure_services_dokploy_api_key_file_check.stat.islnk | default(false)
+      - >-
+        not infrastructure_services_dokploy_api_key_file_check.stat.exists
+        or infrastructure_services_dokploy_api_key_file_check.stat.isreg
+      - >-
+        not infrastructure_services_dokploy_api_key_file_check.stat.exists
+        or infrastructure_services_dokploy_api_key_file_check.stat.pw_name == 'root'
+      - >-
+        not infrastructure_services_dokploy_api_key_file_check.stat.exists
+        or infrastructure_services_dokploy_api_key_file_check.stat.mode == '0600'
+    fail_msg: >-
+      Existing Dokploy API key state is unsafe; refusing to read or overwrite it.
+  no_log: true
+
+- name: Read existing Dokploy API key
+  ansible.builtin.slurp:
+    path: "{{ infrastructure_services_dokploy_api_key_file }}"
+  register: infrastructure_services_dokploy_existing_api_key_raw
+  when: infrastructure_services_dokploy_api_key_file_check.stat.exists
+  no_log: true
+
+- name: Resolve existing Dokploy API key
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_api_key: >-
+      {{
+        infrastructure_services_dokploy_existing_api_key_raw.content
+        | default('')
+        | b64decode
+        | trim
+      }}
+  when: infrastructure_services_dokploy_api_key_file_check.stat.exists
+  no_log: true
+
+- name: Validate existing Dokploy API key
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ foundry_platform_resolved.traefik.ingress_network }}"
+      - curlimages/curl:8.15.0
+      - --silent
+      - --output
+      - /dev/null
+      - --write-out
+      - "%{http_code}"
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - "{{ infrastructure_services_dokploy_internal_endpoint }}/api/project.all"
+  register: infrastructure_services_dokploy_existing_api_key_probe
+  changed_when: false
+  failed_when: false
+  when:
+    - infrastructure_services_dokploy_api_key_file_check.stat.exists
+    - infrastructure_services_dokploy_api_key | default('') | length > 0
+  no_log: true
+
+- name: Validate Dokploy API key probe result
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_dokploy_existing_api_key_probe.rc == 0
+      - infrastructure_services_dokploy_existing_api_key_probe.stdout in ['200', '401', '403']
+    fail_msg: >-
+      Dokploy API key validation could not distinguish an invalid key from an
+      unavailable Dokploy API. Refusing automatic key replacement.
+  when: infrastructure_services_dokploy_api_key_file_check.stat.exists
+  no_log: true
+
+- name: Decide whether Dokploy API key generation is required
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_api_key_needs_generation: >-
+      {{
+        not infrastructure_services_dokploy_api_key_file_check.stat.exists
+        or infrastructure_services_dokploy_existing_api_key_probe.stdout in ['401', '403']
+      }}
+  no_log: true
+
+- name: Generate Dokploy API key through authenticated owner session
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ foundry_platform_resolved.traefik.ingress_network }}"
+      - --entrypoint
+      - /bin/sh
+      - --env
+      - >-
+        DOKPLOY_LOGIN_BODY={{
+          {
+            'email': infrastructure_services_dokploy_bootstrap.email,
+            'password': infrastructure_services_dokploy_bootstrap.password,
+            'rememberMe': true
+          }
+          | to_json
+        }}
+      - --env
+      - DOKPLOY_API_URL={{ infrastructure_services_dokploy_internal_endpoint }}
+      - --env
+      - DOKPLOY_KEY_NAME=foundry-infrastructure
+      - curlimages/curl:8.15.0
+      - -ec
+      - |
+        cookies="$(mktemp)"
+        trap 'rm -f "$cookies"' EXIT
+
+        curl --fail-with-body --silent --show-error \
+          --request POST \
+          --header 'Content-Type: application/json' \
+          --cookie-jar "$cookies" \
+          --data-raw "$DOKPLOY_LOGIN_BODY" \
+          "$DOKPLOY_API_URL/api/auth/sign-in/email" \
+          >/dev/null
+
+        session_response="$(curl --fail-with-body --silent --show-error \
+          --cookie "$cookies" \
+          "$DOKPLOY_API_URL/api/user.session")"
+
+        organization_id="$(printf '%s' "$session_response" | sed -nE \
+          's/.*"activeOrganizationId"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')"
+
+        if [ -z "$organization_id" ]; then
+          echo 'Dokploy owner session did not expose an active organization.' >&2
+          exit 1
+        fi
+
+        api_key_body="$(printf \
+          '{"name":"%s","metadata":{"organizationId":"%s"},"rateLimitEnabled":false}' \
+          "$DOKPLOY_KEY_NAME" "$organization_id")"
+
+        curl --fail-with-body --silent --show-error \
+          --request POST \
+          --header 'Content-Type: application/json' \
+          --cookie "$cookies" \
+          --data-raw "$api_key_body" \
+          "$DOKPLOY_API_URL/api/user.createApiKey"
+  register: infrastructure_services_dokploy_generated_api_key_response
+  when: infrastructure_services_dokploy_api_key_needs_generation
+  changed_when: true
+  no_log: true
+
+- name: Parse generated Dokploy API key
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_api_key: >-
+      {{
+        (
+          infrastructure_services_dokploy_generated_api_key_response.stdout
+          | from_json
+        ).get('key', '')
+      }}
+  when: infrastructure_services_dokploy_api_key_needs_generation
+  no_log: true
+
+- name: Require generated Dokploy API key
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_dokploy_api_key | default('') | length > 0
+    fail_msg: >-
+      Dokploy authenticated successfully, but no API key was returned.
+  no_log: true
+
+- name: Persist generated Dokploy API key
+  ansible.builtin.copy:
+    dest: "{{ infrastructure_services_dokploy_api_key_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+    content: "{{ infrastructure_services_dokploy_api_key }}\n"
+    force: true
+  when: infrastructure_services_dokploy_api_key_needs_generation
+  no_log: true
+
+- name: Validate persisted Dokploy API key state
+  ansible.builtin.stat:
+    path: "{{ infrastructure_services_dokploy_api_key_file }}"
+    follow: false
+  register: infrastructure_services_dokploy_api_key_final
+  no_log: true
+
+- name: Refuse unsafe persisted Dokploy API key state
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_dokploy_api_key_final.stat.isreg
+      - not infrastructure_services_dokploy_api_key_final.stat.islnk
+      - infrastructure_services_dokploy_api_key_final.stat.pw_name == 'root'
+      - infrastructure_services_dokploy_api_key_final.stat.mode == '0600'
+    fail_msg: >-
+      Dokploy API key state is missing, symlinked, or has unsafe permissions.
+  no_log: true
+
+
+- name: Report Dokploy bootstrap state
+  ansible.builtin.debug:
+    msg: >-
+      Dokploy initial onboarding is complete.
+      Initial owner created by this convergence={{
+        infrastructure_services_dokploy_onboarding_required
+      }}.

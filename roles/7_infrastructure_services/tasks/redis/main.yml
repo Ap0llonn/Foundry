@@ -1,15 +1,33 @@
 ---
-- name: Validate resolved Redis instances
+# Redis is owned by Dokploy. The former Docker-container reconciliation tasks
+# remain in this directory as historical references, but are not in the active
+# task graph.
+
+- name: Validate resolved Redis instances for Dokploy
   ansible.builtin.import_tasks: validate_inputs.yml
 
-- name: Discover Redis networks and owned resources
-  ansible.builtin.import_tasks: discovery.yml
+- name: Initialize Redis API contract state
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_redis_contracts: {}
+    foundry_resolved_services: "{{ foundry_resolved_services | default({}) }}"
+    infrastructure_services_backup_targets: "{{ infrastructure_services_backup_targets | default([]) }}"
 
-- name: Converge Redis containers and persistent volumes
-  ansible.builtin.import_tasks: converge.yml
+- name: Reconcile Redis services through Dokploy API
+  ansible.builtin.include_tasks:
+    file: dokploy_instance.yml
+    apply:
+      no_log: true
+  loop: "{{ infrastructure_services_redis_instances }}"
+  loop_control:
+    loop_var: redis_instance
+    label: "{{ redis_instance.environment }}"
+  no_log: true
 
-- name: Validate authenticated Redis health and isolation
-  ansible.builtin.import_tasks: validate.yml
-
-- name: Publish non-secret Redis outputs
-  ansible.builtin.import_tasks: publish.yml
+- name: Publish non-secret Dokploy Redis service contracts
+  ansible.builtin.include_tasks:
+    file: publish_instance.yml
+  loop: "{{ infrastructure_services_redis_instances }}"
+  loop_control:
+    loop_var: redis_instance
+    label: "{{ redis_instance.environment }}"
+  no_log: true

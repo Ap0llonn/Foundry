@@ -34,7 +34,7 @@
     label: "{{ networking_attachment_network.1.environment }}"
 
 - name: Validate labeled workload environment attachments
-  ansible.builtin.include_tasks: validate_attachment.yml
+  ansible.builtin.include_tasks: validate_attachments.yml
   loop: "{{ networking_foundry_attachments }}"
   loop_control:
     loop_var: networking_attachment

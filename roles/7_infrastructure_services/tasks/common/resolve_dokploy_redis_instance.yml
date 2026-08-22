@@ -1,0 +1,100 @@
+---
+- name: Validate Redis secret directory before writing
+  ansible.builtin.include_tasks: common/validate_directory_path.yml
+  vars:
+    infrastructure_services_checked_directory: >-
+      {{ infrastructure_services_secret_directory }}/{{ project.name }}/{{ infrastructure_services_instance_environment }}/redis
+
+- name: Ensure Redis secret directory exists
+  ansible.builtin.file:
+    path: "{{ infrastructure_services_secret_directory }}/{{ project.name }}/{{ infrastructure_services_instance_environment }}/redis"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+    follow: false
+
+- name: Inspect stable Redis password
+  ansible.builtin.stat:
+    path: "{{ infrastructure_services_secret_directory }}/{{ project.name }}/{{ infrastructure_services_instance_environment }}/redis/password"
+    follow: false
+  register: infrastructure_services_redis_password_check
+
+- name: Refuse unsafe existing Redis password path
+  ansible.builtin.assert:
+    that:
+      - not infrastructure_services_redis_password_check.stat.islnk | default(false)
+      - not infrastructure_services_redis_password_check.stat.exists or infrastructure_services_redis_password_check.stat.isreg
+      - not infrastructure_services_redis_password_check.stat.exists or infrastructure_services_redis_password_check.stat.pw_name == 'root'
+      - not infrastructure_services_redis_password_check.stat.exists or infrastructure_services_redis_password_check.stat.mode == '0600'
+    fail_msg: Existing Redis password path is unsafe; refusing to read or overwrite it.
+  no_log: true
+
+- name: Generate missing Redis password
+  ansible.builtin.command:
+    argv: [openssl, rand, -base64, "36"]
+  register: infrastructure_services_redis_generated_password
+  changed_when: true
+  when:
+    - not infrastructure_services_redis_password_check.stat.exists
+    - foundry_services_resolved.redis.credentials.get(infrastructure_services_instance_environment, {}).get('password', '') | length == 0
+  no_log: true
+
+- name: Read existing Redis password before accepting an override
+  ansible.builtin.slurp:
+    path: "{{ infrastructure_services_secret_directory }}/{{ project.name }}/{{ infrastructure_services_instance_environment }}/redis/password"
+  register: infrastructure_services_redis_existing_password_raw
+  when:
+    - infrastructure_services_redis_password_check.stat.exists
+    - foundry_services_resolved.redis.credentials.get(infrastructure_services_instance_environment, {}).get('password', '') | length > 0
+  no_log: true
+
+- name: Refuse implicit Redis credential rotation
+  ansible.builtin.assert:
+    that:
+      - >-
+        infrastructure_services_redis_existing_password_raw.content | b64decode | trim
+        == foundry_services_resolved.redis.credentials[infrastructure_services_instance_environment].password
+    fail_msg: Redis password rotation requires an explicit coordinated rotation workflow.
+  when:
+    - infrastructure_services_redis_password_check.stat.exists
+    - foundry_services_resolved.redis.credentials.get(infrastructure_services_instance_environment, {}).get('password', '') | length > 0
+  no_log: true
+
+- name: Install Redis password from Vault or first-run generation
+  ansible.builtin.copy:
+    dest: "{{ infrastructure_services_secret_directory }}/{{ project.name }}/{{ infrastructure_services_instance_environment }}/redis/password"
+    owner: root
+    group: root
+    mode: "0600"
+    content: >-
+      {{
+        foundry_services_resolved.redis.credentials.get(infrastructure_services_instance_environment, {}).get('password')
+        if foundry_services_resolved.redis.credentials.get(infrastructure_services_instance_environment, {}).get('password', '') | length > 0
+        else infrastructure_services_redis_generated_password.stdout + '\n'
+      }}
+    force: false
+  when: not infrastructure_services_redis_password_check.stat.exists
+  no_log: true
+
+- name: Read stable Redis password
+  ansible.builtin.slurp:
+    path: "{{ infrastructure_services_secret_directory }}/{{ project.name }}/{{ infrastructure_services_instance_environment }}/redis/password"
+  register: infrastructure_services_redis_password_raw
+  no_log: true
+
+- name: Append resolved Dokploy Redis instance
+  ansible.builtin.set_fact:
+    infrastructure_services_redis_instances: >-
+      {{ infrastructure_services_redis_instances + [{
+        'environment': infrastructure_services_instance_environment,
+        'service_name': 'foundry-' + infrastructure_services_instance_environment + '-redis',
+        'image': foundry_services_resolved.redis.image,
+        'password': infrastructure_services_redis_password_raw.content | b64decode | trim,
+        'password_file': infrastructure_services_secret_directory + '/' + project.name + '/' + infrastructure_services_instance_environment + '/redis/password',
+        'persistence': foundry_services_resolved.redis.persistence,
+        'maxmemory': foundry_services_resolved.redis.maxmemory | default('', true),
+        'maxmemory_policy': foundry_services_resolved.redis.maxmemory_policy,
+        'resources': foundry_services_resolved.redis.resources
+      }] }}
+  no_log: true

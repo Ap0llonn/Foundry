@@ -1,6 +1,0 @@
----
-- name: Validate attached containers
-  ansible.builtin.include_tasks: validate_attachment.yml
-  loop: "{{ networking_real_attachments }}"
-  loop_control:
-    loop_var: networking_attachment

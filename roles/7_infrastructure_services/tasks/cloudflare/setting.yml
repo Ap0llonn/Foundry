@@ -1,0 +1,50 @@
+---
+- name: Read Cloudflare zone security setting
+  ansible.builtin.uri:
+    url: >-
+      {{ infrastructure_services_cloudflare_api_url }}/zones/{{ infrastructure_services_cloudflare_zone_id }}/settings/{{ infrastructure_services_cloudflare_zone_setting.id }}
+    method: GET
+    headers:
+      Authorization: "Bearer {{ foundry_domains_resolved.cloudflare.api_token }}"
+      Content-Type: application/json
+    return_content: true
+    status_code: 200
+    validate_certs: true
+  delegate_to: localhost
+  become: false
+  register: infrastructure_services_cloudflare_zone_setting_response
+  changed_when: false
+  no_log: true
+
+- name: Require Cloudflare zone security setting
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_cloudflare_zone_setting_response.json.success | default(false)
+      - infrastructure_services_cloudflare_zone_setting_response.json.result is mapping
+    fail_msg: >-
+      Cloudflare could not read zone setting
+      {{ infrastructure_services_cloudflare_zone_setting.id }}.
+  no_log: true
+
+- name: Update drifted Cloudflare zone security setting
+  ansible.builtin.uri:
+    url: >-
+      {{ infrastructure_services_cloudflare_api_url }}/zones/{{ infrastructure_services_cloudflare_zone_id }}/settings/{{ infrastructure_services_cloudflare_zone_setting.id }}
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ foundry_domains_resolved.cloudflare.api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      value: "{{ infrastructure_services_cloudflare_zone_setting.value }}"
+    return_content: true
+    status_code: 200
+    validate_certs: true
+  delegate_to: localhost
+  become: false
+  register: infrastructure_services_cloudflare_zone_setting_update
+  changed_when: true
+  when: >-
+    infrastructure_services_cloudflare_zone_setting_response.json.result.value | string
+    != infrastructure_services_cloudflare_zone_setting.value | string
+  no_log: true

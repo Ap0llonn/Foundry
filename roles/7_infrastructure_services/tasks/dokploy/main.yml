@@ -206,13 +206,22 @@
   ansible.builtin.set_fact:
     infrastructure_services_dokploy_host_rule: >-
       {{
-        infrastructure_services_dokploy_hosts | map('regex_replace', '^(.*)$', 'Host(`\\1`)') | join(' || ')
+        infrastructure_services_dokploy_hosts
+        | map('regex_replace', '^', 'Host(`')
+        | map('regex_replace', '$', '`)')
+        | join(' || ')
         if infrastructure_services_domain_enabled else 'PathPrefix(`/`)'
       }}
     infrastructure_services_dokploy_entrypoint: >-
       {{ 'web' if infrastructure_services_domain_enabled else 'management' }}
     infrastructure_services_dokploy_allowlist: >-
-      {{ (management | default({})).get('allowed_cidrs', []) | join(',') }}
+      {{
+        (
+          infrastructure_services_cloudflare_origin_cidrs
+          if infrastructure_services_cloudflare_proxy_enabled
+          else (management | default({})).get('allowed_cidrs', [])
+        ) | join(',')
+      }}
     infrastructure_services_dokploy_postgres_config_hash: >-
       {{ {
         'image': foundry_platform_resolved.dokploy.postgres_image,
@@ -227,11 +236,18 @@
         'secrets': infrastructure_services_dokploy_secrets | map(attribute='name') | list,
         'domain_enabled': infrastructure_services_domain_enabled,
         'host_rule': (
-          infrastructure_services_dokploy_hosts | map('regex_replace', '^(.*)$', 'Host(`\\1`)') | join(' || ')
+          infrastructure_services_dokploy_hosts
+          | map('regex_replace', '^', 'Host(`')
+          | map('regex_replace', '$', '`)')
+          | join(' || ')
           if infrastructure_services_domain_enabled else 'PathPrefix(`/`)'
         ),
         'entrypoint': ('web' if infrastructure_services_domain_enabled else 'management'),
-        'allowlist': (management | default({})).get('allowed_cidrs', []) | sort,
+        'allowlist': (
+          infrastructure_services_cloudflare_origin_cidrs
+          if infrastructure_services_cloudflare_proxy_enabled
+          else (management | default({})).get('allowed_cidrs', [])
+        ) | sort,
         'tls': foundry_platform_resolved.traefik.tls.enabled
       } | to_json | hash('sha256') }}
 

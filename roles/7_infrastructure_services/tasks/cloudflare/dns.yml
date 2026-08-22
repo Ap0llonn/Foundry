@@ -1,0 +1,28 @@
+---
+- name: Resolve Foundry Cloudflare DNS record declarations
+  ansible.builtin.set_fact:
+    infrastructure_services_cloudflare_dns_records: >-
+      {{
+        ([{
+          'name': '*.' + foundry_domains_resolved.base,
+          'type': 'A',
+          'content': vm_ip,
+          'ttl': foundry_domains_resolved.cloudflare.ttl | int,
+          'proxied': foundry_domains_resolved.cloudflare.proxied
+        }])
+        + ([{
+          'name': foundry_domains_resolved.base,
+          'type': 'A',
+          'content': vm_ip,
+          'ttl': foundry_domains_resolved.cloudflare.ttl | int,
+          'proxied': foundry_domains_resolved.cloudflare.proxied
+        }] if foundry_domains_resolved.cloudflare.apex_record else [])
+      }}
+  when: foundry_domains_resolved.cloudflare.wildcard or foundry_domains_resolved.cloudflare.apex_record
+
+- name: Reconcile each Foundry Cloudflare DNS record
+  ansible.builtin.include_tasks: dns_record.yml
+  loop: "{{ infrastructure_services_cloudflare_dns_records | default([]) }}"
+  loop_control:
+    loop_var: infrastructure_services_cloudflare_dns_record
+    label: "{{ infrastructure_services_cloudflare_dns_record.name }}"

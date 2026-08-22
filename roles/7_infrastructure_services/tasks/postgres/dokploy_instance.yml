@@ -1,0 +1,348 @@
+---
+- name: Resolve Foundry ownership marker for Dokploy PostgreSQL
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_postgres_description: >-
+      Foundry PostgreSQL ({{ postgres_instance.environment }})
+
+- name: Require healthy Dokploy API context for PostgreSQL
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_dokploy_api_key | default('') | length > 0
+      - infrastructure_services_dokploy_api_url | default('') | length > 0
+      - infrastructure_services_dokploy_api_network | default('') | length > 0
+      - infrastructure_services_dokploy_environment_map[postgres_instance.environment] | default('') | length > 0
+    fail_msg: >-
+      Dokploy PostgreSQL requires the dynamically generated API key and the
+      resolved Dokploy environment identifier.
+
+- name: Read matching Dokploy PostgreSQL services
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - >-
+        {{ infrastructure_services_dokploy_api_url }}/api/postgres.search?name={{ postgres_instance.service_name }}&environmentId={{ infrastructure_services_dokploy_environment_map[postgres_instance.environment] }}&limit=100
+  register: infrastructure_services_dokploy_postgres_search_raw
+  changed_when: false
+
+- name: Parse matching Dokploy PostgreSQL services
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_postgres_search_response: >-
+      {{ infrastructure_services_dokploy_postgres_search_raw.stdout | from_json }}
+
+- name: Resolve matching Dokploy PostgreSQL service items
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_postgres_search: >-
+      {{
+        infrastructure_services_dokploy_postgres_search_response.get('items', [])
+        if infrastructure_services_dokploy_postgres_search_response is mapping
+        else []
+      }}
+
+- name: Require a list response from Dokploy PostgreSQL search
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_dokploy_postgres_search_response is mapping
+      - infrastructure_services_dokploy_postgres_search_response.get('items', []) is sequence
+      - infrastructure_services_dokploy_postgres_search_response.get('items', []) is not string
+    fail_msg: Dokploy returned an unexpected PostgreSQL search response.
+
+- name: Keep only the exact Dokploy PostgreSQL resource identity
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_postgres_search: >-
+      {{
+        infrastructure_services_dokploy_postgres_search
+        | selectattr('name', 'equalto', postgres_instance.service_name)
+        | selectattr('environmentId', 'equalto', infrastructure_services_dokploy_environment_map[postgres_instance.environment])
+        | list
+      }}
+
+- name: Require a list response from Dokploy PostgreSQL search
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_dokploy_postgres_search is sequence
+      - infrastructure_services_dokploy_postgres_search is not string
+    fail_msg: Dokploy returned an unexpected PostgreSQL search response.
+
+- name: Reject ambiguous Dokploy PostgreSQL ownership
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_dokploy_postgres_search | length <= 1
+    fail_msg: >-
+      More than one Dokploy PostgreSQL service matches
+      '{{ postgres_instance.service_name }}' in environment
+      '{{ postgres_instance.environment }}'; refusing ambiguous ownership.
+
+- name: Create missing Dokploy PostgreSQL service
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --request
+      - POST
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - --header
+      - "Content-Type: application/json"
+      - --data
+      - >-
+        {{ {
+          'name': postgres_instance.service_name,
+          'appName': postgres_instance.service_name,
+          'databaseName': postgres_instance.database,
+          'databaseUser': postgres_instance.user,
+          'databasePassword': postgres_instance.password,
+          'dockerImage': postgres_instance.image,
+          'environmentId': infrastructure_services_dokploy_environment_map[postgres_instance.environment],
+          'description': infrastructure_services_dokploy_postgres_description
+        } | to_json }}
+      - "{{ infrastructure_services_dokploy_api_url }}/api/postgres.create"
+  register: infrastructure_services_dokploy_postgres_create
+  when: infrastructure_services_dokploy_postgres_search | length == 0
+  changed_when: true
+
+- name: Re-read Dokploy PostgreSQL service after creation
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - >-
+        {{ infrastructure_services_dokploy_api_url }}/api/postgres.search?name={{ postgres_instance.service_name }}&environmentId={{ infrastructure_services_dokploy_environment_map[postgres_instance.environment] }}&limit=100
+  register: infrastructure_services_dokploy_postgres_search_after_raw
+  changed_when: false
+
+- name: Parse Dokploy PostgreSQL search after reconciliation
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_postgres_search_after_response: >-
+      {{ infrastructure_services_dokploy_postgres_search_after_raw.stdout | from_json }}
+
+- name: Resolve Dokploy PostgreSQL service items after reconciliation
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_postgres_search_after: >-
+      {{
+        infrastructure_services_dokploy_postgres_search_after_response.get('items', [])
+        if infrastructure_services_dokploy_postgres_search_after_response is mapping
+        else []
+      }}
+
+- name: Require a valid Dokploy PostgreSQL search response after reconciliation
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_dokploy_postgres_search_after_response is mapping
+      - infrastructure_services_dokploy_postgres_search_after_response.get('items', []) is sequence
+      - infrastructure_services_dokploy_postgres_search_after_response.get('items', []) is not string
+    fail_msg: Dokploy returned an unexpected PostgreSQL search response after creation.
+
+- name: Keep only the exact Dokploy PostgreSQL identity after reconciliation
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_postgres_search_after: >-
+      {{
+        infrastructure_services_dokploy_postgres_search_after
+        | selectattr('name', 'equalto', postgres_instance.service_name)
+        | selectattr('environmentId', 'equalto', infrastructure_services_dokploy_environment_map[postgres_instance.environment])
+        | list
+      }}
+
+- name: Require the created Dokploy PostgreSQL service
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_dokploy_postgres_search_after is sequence
+      - infrastructure_services_dokploy_postgres_search_after is not string
+      - infrastructure_services_dokploy_postgres_search_after | length == 1
+    fail_msg: >-
+      Dokploy PostgreSQL '{{ postgres_instance.service_name }}' could not be
+      resolved uniquely after reconciliation.
+
+- name: Resolve Dokploy PostgreSQL service identity
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_postgres_service: >-
+      {{ infrastructure_services_dokploy_postgres_search_after | first }}
+
+- name: Resolve Dokploy PostgreSQL identifier
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_postgres_id: >-
+      {{ infrastructure_services_dokploy_postgres_service.get('postgresId', infrastructure_services_dokploy_postgres_service.get('id', '')) }}
+
+- name: Require resolved Dokploy PostgreSQL identity
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_dokploy_postgres_id | string | length > 0
+    fail_msg: >-
+      Dokploy PostgreSQL '{{ postgres_instance.service_name }}' exists but its
+      identifier could not be resolved.
+
+- name: Read Dokploy PostgreSQL service details
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - >-
+        {{ infrastructure_services_dokploy_api_url }}/api/postgres.one?postgresId={{ infrastructure_services_dokploy_postgres_id }}
+  register: infrastructure_services_dokploy_postgres_details_raw
+  changed_when: false
+
+- name: Parse Dokploy PostgreSQL service details
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_postgres_details: >-
+      {{ infrastructure_services_dokploy_postgres_details_raw.stdout | from_json }}
+
+- name: Refuse to adopt an unowned Dokploy PostgreSQL service
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_dokploy_postgres_details.get('environmentId', '') == infrastructure_services_dokploy_environment_map[postgres_instance.environment]
+      - infrastructure_services_dokploy_postgres_details.get('description', '') == infrastructure_services_dokploy_postgres_description
+    fail_msg: >-
+      Dokploy PostgreSQL '{{ postgres_instance.service_name }}' exists but is
+      not marked as owned by Foundry for this project and environment.
+
+- name: Detect Dokploy PostgreSQL configuration drift
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_postgres_needs_update: >-
+      {{
+        infrastructure_services_dokploy_postgres_details.get('name', '') != postgres_instance.service_name
+        or infrastructure_services_dokploy_postgres_details.get('databaseName', '') != postgres_instance.database
+        or infrastructure_services_dokploy_postgres_details.get('databaseUser', '') != postgres_instance.user
+        or infrastructure_services_dokploy_postgres_details.get('dockerImage', '') != postgres_instance.image
+        or (infrastructure_services_dokploy_postgres_details.get('memoryLimit', '') | default('', true) | string) != (postgres_instance.resources.memory | string)
+        or (infrastructure_services_dokploy_postgres_details.get('cpuLimit', '') | default('', true) | string) != (postgres_instance.resources.cpus | string)
+      }}
+
+- name: Update drifted Dokploy PostgreSQL service
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --request
+      - POST
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - --header
+      - "Content-Type: application/json"
+      - --data
+      - >-
+        {{ {
+          'postgresId': infrastructure_services_dokploy_postgres_id,
+          'name': postgres_instance.service_name,
+          'databaseName': postgres_instance.database,
+          'databaseUser': postgres_instance.user,
+          'databasePassword': postgres_instance.password,
+          'dockerImage': postgres_instance.image,
+          'description': infrastructure_services_dokploy_postgres_description,
+          'memoryLimit': (postgres_instance.resources.memory if postgres_instance.resources.memory | length > 0 else none),
+          'cpuLimit': (postgres_instance.resources.cpus if postgres_instance.resources.cpus | length > 0 else none)
+        } | to_json }}
+      - "{{ infrastructure_services_dokploy_api_url }}/api/postgres.update"
+  register: infrastructure_services_dokploy_postgres_update
+  when: infrastructure_services_dokploy_postgres_needs_update
+  changed_when: true
+
+- name: Deploy newly created or changed Dokploy PostgreSQL service
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --request
+      - POST
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - --header
+      - "Content-Type: application/json"
+      - --data
+      - "{{ {'postgresId': infrastructure_services_dokploy_postgres_id} | to_json }}"
+      - "{{ infrastructure_services_dokploy_api_url }}/api/postgres.deploy"
+  register: infrastructure_services_dokploy_postgres_deploy
+  when: >-
+    infrastructure_services_dokploy_postgres_create is changed
+    or infrastructure_services_dokploy_postgres_needs_update
+    or infrastructure_services_dokploy_postgres_details.get('applicationStatus', 'idle') not in ['running', 'done']
+  changed_when: true
+
+- name: Wait for Dokploy PostgreSQL service to leave an error state
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - >-
+        {{ infrastructure_services_dokploy_api_url }}/api/postgres.one?postgresId={{ infrastructure_services_dokploy_postgres_id }}
+  register: infrastructure_services_dokploy_postgres_final
+  changed_when: false
+  retries: 30
+  delay: 2
+  until:
+    - (infrastructure_services_dokploy_postgres_final.stdout | from_json).get('applicationStatus', '') in ['running', 'done']
+
+- name: Parse final Dokploy PostgreSQL service details
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_postgres_final_details: >-
+      {{ infrastructure_services_dokploy_postgres_final.stdout | from_json }}
+
+- name: Store resolved Dokploy PostgreSQL service contract
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_postgres_contracts: >-
+      {{
+        infrastructure_services_dokploy_postgres_contracts | default({})
+        | combine({
+            postgres_instance.environment: {
+              'postgres_id': infrastructure_services_dokploy_postgres_id,
+              'service_name': infrastructure_services_dokploy_postgres_final_details.get('appName', postgres_instance.service_name),
+              'environment_id': infrastructure_services_dokploy_environment_map[postgres_instance.environment]
+            }
+          })
+      }}

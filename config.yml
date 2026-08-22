@@ -10,9 +10,9 @@ project:
 
 environments:
   - name: dev
-  - name: prod
+  - name: production
     # network:
-    #   name: custom-prod-network
+    #   name: custom-production-network
 
 networking:
   # report: preserve and report stale owned networks
@@ -27,11 +27,38 @@ networking:
 # hyphen: dev-api.example.com (works with a normal *.example.com wildcard)
 # nested: dev.api.example.com (requires deeper DNS/certificate coverage)
 domains:
-  base: ""
+  base: "samuelcourchesne.com"
   environment_style: hyphen
   dokploy_label: dokploy
   service_names:
     - api
+  # Optional Cloudflare DNS and edge-security automation. It stays disabled
+  # until a real base domain and an API token are supplied.
+  cloudflare:
+    enabled: true
+    zone: "samuelcourchesne.com"
+    # Prefer an Ansible Vault value or pass cloudflare_api_token as an
+    # encrypted/secure extra variable; it is never copied to the VM.
+    api_token: "cfat_Y5oyYAi7RPZHzCJvCj4LFU6j4bOkpdI9tEttFYs05343ff4e"
+    # Proxied DNS is required when the security profile is enabled.
+    proxied: true
+    wildcard: true
+    apex_record: false
+    # TTL 1 is Cloudflare's automatic TTL and is required for proxied records.
+    ttl: 1
+    security:
+      enabled: true
+      ssl_mode: strict
+      always_use_https: true
+      min_tls_version: "1.2"
+      tls_1_3: true
+      managed_waf: true
+      rate_limit:
+        enabled: true
+        requests_per_period: 20
+        period: 10
+        mitigation_timeout: 10
+        action: block
 
 # Runtime owns Docker installation and host-level daemon policy. This executes
 # after Security and before Networking. Temporarily set the migration approval
@@ -137,7 +164,7 @@ management:
   allowed_cidrs:
     # Current public IP of the administrator workstation. Update this /32 when
     # changing Internet connection, or replace it with the trusted VPN CIDR.
-    - 74.15.115.174/32
+    - 173.177.149.212/32
 
 security:
   ssh:
@@ -197,18 +224,22 @@ services:
   postgres:
     enabled: true
     environments:
-      - prod
+      - dev
+      - production
     major: 17
-    credentials: {}
+    credentials:
+      dev:
+        password: "DevPassword123456789"
+      production:
+        password: "K8vP2mN7xQ4rT9zL6aBcW3"
     resources:
       memory: ""
       cpus: ""
-
   redis:
     enabled: true
     environments:
-      - prod
-    version: "8.2"
+      - dev
+      - production
     credentials: {}
     persistence: true
     maxmemory: ""
@@ -216,17 +247,6 @@ services:
     resources:
       memory: ""
       cpus: ""
-
-  object_storage:
-    enabled: false
-    provider: minio
-    environments: []
-    # MinIO has no maintained safe default image in Foundry. Supply an approved
-    # immutable image digest when enabling this service.
-    image: ""
-    credentials: {}
-    # Optional external storage root. Only /srv/foundry/... is accepted.
-    data_root: ""
 
 # Dokploy requires a narrowly owned single-manager Swarm. Enabling Dokploy
 # automatically enables that dependency and the one Dokploy-compatible Traefik.
@@ -243,14 +263,19 @@ platform:
     http_port: 80
     https_port: 443
     tls:
-      enabled: false
-      email: ""
+      enabled: true
+      email: samuelcourchesne2004@gmail.com
 
   dokploy:
     enabled: true
     management_port: 3000
     credentials: {}
     secret_version: v1
+    bootstrap:
+      email: samuelcourchesne2004@gmail.com
+      password: "12345678"
+      name: Samuel
+      last_name: Courchesne
 
 # Legacy compatibility for the earlier MinIO-only interface. Do not enable it
 # together with services.object_storage.

@@ -1,0 +1,77 @@
+---
+- name: Read existing Cloudflare DNS record
+  ansible.builtin.uri:
+    url: >-
+      {{ infrastructure_services_cloudflare_api_url }}/zones/{{ infrastructure_services_cloudflare_zone_id }}/dns_records?type={{ infrastructure_services_cloudflare_dns_record.type }}&name={{ infrastructure_services_cloudflare_dns_record.name | urlencode }}
+    method: GET
+    headers:
+      Authorization: "Bearer {{ foundry_domains_resolved.cloudflare.api_token }}"
+      Content-Type: application/json
+    return_content: true
+    status_code: 200
+    validate_certs: true
+  delegate_to: localhost
+  become: false
+  register: infrastructure_services_cloudflare_dns_record_response
+  changed_when: false
+  no_log: true
+
+- name: Require zero or one matching Cloudflare DNS record
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_cloudflare_dns_record_response.json.success | default(false)
+      - infrastructure_services_cloudflare_dns_record_response.json.result | default([]) | length <= 1
+    fail_msg: >-
+      Cloudflare returned multiple {{ infrastructure_services_cloudflare_dns_record.type }}
+      records for {{ infrastructure_services_cloudflare_dns_record.name }}.
+  no_log: true
+
+- name: Resolve Cloudflare DNS record reconciliation state
+  ansible.builtin.set_fact:
+    infrastructure_services_cloudflare_existing_dns_record: >-
+      {{ infrastructure_services_cloudflare_dns_record_response.json.result | default([]) | first | default({}, true) }}
+  no_log: true
+
+- name: Create missing Cloudflare DNS record
+  ansible.builtin.uri:
+    url: "{{ infrastructure_services_cloudflare_api_url }}/zones/{{ infrastructure_services_cloudflare_zone_id }}/dns_records"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ foundry_domains_resolved.cloudflare.api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body: "{{ infrastructure_services_cloudflare_dns_record }}"
+    return_content: true
+    status_code: [200, 201]
+    validate_certs: true
+  delegate_to: localhost
+  become: false
+  register: infrastructure_services_cloudflare_dns_record_create
+  changed_when: true
+  when: infrastructure_services_cloudflare_existing_dns_record | length == 0
+  no_log: true
+
+- name: Update drifted Cloudflare DNS record
+  ansible.builtin.uri:
+    url: >-
+      {{ infrastructure_services_cloudflare_api_url }}/zones/{{ infrastructure_services_cloudflare_zone_id }}/dns_records/{{ infrastructure_services_cloudflare_existing_dns_record.id }}
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ foundry_domains_resolved.cloudflare.api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body: "{{ infrastructure_services_cloudflare_dns_record }}"
+    return_content: true
+    status_code: 200
+    validate_certs: true
+  delegate_to: localhost
+  become: false
+  register: infrastructure_services_cloudflare_dns_record_update
+  changed_when: true
+  when:
+    - infrastructure_services_cloudflare_existing_dns_record | length > 0
+    - >-
+      infrastructure_services_cloudflare_existing_dns_record.content != infrastructure_services_cloudflare_dns_record.content
+      or infrastructure_services_cloudflare_existing_dns_record.proxied != infrastructure_services_cloudflare_dns_record.proxied
+      or infrastructure_services_cloudflare_existing_dns_record.ttl | int != infrastructure_services_cloudflare_dns_record.ttl | int
+  no_log: true

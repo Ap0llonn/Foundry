@@ -63,6 +63,11 @@ platform_defaults:
     postgres_image: "postgres@sha256:11a9d238fbb48bab14599c57e41123254452b1a2d93c6c8595bce96f346bd082"
     management_port: 3000
     credentials: {}
+    bootstrap:
+      email: "admin@example.com"
+      password: "12345678"
+      name: "Samuel"
+      last_name: "Courchesne"
     secret_version: v1
 
 domains_defaults:
@@ -71,6 +76,27 @@ domains_defaults:
   dokploy_label: dokploy
   service_names:
     - api
+  cloudflare:
+    enabled: false
+    api_token: ""
+    zone: ""
+    proxied: true
+    wildcard: true
+    apex_record: false
+    ttl: 1
+    security:
+      enabled: true
+      ssl_mode: strict
+      always_use_https: true
+      min_tls_version: "1.2"
+      tls_1_3: true
+      managed_waf: true
+      rate_limit:
+        enabled: true
+        requests_per_period: 20
+        period: 10
+        mitigation_timeout: 10
+        action: block
 
 infrastructure_services_allowed_root_keys: [minio]
 infrastructure_services_allowed_minio_keys: [enabled, run_as_uid, run_as_gid, instances]
@@ -131,8 +157,37 @@ infrastructure_services_allowed_dokploy_keys:
   - postgres_image
   - management_port
   - credentials
+  - bootstrap
   - secret_version
-infrastructure_services_allowed_domain_keys: [base, environment_style, dokploy_label, service_names]
+infrastructure_services_allowed_dokploy_bootstrap_keys:
+  - email
+  - password
+  - name
+  - last_name
+infrastructure_services_allowed_domain_keys: [base, environment_style, dokploy_label, service_names, cloudflare]
+infrastructure_services_allowed_cloudflare_keys:
+  - enabled
+  - api_token
+  - zone
+  - proxied
+  - wildcard
+  - apex_record
+  - ttl
+  - security
+infrastructure_services_allowed_cloudflare_security_keys:
+  - enabled
+  - ssl_mode
+  - always_use_https
+  - min_tls_version
+  - tls_1_3
+  - managed_waf
+  - rate_limit
+infrastructure_services_allowed_cloudflare_rate_limit_keys:
+  - enabled
+  - requests_per_period
+  - period
+  - mitigation_timeout
+  - action
 infrastructure_services_allowed_domain_styles: [hyphen, nested]
 infrastructure_services_allowed_redis_policies:
   - noeviction
@@ -173,8 +228,13 @@ infrastructure_services_swarm_network_label_resource: ingress-network
 infrastructure_services_traefik_container_name: dokploy-traefik
 infrastructure_services_dokploy_service_name: dokploy
 infrastructure_services_dokploy_postgres_service_name: dokploy-postgres
+infrastructure_services_dokploy_internal_endpoint: "http://{{ infrastructure_services_dokploy_service_name }}:3000"
 infrastructure_services_health_retries: 30
 infrastructure_services_health_delay: 2
+infrastructure_services_cloudflare_api_url: https://api.cloudflare.com/client/v4
+infrastructure_services_cloudflare_management_rule_ref: foundry_dokploy_management_allowlist
+infrastructure_services_cloudflare_managed_waf_rule_ref: foundry_cloudflare_managed_waf
+infrastructure_services_cloudflare_rate_limit_rule_ref: foundry_dokploy_auth_rate_limit
 
 infrastructure_services_redis_healthcheck_command: >-
   REDISCLI_AUTH="$(awk '$1 == "requirepass" {print $2}' /usr/local/etc/redis/redis.conf)"

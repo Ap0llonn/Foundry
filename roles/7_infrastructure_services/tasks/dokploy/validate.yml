@@ -47,7 +47,7 @@
       - --fail
       - --silent
       - --show-error
-      - http://dokploy:3000/api/trpc/settings.health
+      - "{{ infrastructure_services_dokploy_internal_endpoint }}/api/trpc/settings.health"
   register: infrastructure_services_dokploy_health_probe
   changed_when: false
   retries: "{{ infrastructure_services_health_retries }}"
@@ -68,7 +68,7 @@
       - /dev/null
       - --write-out
       - "%{http_code} %{redirect_url}"
-      - http://dokploy:3000/register
+      - "{{ infrastructure_services_dokploy_internal_endpoint }}/register"
   register: infrastructure_services_dokploy_registration_probe
   changed_when: false
   failed_when: infrastructure_services_dokploy_registration_probe.rc != 0

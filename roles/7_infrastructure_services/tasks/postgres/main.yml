@@ -1,15 +1,32 @@
 ---
-- name: Validate resolved PostgreSQL instances
+# PostgreSQL is owned by Dokploy. The legacy Docker-container tasks remain in
+# this directory as historical implementation references, but are no longer
+# part of the active task graph.
+
+- name: Validate resolved PostgreSQL instances for Dokploy
   ansible.builtin.import_tasks: validate_inputs.yml
 
-- name: Discover PostgreSQL networks and owned resources
-  ansible.builtin.import_tasks: discovery.yml
+- name: Initialize PostgreSQL output accumulators
+  ansible.builtin.set_fact:
+    foundry_resolved_services: "{{ foundry_resolved_services | default({}) }}"
+    infrastructure_services_backup_targets: "{{ infrastructure_services_backup_targets | default([]) }}"
 
-- name: Converge PostgreSQL containers and volumes
-  ansible.builtin.import_tasks: converge.yml
+- name: Reconcile PostgreSQL services through Dokploy API
+  ansible.builtin.include_tasks:
+    file: dokploy_instance.yml
+    apply:
+      no_log: true
+  loop: "{{ infrastructure_services_postgres_instances }}"
+  loop_control:
+    loop_var: postgres_instance
+    label: "{{ postgres_instance.environment }}"
+  no_log: true
 
-- name: Validate PostgreSQL health and isolation
-  ansible.builtin.import_tasks: validate.yml
-
-- name: Publish non-secret PostgreSQL outputs
-  ansible.builtin.import_tasks: publish.yml
+- name: Publish non-secret Dokploy PostgreSQL service contracts
+  ansible.builtin.include_tasks:
+    file: publish_instance.yml
+  loop: "{{ infrastructure_services_postgres_instances }}"
+  loop_control:
+    loop_var: postgres_instance
+    label: "{{ postgres_instance.environment }}"
+  no_log: true

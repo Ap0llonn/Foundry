@@ -15,7 +15,7 @@ services:
 
   redis:
     enabled: true
-    environments: [dev]
+    environments: [dev, production]
     persistence: true
     maxmemory: 256m
     resources:
@@ -41,10 +41,13 @@ management:
     - 203.0.113.10/32
 ```
 
-PostgreSQL 17 and Redis 8.2 are the only data-service versions accepted for V1;
-their binaries are checked before stateful mutation. Traefik, Dokploy, and
-Dokploy's internal PostgreSQL also have digest-pinned defaults. MinIO must be supplied as an approved immutable digest;
-Foundry deliberately has no mutable or unreviewed fallback image.
+PostgreSQL 17 and Redis 8.2 are the only data-service versions accepted for V1.
+PostgreSQL databases are created and deployed through the Dokploy API inside
+their exact Foundry project/environment. Redis services are created and
+deployed through the Dokploy API in the same way. Traefik, Dokploy, and
+Dokploy's internal PostgreSQL also have digest-pinned defaults. MinIO must be
+supplied as an approved immutable digest; Foundry deliberately has no mutable
+or unreviewed fallback image.
 
 Credentials may be supplied from Ansible Vault:
 
@@ -71,9 +74,8 @@ When a value is omitted, Foundry generates it once on the VM beneath
 `/var/lib/foundry/infrastructure-services/secrets/<project>/`. Parent
 directories are root-only. Ordinary convergence reuses the same value. Secret
 values are suppressed with `no_log`, excluded from resolved outputs, and are
-not committed to configuration. PostgreSQL uses its `_FILE` interface; Redis
-reads a mounted configuration rather than exposing its password in Docker
-environment metadata.
+not committed to configuration. PostgreSQL and Redis credentials are sent only
+in protected Dokploy API requests.
 
 ## Domains and environment names
 
@@ -99,6 +101,50 @@ Dokploy -> dokploy.example.com
 `hyphen` is the default because `*.example.com` normally covers
 `dev-api.example.com`. It does not cover the deeper
 `dev.api.example.com`; nested mode needs matching DNS and certificate policy.
+
+### Optional Cloudflare DNS and edge security
+
+Foundry can create the wildcard DNS record and manage a focused Cloudflare
+security baseline entirely from the Ansible controller. The token is never
+sent to the VM or Dokploy.
+
+```yaml
+domains:
+  base: example.com
+  environment_style: hyphen
+  cloudflare:
+    enabled: true
+    zone: example.com
+    api_token: "{{ vault_cloudflare_api_token }}"
+    proxied: true
+    wildcard: true
+    apex_record: false
+    security:
+      enabled: true
+      managed_waf: true # Selects the best Cloudflare-managed WAF entitled for the zone.
+      rate_limit:
+        enabled: true
+        requests_per_period: 20
+        period: 10
+        mitigation_timeout: 10
+```
+
+The API token requires access only to that zone: DNS edit, Zone settings edit,
+and Zone WAF edit. With the security profile enabled, Foundry creates a
+proxied `*.example.com` record, enables HTTPS-only/strict TLS/TLS 1.2+, enables
+Cloudflare Managed WAF, restricts `dokploy.example.com` to
+`management.allowed_cidrs`, and rate-limits Dokploy authentication requests.
+It does not create broad application-specific WAF rules, modify e-mail DNS,
+or enable HSTS automatically.
+
+For proxied Dokploy traffic, Traefik accepts the management route only from
+Cloudflare origin CIDRs. The management CIDR decision is enforced at
+Cloudflare using the original client IP, so direct requests to the VM cannot
+bypass it. `wildcard: true` currently requires `environment_style: hyphen`;
+`*.example.com` cannot cover `dev.api.example.com`.
+
+Supply `cloudflare_api_token` through Vault, an encrypted inventory value, or
+a secure extra variable. Do not put a real API token in tracked `config.yml`.
 
 With `domains.base: ""`, Foundry does not invent a subdomain of the VM IP.
 Private services keep Docker DNS names and Dokploy resolves to

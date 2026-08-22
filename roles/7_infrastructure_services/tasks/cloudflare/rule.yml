@@ -1,0 +1,152 @@
+---
+- name: Read Cloudflare {{ infrastructure_services_cloudflare_rule_phase }} entrypoint ruleset
+  ansible.builtin.uri:
+    url: >-
+      {{ infrastructure_services_cloudflare_api_url }}/zones/{{ infrastructure_services_cloudflare_zone_id }}/rulesets/phases/{{ infrastructure_services_cloudflare_rule_phase }}/entrypoint
+    method: GET
+    headers:
+      Authorization: "Bearer {{ foundry_domains_resolved.cloudflare.api_token }}"
+      Content-Type: application/json
+    return_content: true
+    status_code: [200, 404]
+    validate_certs: true
+  delegate_to: localhost
+  become: false
+  register: infrastructure_services_cloudflare_rule_entrypoint_response
+  changed_when: false
+  no_log: true
+
+- name: Require a valid Cloudflare {{ infrastructure_services_cloudflare_rule_phase }} response
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_cloudflare_rule_entrypoint_response.status in [200, 404]
+      - >-
+        infrastructure_services_cloudflare_rule_entrypoint_response.status == 404
+        or infrastructure_services_cloudflare_rule_entrypoint_response.json.success | default(false)
+    fail_msg: >-
+      Cloudflare could not read the {{ infrastructure_services_cloudflare_rule_phase }}
+      ruleset for the configured zone.
+  no_log: true
+
+- name: Resolve Cloudflare {{ infrastructure_services_cloudflare_rule_phase }} rule state
+  ansible.builtin.set_fact:
+    infrastructure_services_cloudflare_rule_set: >-
+      {{ infrastructure_services_cloudflare_rule_entrypoint_response.json.result | default({}, true) }}
+    infrastructure_services_cloudflare_existing_rule: >-
+      {{
+        (infrastructure_services_cloudflare_rule_entrypoint_response.json.result | default({}, true)).rules | default([])
+        | selectattr('ref', 'defined')
+        | selectattr('ref', 'equalto', infrastructure_services_cloudflare_rule_declaration.ref)
+        | list | first | default({}, true)
+      }}
+  no_log: true
+
+- name: Create Cloudflare {{ infrastructure_services_cloudflare_rule_phase }} entrypoint ruleset
+  ansible.builtin.uri:
+    url: "{{ infrastructure_services_cloudflare_api_url }}/zones/{{ infrastructure_services_cloudflare_zone_id }}/rulesets"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ foundry_domains_resolved.cloudflare.api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      name: "{{ infrastructure_services_cloudflare_rule_set_name }}"
+      description: "{{ infrastructure_services_cloudflare_rule_set_description }}"
+      kind: zone
+      phase: "{{ infrastructure_services_cloudflare_rule_phase }}"
+      rules: "{{ [infrastructure_services_cloudflare_rule_declaration] }}"
+    return_content: true
+    status_code: [200, 201, 400]
+    validate_certs: true
+  delegate_to: localhost
+  become: false
+  register: infrastructure_services_cloudflare_rule_set_create
+  changed_when: true
+  when: infrastructure_services_cloudflare_rule_entrypoint_response.status == 404
+  no_log: true
+
+- name: Require Cloudflare {{ infrastructure_services_cloudflare_rule_phase }} entrypoint ruleset creation
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_cloudflare_rule_set_create.json.success | default(false)
+    fail_msg: >-
+      Cloudflare refused the {{ infrastructure_services_cloudflare_rule_phase }}
+      entrypoint ruleset: {{ infrastructure_services_cloudflare_rule_set_create.json.errors | default([]) | map(attribute='message') | join('; ') }}
+  when: infrastructure_services_cloudflare_rule_entrypoint_response.status == 404
+
+- name: Create missing Foundry Cloudflare {{ infrastructure_services_cloudflare_rule_phase }} rule
+  ansible.builtin.uri:
+    url: >-
+      {{ infrastructure_services_cloudflare_api_url }}/zones/{{ infrastructure_services_cloudflare_zone_id }}/rulesets/{{ infrastructure_services_cloudflare_rule_set.id }}/rules
+    method: POST
+    headers:
+      Authorization: "Bearer {{ foundry_domains_resolved.cloudflare.api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body: "{{ infrastructure_services_cloudflare_rule_declaration }}"
+    return_content: true
+    status_code: [200, 201]
+    validate_certs: true
+  delegate_to: localhost
+  become: false
+  register: infrastructure_services_cloudflare_rule_create
+  changed_when: true
+  when:
+    - infrastructure_services_cloudflare_rule_entrypoint_response.status == 200
+    - infrastructure_services_cloudflare_existing_rule | length == 0
+  no_log: true
+
+- name: Resolve Foundry Cloudflare {{ infrastructure_services_cloudflare_rule_phase }} rule drift
+  ansible.builtin.set_fact:
+    infrastructure_services_cloudflare_rule_drifted: >-
+      {{
+        infrastructure_services_cloudflare_existing_rule.action != infrastructure_services_cloudflare_rule_declaration.action
+        or infrastructure_services_cloudflare_existing_rule.expression != infrastructure_services_cloudflare_rule_declaration.expression
+        or infrastructure_services_cloudflare_existing_rule.description != infrastructure_services_cloudflare_rule_declaration.description
+        or (infrastructure_services_cloudflare_existing_rule.enabled | default(true))
+           != infrastructure_services_cloudflare_rule_declaration.enabled
+        or (
+          infrastructure_services_cloudflare_rule_declaration.action_parameters is defined
+          and infrastructure_services_cloudflare_existing_rule.action_parameters.id | default('')
+              != infrastructure_services_cloudflare_rule_declaration.action_parameters.id | default('')
+        )
+        or (
+          infrastructure_services_cloudflare_rule_declaration.ratelimit is defined and (
+            (infrastructure_services_cloudflare_existing_rule.ratelimit.characteristics | default([]) | sort)
+            != (infrastructure_services_cloudflare_rule_declaration.ratelimit.characteristics | default([]) | sort)
+            or infrastructure_services_cloudflare_existing_rule.ratelimit.period | default(0) | int
+               != infrastructure_services_cloudflare_rule_declaration.ratelimit.period | default(0) | int
+            or infrastructure_services_cloudflare_existing_rule.ratelimit.requests_per_period | default(0) | int
+               != infrastructure_services_cloudflare_rule_declaration.ratelimit.requests_per_period | default(0) | int
+            or infrastructure_services_cloudflare_existing_rule.ratelimit.mitigation_timeout | default(0) | int
+               != infrastructure_services_cloudflare_rule_declaration.ratelimit.mitigation_timeout | default(0) | int
+          )
+        )
+      }}
+  when:
+    - infrastructure_services_cloudflare_rule_entrypoint_response.status == 200
+    - infrastructure_services_cloudflare_existing_rule | length > 0
+  no_log: true
+
+- name: Update drifted Foundry Cloudflare {{ infrastructure_services_cloudflare_rule_phase }} rule
+  ansible.builtin.uri:
+    url: >-
+      {{ infrastructure_services_cloudflare_api_url }}/zones/{{ infrastructure_services_cloudflare_zone_id }}/rulesets/{{ infrastructure_services_cloudflare_rule_set.id }}/rules/{{ infrastructure_services_cloudflare_existing_rule.id }}
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ foundry_domains_resolved.cloudflare.api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body: "{{ infrastructure_services_cloudflare_rule_declaration }}"
+    return_content: true
+    status_code: 200
+    validate_certs: true
+  delegate_to: localhost
+  become: false
+  register: infrastructure_services_cloudflare_rule_update
+  changed_when: true
+  when:
+    - infrastructure_services_cloudflare_rule_entrypoint_response.status == 200
+    - infrastructure_services_cloudflare_existing_rule | length > 0
+    - infrastructure_services_cloudflare_rule_drifted
+  no_log: true

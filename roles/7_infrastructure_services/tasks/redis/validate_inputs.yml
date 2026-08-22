@@ -1,5 +1,5 @@
 ---
-- name: Require the resolved Redis instance list
+- name: Require the resolved Dokploy Redis instance list
   ansible.builtin.assert:
     that:
       - infrastructure_services_redis_instances is defined
@@ -11,60 +11,34 @@
     fail_msg: Redis requires a pre-resolved instance list and project.name.
   no_log: true
 
-- name: Validate each resolved Redis instance contract
+- name: Validate each resolved Dokploy Redis instance contract
   ansible.builtin.assert:
     that:
       - item is mapping
-      - item.keys() | difference(['environment', 'network_name', 'container_name', 'volume_name', 'image', 'password', 'password_file', 'configuration_file', 'configuration_hash', 'persistence', 'maxmemory', 'maxmemory_policy', 'resources']) | length == 0
+      - item.keys() | difference(['environment', 'service_name', 'image', 'password', 'password_file', 'persistence', 'maxmemory', 'maxmemory_policy', 'resources']) | length == 0
       - item.environment | default('') is match('^[a-z][a-z0-9-]{0,31}$')
-      - item.network_name | default('') is match('^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$')
-      - item.container_name | default('') == 'foundry-' + project.name + '-' + item.environment + '-redis'
-      - item.volume_name | default('') == 'foundry-' + project.name + '-' + item.environment + '-redis-data'
+      - item.service_name | default('') == 'foundry-' + item.environment + '-redis'
       - item.image | default('') is match('^.+@sha256:[a-f0-9]{64}$')
       - item.password | default('') is string
       - item.password | default('') | length >= 16
       - item.password_file | default('') is match('^/var/lib/foundry/infrastructure-services/secrets/[A-Za-z0-9._/-]+/password$')
-      - item.configuration_file | default('') is match('^/var/lib/foundry/infrastructure-services/secrets/[A-Za-z0-9._/-]+/redis.conf$')
-      - item.configuration_hash | default('') is match('^[a-f0-9]{64}$')
       - item.persistence is boolean
-      - item.maxmemory | string is match('^(0|[1-9][0-9]*(b|kb|mb|gb|k|m|g)?)$')
-      - item.maxmemory_policy in ['noeviction', 'allkeys-lru', 'allkeys-lfu', 'allkeys-random', 'volatile-lru', 'volatile-lfu', 'volatile-random', 'volatile-ttl']
+      - item.maxmemory | string is match('^$|^(0|[1-9][0-9]*[bBkKmMgG]?)$')
+      - item.maxmemory_policy in infrastructure_services_allowed_redis_policies
       - item.resources | default({}) is mapping
       - (item.resources | default({})).keys() | difference(['memory', 'cpus']) | length == 0
       - item.resources.memory | default('') | string is match('^$|^[1-9][0-9]*[bkmgBKMG]?$')
       - item.resources.cpus | default('') | string is match('^$|^[0-9]+([.][0-9]+)?$')
       - item.resources.cpus | default(1, true) | float > 0
-    fail_msg: A resolved Redis instance violates naming, image, secret, persistence, memory, or resource policy.
+    fail_msg: A resolved Dokploy Redis instance violates naming, image, secret, or resource policy.
   loop: "{{ infrastructure_services_redis_instances }}"
   no_log: true
 
-- name: Require unique Redis environments, resource names, and credentials
+- name: Require unique Redis environments, service names, and credentials
   ansible.builtin.assert:
     that:
       - infrastructure_services_redis_instances | map(attribute='environment') | unique | length == infrastructure_services_redis_instances | length
-      - infrastructure_services_redis_instances | map(attribute='container_name') | unique | length == infrastructure_services_redis_instances | length
-      - infrastructure_services_redis_instances | map(attribute='volume_name') | unique | length == infrastructure_services_redis_instances | length
+      - infrastructure_services_redis_instances | map(attribute='service_name') | unique | length == infrastructure_services_redis_instances | length
       - infrastructure_services_redis_instances | map(attribute='password') | unique | length == infrastructure_services_redis_instances | length
-    fail_msg: Redis environments, names, volumes, and credentials must be unique.
+    fail_msg: Redis environments, service names, and credentials must be unique.
   no_log: true
-
-- name: Validate Redis maxmemory against its container limit
-  ansible.builtin.include_tasks: validate_memory.yml
-  loop: "{{ infrastructure_services_redis_instances }}"
-  loop_control:
-    loop_var: redis_memory_instance
-  no_log: true
-
-- name: Verify Docker runtime for Redis
-  ansible.builtin.command:
-    argv: [docker, info]
-  register: infrastructure_services_redis_docker_info
-  changed_when: false
-  failed_when: false
-  check_mode: false
-
-- name: Require the role-6 Docker runtime
-  ansible.builtin.assert:
-    that:
-      - infrastructure_services_redis_docker_info.rc == 0
-    fail_msg: Docker is unavailable; run Runtime and Networking before Redis.

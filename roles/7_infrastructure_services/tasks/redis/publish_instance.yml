@@ -6,12 +6,13 @@
         foundry_resolved_services | combine({
           redis_instance.environment: {
             'redis': {
-              'host': 'redis',
+              'host': infrastructure_services_dokploy_redis_contracts[redis_instance.environment].service_name,
               'port': 6379,
-              'container_name': redis_instance.container_name,
-              'network_name': redis_instance.network_name,
+              'service_name': infrastructure_services_dokploy_redis_contracts[redis_instance.environment].service_name,
+              'dokploy_id': infrastructure_services_dokploy_redis_contracts[redis_instance.environment].redis_id,
+              'environment_id': infrastructure_services_dokploy_redis_contracts[redis_instance.environment].environment_id,
               'persistence': redis_instance.persistence,
-              'volume_name': (redis_instance.volume_name if redis_instance.persistence else none)
+              'managed_by': 'dokploy'
             }
           }
         }, recursive=true)
@@ -23,9 +24,9 @@
           'project': project.name,
           'environment': redis_instance.environment,
           'service': 'redis',
-          'container_name': redis_instance.container_name,
-          'volume_name': redis_instance.volume_name,
-          'mount_path': '/data'
-        }] if redis_instance.persistence else [])
+          'dokploy_id': infrastructure_services_dokploy_redis_contracts[redis_instance.environment].redis_id,
+          'service_name': infrastructure_services_dokploy_redis_contracts[redis_instance.environment].service_name,
+          'managed_by': 'dokploy'
+        }])
       }}
   no_log: true

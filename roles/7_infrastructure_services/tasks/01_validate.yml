@@ -38,7 +38,27 @@
       - ((platform | default({})).get('swarm', {})).keys() | difference(infrastructure_services_allowed_swarm_keys) | length == 0
       - ((platform | default({})).get('traefik', {})).keys() | difference(infrastructure_services_allowed_traefik_keys) | length == 0
       - ((platform | default({})).get('dokploy', {})).keys() | difference(infrastructure_services_allowed_dokploy_keys) | length == 0
+      - ((platform | default({})).get('dokploy', {}).get('bootstrap', {})) is mapping
+      - >-
+        ((platform | default({})).get('dokploy', {}).get('bootstrap', {})).keys()
+        | difference(infrastructure_services_allowed_dokploy_bootstrap_keys)
+        | length == 0
       - (domains | default({})).keys() | difference(infrastructure_services_allowed_domain_keys) | length == 0
+      - (domains | default({})).get('cloudflare', {}) is mapping
+      - >-
+        ((domains | default({})).get('cloudflare', {})).keys()
+        | difference(infrastructure_services_allowed_cloudflare_keys)
+        | length == 0
+      - ((domains | default({})).get('cloudflare', {}).get('security', {})) is mapping
+      - >-
+        ((domains | default({})).get('cloudflare', {}).get('security', {})).keys()
+        | difference(infrastructure_services_allowed_cloudflare_security_keys)
+        | length == 0
+      - ((domains | default({})).get('cloudflare', {}).get('security', {}).get('rate_limit', {})) is mapping
+      - >-
+        ((domains | default({})).get('cloudflare', {}).get('security', {}).get('rate_limit', {})).keys()
+        | difference(infrastructure_services_allowed_cloudflare_rate_limit_keys)
+        | length == 0
     fail_msg: Infrastructure Services contains an unsupported option. Consult roles/7_infrastructure_services/Doc.MD.
 
 - name: Validate environment and project contracts
@@ -189,6 +209,29 @@
       - foundry_domains_resolved.service_names | select('match', infrastructure_services_identifier_pattern) | list | length == foundry_domains_resolved.service_names | length
       - foundry_domains_resolved.dokploy_label is match(infrastructure_services_identifier_pattern)
       - foundry_domains_resolved.base | length == 0 or foundry_domains_resolved.base is match(infrastructure_services_domain_pattern)
+      - foundry_domains_resolved.cloudflare is mapping
+      - foundry_domains_resolved.cloudflare.enabled is boolean
+      - foundry_domains_resolved.cloudflare.proxied is boolean
+      - foundry_domains_resolved.cloudflare.wildcard is boolean
+      - foundry_domains_resolved.cloudflare.apex_record is boolean
+      - foundry_domains_resolved.cloudflare.api_token is string
+      - foundry_domains_resolved.cloudflare.zone is string
+      - foundry_domains_resolved.cloudflare.ttl is number
+      - foundry_domains_resolved.cloudflare.ttl | int >= 1
+      - foundry_domains_resolved.cloudflare.security is mapping
+      - foundry_domains_resolved.cloudflare.security.enabled is boolean
+      - foundry_domains_resolved.cloudflare.security.ssl_mode == 'strict'
+      - foundry_domains_resolved.cloudflare.security.always_use_https is boolean
+      - foundry_domains_resolved.cloudflare.security.min_tls_version == '1.2'
+      - foundry_domains_resolved.cloudflare.security.tls_1_3 is boolean
+      - foundry_domains_resolved.cloudflare.security.managed_waf is boolean
+      - foundry_domains_resolved.cloudflare.security.rate_limit is mapping
+      - foundry_domains_resolved.cloudflare.security.rate_limit.enabled is boolean
+      - foundry_domains_resolved.cloudflare.security.rate_limit.requests_per_period | int >= 1
+      - foundry_domains_resolved.cloudflare.security.rate_limit.period | int >= 10
+      - foundry_domains_resolved.cloudflare.security.rate_limit.period | int <= 3600
+      - foundry_domains_resolved.cloudflare.security.rate_limit.mitigation_timeout | int >= 0
+      - foundry_domains_resolved.cloudflare.security.rate_limit.action == 'block'
       - foundry_platform_resolved.traefik.http_port | int >= 1
       - foundry_platform_resolved.traefik.http_port | int <= 65535
       - foundry_platform_resolved.traefik.https_port | int >= 1
@@ -206,7 +249,29 @@
         not foundry_platform_resolved.dokploy.enabled
         or ((management | default({})).get('restrict_by_cidr', false) | bool
             and (management | default({})).get('allowed_cidrs', []) | length > 0)
+      - >-
+        not foundry_domains_resolved.cloudflare.enabled
+        or (foundry_domains_resolved.base | length > 0
+            and foundry_domains_resolved.cloudflare.zone == foundry_domains_resolved.base
+            and foundry_domains_resolved.cloudflare.api_token | length > 0)
+      - >-
+        not foundry_domains_resolved.cloudflare.enabled
+        or not foundry_domains_resolved.cloudflare.wildcard
+        or foundry_domains_resolved.environment_style == 'hyphen'
+      - >-
+        not (foundry_domains_resolved.cloudflare.enabled
+             and foundry_domains_resolved.cloudflare.security.enabled)
+        or (foundry_domains_resolved.cloudflare.proxied
+            and foundry_platform_resolved.traefik.tls.enabled)
     fail_msg: Invalid Swarm, Traefik, Dokploy, TLS, or domain configuration.
+
+- name: Require Dokploy for API-managed PostgreSQL
+  ansible.builtin.assert:
+    that:
+      - not foundry_services_resolved.postgres.enabled or foundry_platform_resolved.dokploy.enabled
+    fail_msg: >-
+      services.postgres is managed through the Dokploy API and therefore
+      requires platform.dokploy.enabled=true.
 
 - name: Validate optional Dokploy Vault secret lengths
   ansible.builtin.assert:
@@ -224,6 +289,8 @@
     infrastructure_services_traefik_enabled: >-
       {{ foundry_platform_resolved.traefik.enabled or foundry_platform_resolved.dokploy.enabled }}
     infrastructure_services_domain_enabled: "{{ foundry_domains_resolved.base | length > 0 }}"
+    infrastructure_services_cloudflare_proxy_enabled: false
+    infrastructure_services_cloudflare_origin_cidrs: []
     infrastructure_services_any_enabled: >-
       {{
         foundry_services_resolved.postgres.enabled

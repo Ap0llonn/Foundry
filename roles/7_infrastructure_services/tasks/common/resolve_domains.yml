@@ -56,12 +56,16 @@
     - foundry_platform_resolved.dokploy.enabled
     - foundry_platform_resolved.traefik.tls.enabled
 
-- name: Require Dokploy DNS to point at the declared VM before ACME
+- name: Require Dokploy DNS to resolve before ACME
   ansible.builtin.assert:
     that:
       - infrastructure_services_dokploy_dns.rc == 0
-      - infrastructure_services_dokploy_dns.stdout is search((vm_ip | string) | regex_escape)
-    fail_msg: Dokploy DNS must resolve to vm_ip before TLS/ACME is enabled.
+      - >-
+        (foundry_domains_resolved.cloudflare.proxied | default(false) | bool)
+        or infrastructure_services_dokploy_dns.stdout is search((vm_ip | string) | regex_escape)
+    fail_msg: >-
+      Dokploy DNS must resolve before TLS/ACME. DNS-only records must point at
+      vm_ip; Cloudflare-proxied records are validated through Cloudflare.
   when:
     - foundry_platform_resolved.dokploy.enabled
     - foundry_platform_resolved.traefik.tls.enabled
