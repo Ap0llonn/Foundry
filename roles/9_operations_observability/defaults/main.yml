@@ -19,10 +19,9 @@ observability_defaults:
     # Empty selects the first inventory host. Set this explicitly for a
     # multi-VM inventory so the dashboard has a stable home.
     host: ""
-    # SigNoz has its own Dokploy project/environment, separate from the
-    # application project's dev and production environments.
+    # SigNoz has its own Dokploy project, separate from application projects.
+    # It uses Dokploy's standard production environment in that project.
     project: monitoring
-    environment: monitoring
     # Empty resolves to signoz.<domains.base>.
     hostname: ""
 

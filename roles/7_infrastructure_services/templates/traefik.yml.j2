@@ -12,7 +12,7 @@ entryPoints:
   management:
     address: ":3000"
 {% endif %}
-{% if foundry_platform_resolved.traefik.tls.enabled and foundry_platform_resolved.traefik.tls.mode == 'public_acme' %}
+{% if foundry_platform_resolved.traefik.tls.enabled %}
   websecure:
     address: ":443"
     http3:
@@ -38,7 +38,7 @@ log:
   level: INFO
 
 accessLog: {}
-{% if foundry_platform_resolved.traefik.tls.enabled %}
+{% if foundry_platform_resolved.traefik.tls.enabled and foundry_platform_resolved.traefik.tls.mode == 'public_acme' %}
 
 certificatesResolvers:
   letsencrypt:

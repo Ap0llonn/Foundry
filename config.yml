@@ -208,9 +208,8 @@ observability:
     # The inventory host that runs the dashboard and its persistent data.
     host: app-vm
     # SigNoz is shared by every application environment, so it gets its own
-    # Dokploy project and environment rather than being placed in dev/prod.
+    # Dokploy project. It uses that project's standard production environment.
     project: monitoring
-    environment: monitoring
     # Empty becomes signoz.samuelcourchesne.com.
     hostname: ""
 

@@ -13,7 +13,9 @@
          if observability_resolved.signoz.hostname | length > 0
          else 'signoz.' + foundry_domains_resolved.base }}
     observability_signoz_project_name: "{{ observability_resolved.signoz.project }}"
-    observability_signoz_environment_name: "{{ observability_resolved.signoz.environment }}"
+    # Dokploy creates this environment with every project. Keeping it fixed
+    # prevents a separate observability-only environment from being created.
+    observability_signoz_environment_name: production
     observability_signoz_compose_name: signoz
     observability_signoz_compose_app_name: signoz
     observability_signoz_internal_network: >-
@@ -246,7 +248,7 @@
     fail_msg: Dokploy did not return an identifier for the SigNoz project.
   when: observability_signoz_enabled_here
 
-- name: Read the dedicated Dokploy SigNoz project environments
+- name: Read the default production environment of the SigNoz project
   ansible.builtin.command:
     argv:
       - docker
@@ -266,7 +268,7 @@
   when: observability_signoz_enabled_here
   no_log: true
 
-- name: Resolve the dedicated Dokploy SigNoz environment
+- name: Resolve the production environment of the SigNoz project
   ansible.builtin.set_fact:
     observability_signoz_environment_matches: >-
       {{ observability_signoz_environments_raw.stdout | from_json
@@ -276,75 +278,35 @@
   when: observability_signoz_enabled_here
   no_log: true
 
-- name: Refuse ambiguous dedicated Dokploy SigNoz environments
+- name: Refuse ambiguous SigNoz production environments
   ansible.builtin.assert:
     that: [observability_signoz_environment_matches | length <= 1]
-    fail_msg: More than one '{{ observability_signoz_environment_name }}' environment exists in the SigNoz project.
+    fail_msg: More than one production environment exists in the SigNoz project.
   when: observability_signoz_enabled_here
 
-- name: Create the dedicated Dokploy SigNoz environment
-  ansible.builtin.command:
-    argv:
-      - docker
-      - run
-      - --rm
-      - --network
-      - "{{ infrastructure_services_dokploy_api_network }}"
-      - curlimages/curl:8.15.0
-      - --fail-with-body
-      - --silent
-      - --show-error
-      - --request
-      - POST
-      - --header
-      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
-      - --header
-      - "Content-Type: application/json"
-      - --data
-      - "{{ {'name': observability_signoz_environment_name, 'projectId': observability_signoz_project_id} | to_json }}"
-      - "{{ infrastructure_services_dokploy_api_url }}/api/environment.create"
-  register: observability_signoz_environment_create
-  changed_when: true
-  when:
-    - observability_signoz_enabled_here
-    - observability_signoz_environment_matches | length == 0
-  no_log: true
-
-- name: Re-read the dedicated Dokploy SigNoz project environments
-  ansible.builtin.command:
-    argv:
-      - docker
-      - run
-      - --rm
-      - --network
-      - "{{ infrastructure_services_dokploy_api_network }}"
-      - curlimages/curl:8.15.0
-      - --fail-with-body
-      - --silent
-      - --show-error
-      - --header
-      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
-      - "{{ infrastructure_services_dokploy_api_url }}/api/environment.byProjectId?projectId={{ observability_signoz_project_id }}"
-  register: observability_signoz_environments_after_raw
-  changed_when: false
+- name: Require the default production environment of the SigNoz project
+  ansible.builtin.assert:
+    that: [observability_signoz_environment_matches | length == 1]
+    fail_msg: >-
+      Dokploy did not create the default production environment for the SigNoz
+      project. Create the project in Dokploy once, then rerun Foundry.
   when: observability_signoz_enabled_here
-  no_log: true
 
-- name: Resolve the dedicated Dokploy SigNoz environment identity
+- name: Resolve the SigNoz production environment identity
   ansible.builtin.set_fact:
     observability_signoz_environment: >-
-      {{ observability_signoz_environments_after_raw.stdout | from_json
+      {{ observability_signoz_environments_raw.stdout | from_json
          | select('mapping')
          | selectattr('name', 'equalto', observability_signoz_environment_name)
          | list | first | default({}, true) }}
     observability_signoz_environment_id: >-
       {{ (
-          observability_signoz_environments_after_raw.stdout | from_json
+          observability_signoz_environments_raw.stdout | from_json
           | select('mapping')
           | selectattr('name', 'equalto', observability_signoz_environment_name)
           | list | first | default({}, true)
         ).get('environmentId', (
-          observability_signoz_environments_after_raw.stdout | from_json
+          observability_signoz_environments_raw.stdout | from_json
           | select('mapping')
           | selectattr('name', 'equalto', observability_signoz_environment_name)
           | list | first | default({}, true)
@@ -352,7 +314,7 @@
   when: observability_signoz_enabled_here
   no_log: true
 
-- name: Require the dedicated Dokploy SigNoz environment identity
+- name: Require the SigNoz production environment identity
   ansible.builtin.assert:
     that: [observability_signoz_environment_id | string | length > 0]
     fail_msg: Dokploy did not return an identifier for the SigNoz environment.
@@ -1132,31 +1094,40 @@
       Inspect its logs with `docker logs {{ observability_signoz_ui_container_lookup.stdout | default('signoz-ui', true) }}`.
   when: observability_signoz_enabled_here
 
-- name: Resolve the internal SigNoz dashboard address
+- name: Inspect the internal SigNoz dashboard network attachment
   ansible.builtin.command:
     argv:
       - docker
       - container
       - inspect
-      - --format
-      - "{{ '{{with index .NetworkSettings.Networks \"' + observability_signoz_internal_network + '\"}}{{.IPAddress}}{{end}}' }}"
       - "{{ observability_signoz_ui_container_lookup.stdout }}"
-  register: observability_signoz_ui_address
+  register: observability_signoz_ui_inspection
   changed_when: false
+  when: observability_signoz_enabled_here
+
+- name: Resolve the internal SigNoz dashboard address
+  ansible.builtin.set_fact:
+    observability_signoz_ui_address: >-
+      {{ (
+          (observability_signoz_ui_inspection.stdout | from_json | first)
+          .get('NetworkSettings', {}).get('Networks', {})
+          .get(observability_signoz_internal_network, {})
+          .get('IPAddress', '')
+        ) | trim }}
   when: observability_signoz_enabled_here
 
 - name: Require an internal SigNoz dashboard address
   ansible.builtin.assert:
     that:
-      - observability_signoz_ui_address.stdout | length > 0
+      - observability_signoz_ui_address is match('^([0-9]{1,3}\\.){3}[0-9]{1,3}$')
     fail_msg: >-
       The running SigNoz dashboard is not attached to its internal Foundry
-      network '{{ observability_signoz_internal_network }}'.
+      network '{{ observability_signoz_internal_network }}' with an IPv4 address.
   when: observability_signoz_enabled_here
 
 - name: Validate self-hosted SigNoz dashboard health
   ansible.builtin.uri:
-    url: "http://{{ observability_signoz_ui_address.stdout }}:8080/api/v1/health"
+    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/health"
     method: GET
     status_code: 200
   register: observability_signoz_health

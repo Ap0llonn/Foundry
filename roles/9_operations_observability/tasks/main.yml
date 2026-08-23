@@ -18,7 +18,7 @@
       - (observability | default({})).get('backend', {}) is mapping
       - (observability | default({})).get('backend', {}).keys() | difference(['endpoint', 'headers', 'tls_insecure']) | length == 0
       - (observability | default({})).get('signoz', {}) is mapping
-      - (observability | default({})).get('signoz', {}).keys() | difference(['enabled', 'host', 'project', 'environment', 'hostname']) | length == 0
+      - (observability | default({})).get('signoz', {}).keys() | difference(['enabled', 'host', 'project', 'hostname']) | length == 0
       - observability_resolved is mapping
       - observability_resolved.enabled is boolean
       - observability_resolved.dashboard == 'signoz'
@@ -40,8 +40,6 @@
       - observability_resolved.signoz.host | length == 0 or observability_resolved.signoz.host in groups['all']
       - observability_resolved.signoz.project is string
       - observability_resolved.signoz.project is match('^[a-z][a-z0-9-]{0,62}$')
-      - observability_resolved.signoz.environment is string
-      - observability_resolved.signoz.environment is match('^[a-z][a-z0-9-]{0,62}$')
       - observability_resolved.signoz.hostname is string
       - observability_resolved.signoz.hostname | length == 0 or observability_resolved.signoz.hostname is match('^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:[.][a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$')
       - not observability_resolved.signoz.enabled or observability_resolved.enabled

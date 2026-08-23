@@ -54,6 +54,14 @@
     - foundry_platform_resolved.traefik.tls.enabled
     - foundry_platform_resolved.traefik.tls.mode == 'public_acme'
 
+- name: Remove inactive ACME certificate state for Cloudflare Origin TLS
+  ansible.builtin.file:
+    path: "{{ infrastructure_services_traefik_dynamic_directory }}/acme.json"
+    state: absent
+  when:
+    - foundry_platform_resolved.traefik.tls.enabled
+    - foundry_platform_resolved.traefik.tls.mode == 'cloudflare_origin'
+
 - name: Remove the inactive Cloudflare Origin CA Traefik contract
   ansible.builtin.file:
     path: "{{ infrastructure_services_traefik_origin_ca_dynamic_config }}"

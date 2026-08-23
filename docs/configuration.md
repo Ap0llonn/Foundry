@@ -855,7 +855,8 @@ Selects how Traefik obtains its origin certificate:
   `domains.base` and `*.domains.base`, then installs it only on the origin VM.
   Use this only with Cloudflare proxying enabled and SSL/TLS mode **Full
   (strict)**. The certificate is intentionally not trusted by browsers that
-  bypass Cloudflare.
+  bypass Cloudflare. Foundry removes stale local ACME state when switching to
+  this mode.
 
 For `cloudflare_origin`, the Cloudflare API token also needs **Zone → SSL and
 Certificates → Edit**. `platform.traefik.tls.email` is required only by
@@ -929,7 +930,6 @@ observability:
     enabled: true
     host: app-vm
     project: monitoring
-    environment: monitoring
     hostname: ""
 ```
 
@@ -944,10 +944,11 @@ using plaintext or an untrusted certificate.
 
 Deploys the self-hosted SigNoz dashboard through Dokploy. The dashboard URL is
 `https://signoz.<domains.base>` unless `hostname` is set. It is a shared
-operations service. Foundry creates the separate Dokploy project and
-environment selected by `project` and `environment` (by default both are named
-`monitoring`), then collects telemetry from every Foundry environment. It is
-not deployed in the application's `dev` or `production` environments.
+operations service. Foundry creates the separate Dokploy project selected by
+`project` (by default `monitoring`) and deploys SigNoz in that project's
+default `production` environment. It never creates a dedicated SigNoz
+environment and is not deployed in an application's `dev` or `production`
+environment.
 
 `host` is the inventory host that owns the SigNoz Compose service, ClickHouse
 data, and local ingestion listener. Set it explicitly when the inventory has
