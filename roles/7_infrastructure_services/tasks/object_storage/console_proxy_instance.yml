@@ -1,0 +1,96 @@
+---
+- name: Resolve {{ infrastructure_services_object_storage_instance.environment }} MinIO Console proxy contract
+  ansible.builtin.set_fact:
+    infrastructure_services_object_storage_console_proxy_name: >-
+      foundry-{{ project.name }}-{{ infrastructure_services_object_storage_instance.environment }}-minio-console-proxy
+    infrastructure_services_object_storage_console_proxy_hash: >-
+      {{ {
+        'image': infrastructure_services_database_access_proxy_image,
+        'network': foundry_platform_resolved.traefik.ingress_network,
+        'service_name': infrastructure_services_object_storage_instance.service_name,
+        'port': infrastructure_services_object_storage_instance.console_port
+      } | to_json | hash('sha256') }}
+
+- name: Inspect {{ infrastructure_services_object_storage_instance.environment }} MinIO Console loopback proxy
+  ansible.builtin.command:
+    argv:
+      - docker
+      - container
+      - inspect
+      - "{{ infrastructure_services_object_storage_console_proxy_name }}"
+  register: infrastructure_services_object_storage_console_proxy_inspect
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Refuse an unowned {{ infrastructure_services_object_storage_instance.environment }} MinIO Console proxy collision
+  ansible.builtin.assert:
+    that:
+      - >-
+        infrastructure_services_object_storage_console_proxy_inspect.rc != 0
+        or (
+          ((infrastructure_services_object_storage_console_proxy_inspect.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.managed') == 'true'
+          and ((infrastructure_services_object_storage_console_proxy_inspect.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.project') == project.name
+          and ((infrastructure_services_object_storage_console_proxy_inspect.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.resource') == 'object-storage-console-proxy'
+        )
+    fail_msg: A same-name MinIO Console proxy is not owned by this Foundry project.
+
+- name: Resolve {{ infrastructure_services_object_storage_instance.environment }} MinIO Console proxy reconciliation
+  ansible.builtin.set_fact:
+    infrastructure_services_object_storage_console_proxy_recreate: >-
+      {{
+        infrastructure_services_object_storage_console_proxy_inspect.rc == 0
+        and ((infrastructure_services_object_storage_console_proxy_inspect.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.config-sha256')
+            != infrastructure_services_object_storage_console_proxy_hash
+      }}
+
+- name: Recreate drifted {{ infrastructure_services_object_storage_instance.environment }} MinIO Console loopback proxy
+  ansible.builtin.command:
+    argv:
+      - docker
+      - container
+      - rm
+      - --force
+      - "{{ infrastructure_services_object_storage_console_proxy_name }}"
+  when: infrastructure_services_object_storage_console_proxy_recreate
+
+- name: Create {{ infrastructure_services_object_storage_instance.environment }} MinIO Console loopback proxy
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --detach
+      - --name
+      - "{{ infrastructure_services_object_storage_console_proxy_name }}"
+      - --restart
+      - unless-stopped
+      - --network
+      - "{{ foundry_platform_resolved.traefik.ingress_network }}"
+      - --publish
+      - "127.0.0.1:{{ infrastructure_services_object_storage_instance.console_port }}:9001"
+      - --label
+      - foundry.managed=true
+      - --label
+      - "foundry.project={{ project.name }}"
+      - --label
+      - foundry.resource=object-storage-console-proxy
+      - --label
+      - "foundry.config-sha256={{ infrastructure_services_object_storage_console_proxy_hash }}"
+      - "{{ infrastructure_services_database_access_proxy_image }}"
+      - TCP-LISTEN:9001,fork,reuseaddr,bind=0.0.0.0
+      - "TCP:{{ infrastructure_services_object_storage_instance.service_name }}:9001"
+  when: >-
+    infrastructure_services_object_storage_console_proxy_inspect.rc != 0
+    or infrastructure_services_object_storage_console_proxy_recreate
+
+- name: Start the existing {{ infrastructure_services_object_storage_instance.environment }} MinIO Console loopback proxy
+  ansible.builtin.command:
+    argv:
+      - docker
+      - container
+      - start
+      - "{{ infrastructure_services_object_storage_console_proxy_name }}"
+  when:
+    - infrastructure_services_object_storage_console_proxy_inspect.rc == 0
+    - not infrastructure_services_object_storage_console_proxy_recreate
+    - not (infrastructure_services_object_storage_console_proxy_inspect.stdout | from_json | first).State.Running

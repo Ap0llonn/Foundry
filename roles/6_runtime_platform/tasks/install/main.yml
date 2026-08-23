@@ -19,7 +19,7 @@
           and runtime_resolved.docker.restart.maintenance_window | trim | length > 0
         )
     fail_msg: >-
-      Conflicting Ubuntu Docker packages are installed
+      Conflicting distribution Docker packages are installed
       ({{ runtime_installed_conflicting_packages | join(', ') }}). Approve the
       legacy package migration explicitly. Running workloads additionally require
       a named, approved Docker maintenance window.

@@ -1,0 +1,124 @@
+---
+- name: Require healthy Dokploy API context for MinIO destinations
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_dokploy_api_key | default('') | length > 0
+      - infrastructure_services_dokploy_api_url | default('') | length > 0
+      - infrastructure_services_dokploy_api_network | default('') | length > 0
+      - infrastructure_services_object_storage_bucket_credentials | default({}) | length > 0
+    fail_msg: Shared MinIO destinations require the configured Dokploy API context.
+  no_log: true
+
+- name: Read existing Dokploy S3 destinations
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - "{{ infrastructure_services_dokploy_api_url }}/api/destination.all"
+  register: infrastructure_services_dokploy_destinations_raw
+  changed_when: false
+  no_log: true
+
+- name: Resolve existing Dokploy S3 destinations
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_destinations: >-
+      {{ infrastructure_services_dokploy_destinations_raw.stdout | from_json }}
+  no_log: true
+
+- name: Require a valid Dokploy destination list
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_dokploy_destinations is sequence
+      - infrastructure_services_dokploy_destinations is not string
+    fail_msg: Dokploy returned an unexpected S3 destination response.
+  no_log: true
+
+- name: Reconcile each Foundry MinIO Dokploy destination
+  ansible.builtin.include_tasks: dokploy_destination.yml
+  loop: >-
+    {{
+      infrastructure_services_object_storage_bucket_credentials
+      | dict2items
+      | map(attribute='value')
+      | selectattr('purpose', 'equalto', 'db_backups')
+      | list
+    }}
+  loop_control:
+    loop_var: infrastructure_services_object_storage_destination
+    label: "{{ infrastructure_services_object_storage_destination.environment }} / {{ infrastructure_services_object_storage_destination.purpose }}"
+  no_log: true
+
+- name: Re-read Dokploy S3 destinations after reconciliation
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - "{{ infrastructure_services_dokploy_api_url }}/api/destination.all"
+  register: infrastructure_services_dokploy_destinations_after_raw
+  changed_when: false
+  no_log: true
+
+- name: Resolve Dokploy destination contracts
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_destination_contracts: >-
+      {{
+        (infrastructure_services_dokploy_destination_contracts | default({}))
+        | combine({
+          item.contract_key: {
+            'environment': item.environment,
+            'purpose': item.purpose,
+            'public_read': item.public_read,
+            'name': item.destination_name,
+            'bucket': item.bucket,
+            'endpoint': item.internal_endpoint,
+            'destination_id': (
+              (infrastructure_services_dokploy_destinations_after_raw.stdout | from_json
+               | selectattr('name', 'equalto', item.destination_name) | list | first
+               | default({}, true)).get('destinationId',
+                (infrastructure_services_dokploy_destinations_after_raw.stdout | from_json
+                 | selectattr('name', 'equalto', item.destination_name) | list | first
+                 | default({}, true)).get('id', '')
+              )
+            )
+          }
+        })
+      }}
+  loop: >-
+    {{
+      infrastructure_services_object_storage_bucket_credentials
+      | dict2items
+      | map(attribute='value')
+      | selectattr('purpose', 'equalto', 'db_backups')
+      | list
+    }}
+  loop_control:
+    label: "{{ item.environment }} / {{ item.purpose }}"
+  no_log: true
+
+- name: Require each resolved Dokploy S3 destination identity
+  ansible.builtin.assert:
+    that:
+      - item.value.destination_id | string | length > 0
+    fail_msg: Dokploy did not return an identifier for a Foundry MinIO destination.
+  loop: "{{ infrastructure_services_dokploy_destination_contracts | dict2items }}"
+  loop_control:
+    label: "{{ item.value.environment }} / {{ item.value.purpose }}"
+  no_log: true

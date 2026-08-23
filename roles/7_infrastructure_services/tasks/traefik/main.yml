@@ -41,7 +41,7 @@
     mode: "0600"
   register: infrastructure_services_traefik_candidate_change
 
-- name: Prepare ACME state when TLS is enabled
+- name: Prepare ACME state for public ACME TLS
   ansible.builtin.file:
     path: "{{ infrastructure_services_traefik_dynamic_directory }}/acme.json"
     state: touch
@@ -50,7 +50,15 @@
     mode: "0600"
     access_time: preserve
     modification_time: preserve
-  when: foundry_platform_resolved.traefik.tls.enabled
+  when:
+    - foundry_platform_resolved.traefik.tls.enabled
+    - foundry_platform_resolved.traefik.tls.mode == 'public_acme'
+
+- name: Remove the inactive Cloudflare Origin CA Traefik contract
+  ansible.builtin.file:
+    path: "{{ infrastructure_services_traefik_origin_ca_dynamic_config }}"
+    state: absent
+  when: foundry_platform_resolved.traefik.tls.mode != 'cloudflare_origin'
 
 - name: Validate Traefik candidate configuration with the pinned runtime
   ansible.builtin.command:
@@ -92,7 +100,8 @@
         'https_port': (foundry_platform_resolved.traefik.https_port if foundry_platform_resolved.traefik.tls.enabled else none),
         'management_port': (foundry_platform_resolved.dokploy.management_port if foundry_platform_resolved.dokploy.enabled and not infrastructure_services_domain_enabled else none),
         'tls': foundry_platform_resolved.traefik.tls.enabled,
-        'tls_email': (foundry_platform_resolved.traefik.tls.email if foundry_platform_resolved.traefik.tls.enabled else none)
+        'tls_mode': (foundry_platform_resolved.traefik.tls.mode if foundry_platform_resolved.traefik.tls.enabled else none),
+        'tls_email': (foundry_platform_resolved.traefik.tls.email if foundry_platform_resolved.traefik.tls.enabled and foundry_platform_resolved.traefik.tls.mode == 'public_acme' else none)
       } | to_json | hash('sha256') }}
 
 - name: Inspect desired Traefik container

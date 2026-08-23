@@ -7,7 +7,8 @@ reported as deployment certification.
 | Control | Status | Required evidence |
 |---|---|---|
 | Fresh Ubuntu 26.04 x86_64 | IMPLEMENTED; CERTIFICATION PENDING | Disposable supported VM |
-| Official Docker repository | LIVE PASS | Foundry `resolute/stable` source installed on managed VM |
+| Fresh Debian 12 (Bookworm) x86_64 | IMPLEMENTED; CERTIFICATION PENDING | Disposable supported VM |
+| Official Docker repository | LIVE PASS on Ubuntu; DEBIAN PATH IMPLEMENTED | Foundry uses the distribution-specific official stable source |
 | Repository key checksum | LIVE PASS | Checksum-pinned download accepted on managed VM |
 | Exact Engine/CLI/containerd/Buildx/Compose packages | LIVE PASS | Every `dpkg-query` value equals defaults |
 | Package holds | LIVE PASS | Holds converge without second-run change |

@@ -19,15 +19,26 @@
     that:
       - os_base_matching_platforms | length == 1
       - >-
-        (ansible_facts['distribution_version'] | string)
-        in os_base_matching_platforms[0].versions
+        (
+          (ansible_facts['distribution_version'] | string)
+          in os_base_matching_platforms[0].versions
+        )
+        or (
+          os_base_matching_platforms[0].allow_patch_versions | default(false)
+          and (ansible_facts['distribution_version'] | string)
+              is match('^' + (os_base_matching_platforms[0].versions[0] | string) + '[.]')
+        )
+      - >-
+        os_base_matching_platforms[0].get('releases', []) | length == 0
+        or ansible_facts['distribution_release']
+           in os_base_matching_platforms[0].releases
       - ansible_facts['architecture'] in os_base_matching_platforms[0].architectures
       - ansible_facts['pkg_mgr'] == 'apt'
     fail_msg: >-
       Unsupported platform {{ ansible_facts['distribution'] }}
       {{ ansible_facts['distribution_version'] }} / {{ ansible_facts['architecture'] }}.
-      Foundry OS and security provisioning currently supports only the exact
-      Ubuntu combinations declared in os_base_supported_platforms.
+      Foundry OS and security provisioning supports only the exact
+      combinations declared in os_base_supported_platforms.
     success_msg: >-
       Supported platform: {{ ansible_facts['distribution'] }}
       {{ ansible_facts['distribution_version'] }} / {{ ansible_facts['architecture'] }}.

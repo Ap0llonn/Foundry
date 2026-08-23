@@ -1,0 +1,26 @@
+---
+- name: Add the {{ infrastructure_services_object_storage_environment }} MinIO Compose contract
+  ansible.builtin.set_fact:
+    infrastructure_services_object_storage_instances: >-
+      {{ infrastructure_services_object_storage_instances | combine({
+        infrastructure_services_object_storage_environment: {
+          'environment': infrastructure_services_object_storage_environment,
+          'service_name': 'minio-' + infrastructure_services_object_storage_environment,
+          'compose_name': 'minio',
+          'compose_app_name': (
+            (project.name | truncate(36, true, ''))
+            + '-' + (infrastructure_services_object_storage_environment | truncate(16, true, ''))
+            + '-minio'
+          ),
+          'data_path': foundry_services_resolved.object_storage.data_root + '/' + infrastructure_services_object_storage_environment,
+          'state_path': infrastructure_services_minio_shared_state_directory + '/' + infrastructure_services_object_storage_environment,
+          'internal_endpoint': 'http://minio-' + infrastructure_services_object_storage_environment + ':9000',
+          'endpoint': (
+            'https://' + infrastructure_services_object_storage_hostname
+            if infrastructure_services_object_storage_environment == 'production'
+            else 'https://' + infrastructure_services_object_storage_environment + '-' + infrastructure_services_object_storage_hostname
+          ),
+          'console_port': (foundry_services_resolved.object_storage.console.tailscale_port | int) + infrastructure_services_object_storage_environment_index
+        }
+      }) }}
+  no_log: true

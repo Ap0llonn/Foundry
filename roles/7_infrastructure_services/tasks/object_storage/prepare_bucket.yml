@@ -1,0 +1,44 @@
+---
+- name: Inspect {{ infrastructure_services_object_storage_bucket.environment }} S3 secret state
+  ansible.builtin.stat:
+    path: >-
+      {{ infrastructure_services_minio_shared_secret_directory }}/{{ infrastructure_services_object_storage_bucket.contract_key }}-secret-key
+    follow: false
+  register: infrastructure_services_object_storage_bucket_secret_file
+
+- name: Reject unsafe {{ infrastructure_services_object_storage_bucket.environment }} S3 secret state
+  ansible.builtin.assert:
+    that:
+      - not infrastructure_services_object_storage_bucket_secret_file.stat.exists or infrastructure_services_object_storage_bucket_secret_file.stat.isreg
+      - not infrastructure_services_object_storage_bucket_secret_file.stat.islnk | default(false)
+      - not infrastructure_services_object_storage_bucket_secret_file.stat.exists or infrastructure_services_object_storage_bucket_secret_file.stat.pw_name == 'root'
+      - not infrastructure_services_object_storage_bucket_secret_file.stat.exists or infrastructure_services_object_storage_bucket_secret_file.stat.mode == '0600'
+    fail_msg: Generated S3 secret state must be a root-owned 0600 regular file.
+
+- name: Persist {{ infrastructure_services_object_storage_bucket.environment }} S3 secret key
+  ansible.builtin.copy:
+    dest: >-
+      {{ infrastructure_services_minio_shared_secret_directory }}/{{ infrastructure_services_object_storage_bucket.contract_key }}-secret-key
+    owner: root
+    group: root
+    mode: "0600"
+    content: "{{ lookup('ansible.builtin.password', '/dev/null', length=48, chars=['ascii_letters', 'digits']) }}\n"
+  when: not infrastructure_services_object_storage_bucket_secret_file.stat.exists
+  no_log: true
+
+- name: Read {{ infrastructure_services_object_storage_bucket.environment }} S3 secret key
+  ansible.builtin.slurp:
+    path: >-
+      {{ infrastructure_services_minio_shared_secret_directory }}/{{ infrastructure_services_object_storage_bucket.contract_key }}-secret-key
+  register: infrastructure_services_object_storage_bucket_secret_raw
+
+- name: Add {{ infrastructure_services_object_storage_bucket.environment }} S3 secret to its runtime contract
+  ansible.builtin.set_fact:
+    infrastructure_services_object_storage_bucket_credentials: >-
+      {{ (infrastructure_services_object_storage_bucket_credentials | default({})) | combine({
+        infrastructure_services_object_storage_bucket.contract_key: (
+          infrastructure_services_object_storage_bucket | combine({
+            'secret_key': infrastructure_services_object_storage_bucket_secret_raw.content | b64decode | trim
+          })
+        )
+      }) }}

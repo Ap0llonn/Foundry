@@ -36,6 +36,14 @@
       {{ foundry_domains_resolved.cloudflare.proxied }}
   no_log: true
 
+- name: Provision the Cloudflare Origin CA certificate for Traefik
+  ansible.builtin.import_tasks: origin_ca.yml
+  become: true
+  when:
+    - infrastructure_services_traefik_enabled
+    - foundry_platform_resolved.traefik.tls.enabled
+    - foundry_platform_resolved.traefik.tls.mode == 'cloudflare_origin'
+
 - name: Read current Cloudflare origin network ranges
   ansible.builtin.uri:
     url: "{{ infrastructure_services_cloudflare_api_url }}/ips"

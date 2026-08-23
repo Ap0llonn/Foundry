@@ -1,0 +1,39 @@
+---
+- name: Inspect systemd-resolved activation state
+  ansible.builtin.command:
+    argv: [systemctl, is-active, systemd-resolved.service]
+  register: security_systemd_resolved_state
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Ensure the Foundry systemd-resolved drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/resolved.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: security_systemd_resolved_state.rc == 0
+
+- name: Disable LLMNR on active systemd-resolved
+  ansible.builtin.copy:
+    dest: /etc/systemd/resolved.conf.d/99-foundry-no-llmnr.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by Foundry. LLMNR is not required on a server and must not
+      # create wildcard listeners on TCP/UDP port 5355.
+      [Resolve]
+      LLMNR=no
+  register: security_llmnr_dropin
+  when: security_systemd_resolved_state.rc == 0
+
+- name: Restart systemd-resolved after disabling LLMNR
+  ansible.builtin.systemd_service:
+    name: systemd-resolved.service
+    state: restarted
+  when:
+    - security_systemd_resolved_state.rc == 0
+    - security_llmnr_dropin.changed | default(false)

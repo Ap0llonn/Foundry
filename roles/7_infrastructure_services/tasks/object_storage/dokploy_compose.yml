@@ -1,0 +1,8 @@
+---
+- name: Reconcile each Dokploy MinIO Compose service
+  ansible.builtin.include_tasks: dokploy_compose_instance.yml
+  loop: "{{ infrastructure_services_object_storage_instances | dict2items | map(attribute='value') | list }}"
+  loop_control:
+    loop_var: infrastructure_services_object_storage_instance
+    label: "{{ infrastructure_services_object_storage_instance.environment }}"
+  no_log: true

@@ -11,6 +11,10 @@
     loop_var: infrastructure_services_output_minio
     label: "{{ infrastructure_services_output_minio.environment }}"
 
+- name: Publish shared MinIO endpoints and Dokploy destination metadata
+  ansible.builtin.include_tasks: output/publish_object_storage.yml
+  when: foundry_services_resolved.object_storage.enabled
+
 - name: Publish Dokploy backup integration metadata
   ansible.builtin.set_fact:
     infrastructure_services_backup_targets: >-

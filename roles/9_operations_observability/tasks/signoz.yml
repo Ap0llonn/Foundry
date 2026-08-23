@@ -1,0 +1,1167 @@
+---
+# SigNoz is a shared, single-node dashboard. The agents retain their generic
+# OTLP exporter: this stack is only the first supported backend implementation.
+
+- name: Resolve SigNoz dashboard placement and names
+  ansible.builtin.set_fact:
+    observability_signoz_deploy_host: >-
+      {{ observability_resolved.signoz.host
+         if observability_resolved.signoz.host | length > 0
+         else (groups['all'] | first) }}
+    observability_signoz_hostname: >-
+      {{ observability_resolved.signoz.hostname
+         if observability_resolved.signoz.hostname | length > 0
+         else 'signoz.' + foundry_domains_resolved.base }}
+    observability_signoz_project_name: "{{ observability_resolved.signoz.project }}"
+    observability_signoz_environment_name: "{{ observability_resolved.signoz.environment }}"
+    observability_signoz_compose_name: signoz
+    observability_signoz_compose_app_name: signoz
+    observability_signoz_internal_network: >-
+      {{ ((project.resource_prefix | default('foundry')) + '-'
+          if (project.resource_prefix | default('foundry')) | length > 0 else '')
+         + observability_resolved.signoz.project + '-signoz-internal' }}
+  no_log: true
+
+- name: Resolve whether this VM hosts the SigNoz dashboard
+  ansible.builtin.set_fact:
+    observability_signoz_enabled_here: >-
+      {{ inventory_hostname == observability_signoz_deploy_host }}
+  no_log: true
+
+# The Dokploy bootstrap role owns creation and rotation of this key.  Read the
+# persisted value here instead of relying on a transient fact from role 7: the
+# observability role must remain safe to execute on its own (including with
+# tags or --start-at-task).
+- name: Resolve the persisted Dokploy API key contract for SigNoz
+  ansible.builtin.set_fact:
+    observability_signoz_dokploy_api_key_file: >-
+      {{ infrastructure_services_secret_directory }}/{{ project.name }}/dokploy/api-key-{{ foundry_platform_resolved.dokploy.secret_version }}
+    infrastructure_services_dokploy_api_url: >-
+      {{ infrastructure_services_dokploy_internal_endpoint }}
+    infrastructure_services_dokploy_api_network: >-
+      {{ foundry_platform_resolved.traefik.ingress_network }}
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Inspect the persisted Dokploy API key for SigNoz
+  ansible.builtin.stat:
+    path: "{{ observability_signoz_dokploy_api_key_file }}"
+    follow: false
+  register: observability_signoz_dokploy_api_key_state
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Validate the persisted Dokploy API key state for SigNoz
+  ansible.builtin.assert:
+    that:
+      - observability_signoz_dokploy_api_key_state.stat.exists
+      - observability_signoz_dokploy_api_key_state.stat.isreg | default(false)
+      - not observability_signoz_dokploy_api_key_state.stat.islnk | default(false)
+      - observability_signoz_dokploy_api_key_state.stat.pw_name | default('') == 'root'
+      - observability_signoz_dokploy_api_key_state.stat.mode | default('') == '0600'
+    fail_msg: >-
+      SigNoz requires the root-owned Dokploy API key created by the Dokploy
+      bootstrap role. Run the Dokploy bootstrap before enabling SigNoz.
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Read the persisted Dokploy API key for SigNoz
+  ansible.builtin.slurp:
+    path: "{{ observability_signoz_dokploy_api_key_file }}"
+  register: observability_signoz_dokploy_api_key_raw
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Load the persisted Dokploy API key for SigNoz
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_api_key: >-
+      {{ observability_signoz_dokploy_api_key_raw.content | b64decode | trim }}
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Validate SigNoz dashboard dependencies on its host
+  ansible.builtin.assert:
+    that:
+      - foundry_platform_resolved.dokploy.enabled
+      - foundry_platform_resolved.traefik.enabled
+      - foundry_platform_resolved.traefik.tls.enabled
+      - foundry_domains_resolved.base | length > 0
+      - observability_signoz_hostname.endswith('.' + foundry_domains_resolved.base)
+      - infrastructure_services_dokploy_api_url | default('') | length > 0
+      - infrastructure_services_dokploy_api_network | default('') | length > 0
+      - infrastructure_services_dokploy_api_key | default('') | length > 0
+      - ansible_facts.memtotal_mb | default(0) | int >= observability_signoz_minimum_memory_mb
+      - ansible_facts.architecture in observability_supported_architectures
+    fail_msg: >-
+      Self-hosted SigNoz requires healthy Dokploy, TLS-enabled Traefik, a
+      hostname below domains.base, a valid Dokploy environment, at least 4 GB
+      of RAM, and a supported architecture on its dashboard host.
+  when: observability_signoz_enabled_here
+
+- name: Read Dokploy projects before configuring SigNoz
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --silent
+      - --show-error
+      - --output
+      - /dev/null
+      - --write-out
+      - "%{http_code}"
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - "{{ infrastructure_services_dokploy_api_url }}/api/project.all"
+  register: observability_signoz_projects_raw
+  changed_when: false
+  failed_when: false
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Require Dokploy project API access for SigNoz
+  ansible.builtin.assert:
+    that:
+      - observability_signoz_projects_raw.rc == 0
+      - observability_signoz_projects_raw.stdout == '200'
+    fail_msg: >-
+      Dokploy rejected the SigNoz project API request (curl rc
+      {{ observability_signoz_projects_raw.rc }}, HTTP
+      {{ observability_signoz_projects_raw.stdout | default('no response', true) }}).
+      Confirm that Dokploy is healthy and that its generated API key is valid.
+  when: observability_signoz_enabled_here
+
+- name: Read Dokploy projects response for SigNoz
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - "{{ infrastructure_services_dokploy_api_url }}/api/project.all"
+  register: observability_signoz_projects_raw
+  changed_when: false
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Resolve the Dokploy SigNoz project
+  ansible.builtin.set_fact:
+    observability_signoz_project_matches: >-
+      {{ observability_signoz_projects_raw.stdout | from_json
+         | select('mapping')
+         | selectattr('name', 'equalto', observability_signoz_project_name)
+         | list }}
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Refuse ambiguous Dokploy SigNoz projects
+  ansible.builtin.assert:
+    that: [observability_signoz_project_matches | length <= 1]
+    fail_msg: More than one Dokploy project is named '{{ observability_signoz_project_name }}'.
+  when: observability_signoz_enabled_here
+
+- name: Create the dedicated Dokploy SigNoz project
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --request
+      - POST
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - --header
+      - "Content-Type: application/json"
+      - --data
+      - "{{ {'name': observability_signoz_project_name} | to_json }}"
+      - "{{ infrastructure_services_dokploy_api_url }}/api/project.create"
+  register: observability_signoz_project_create
+  changed_when: true
+  when:
+    - observability_signoz_enabled_here
+    - observability_signoz_project_matches | length == 0
+  no_log: true
+
+- name: Re-read Dokploy projects after configuring SigNoz
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - "{{ infrastructure_services_dokploy_api_url }}/api/project.all"
+  register: observability_signoz_projects_after_raw
+  changed_when: false
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Resolve the dedicated Dokploy SigNoz project identity
+  ansible.builtin.set_fact:
+    observability_signoz_project: >-
+      {{ observability_signoz_projects_after_raw.stdout | from_json
+         | select('mapping')
+         | selectattr('name', 'equalto', observability_signoz_project_name)
+         | list | first | default({}, true) }}
+    observability_signoz_project_id: >-
+      {{ (
+          observability_signoz_projects_after_raw.stdout | from_json
+          | select('mapping')
+          | selectattr('name', 'equalto', observability_signoz_project_name)
+          | list | first | default({}, true)
+        ).get('projectId', (
+          observability_signoz_projects_after_raw.stdout | from_json
+          | select('mapping')
+          | selectattr('name', 'equalto', observability_signoz_project_name)
+          | list | first | default({}, true)
+        ).get('id', '')) }}
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Require the dedicated Dokploy SigNoz project identity
+  ansible.builtin.assert:
+    that: [observability_signoz_project_id | string | length > 0]
+    fail_msg: Dokploy did not return an identifier for the SigNoz project.
+  when: observability_signoz_enabled_here
+
+- name: Read the dedicated Dokploy SigNoz project environments
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - "{{ infrastructure_services_dokploy_api_url }}/api/environment.byProjectId?projectId={{ observability_signoz_project_id }}"
+  register: observability_signoz_environments_raw
+  changed_when: false
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Resolve the dedicated Dokploy SigNoz environment
+  ansible.builtin.set_fact:
+    observability_signoz_environment_matches: >-
+      {{ observability_signoz_environments_raw.stdout | from_json
+         | select('mapping')
+         | selectattr('name', 'equalto', observability_signoz_environment_name)
+         | list }}
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Refuse ambiguous dedicated Dokploy SigNoz environments
+  ansible.builtin.assert:
+    that: [observability_signoz_environment_matches | length <= 1]
+    fail_msg: More than one '{{ observability_signoz_environment_name }}' environment exists in the SigNoz project.
+  when: observability_signoz_enabled_here
+
+- name: Create the dedicated Dokploy SigNoz environment
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --request
+      - POST
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - --header
+      - "Content-Type: application/json"
+      - --data
+      - "{{ {'name': observability_signoz_environment_name, 'projectId': observability_signoz_project_id} | to_json }}"
+      - "{{ infrastructure_services_dokploy_api_url }}/api/environment.create"
+  register: observability_signoz_environment_create
+  changed_when: true
+  when:
+    - observability_signoz_enabled_here
+    - observability_signoz_environment_matches | length == 0
+  no_log: true
+
+- name: Re-read the dedicated Dokploy SigNoz project environments
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - "{{ infrastructure_services_dokploy_api_url }}/api/environment.byProjectId?projectId={{ observability_signoz_project_id }}"
+  register: observability_signoz_environments_after_raw
+  changed_when: false
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Resolve the dedicated Dokploy SigNoz environment identity
+  ansible.builtin.set_fact:
+    observability_signoz_environment: >-
+      {{ observability_signoz_environments_after_raw.stdout | from_json
+         | select('mapping')
+         | selectattr('name', 'equalto', observability_signoz_environment_name)
+         | list | first | default({}, true) }}
+    observability_signoz_environment_id: >-
+      {{ (
+          observability_signoz_environments_after_raw.stdout | from_json
+          | select('mapping')
+          | selectattr('name', 'equalto', observability_signoz_environment_name)
+          | list | first | default({}, true)
+        ).get('environmentId', (
+          observability_signoz_environments_after_raw.stdout | from_json
+          | select('mapping')
+          | selectattr('name', 'equalto', observability_signoz_environment_name)
+          | list | first | default({}, true)
+        ).get('id', '')) }}
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Require the dedicated Dokploy SigNoz environment identity
+  ansible.builtin.assert:
+    that: [observability_signoz_environment_id | string | length > 0]
+    fail_msg: Dokploy did not return an identifier for the SigNoz environment.
+  when: observability_signoz_enabled_here
+
+- name: Create root-owned SigNoz configuration and cache directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ observability_signoz_state_directory }}"
+    - "{{ observability_signoz_state_directory }}/user_scripts"
+    - "{{ observability_signoz_cache_directory }}"
+  when: observability_signoz_enabled_here
+
+- name: Inspect the persistent SigNoz JWT signing secret
+  ansible.builtin.stat:
+    path: "{{ observability_signoz_state_directory }}/signoz.env"
+    follow: false
+  register: observability_signoz_jwt_secret_file_stat
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Create a persistent SigNoz JWT signing secret
+  ansible.builtin.command:
+    argv: [openssl, rand, -hex, "32"]
+  register: observability_signoz_jwt_secret_generated
+  changed_when: true
+  when:
+    - observability_signoz_enabled_here
+    - not observability_signoz_jwt_secret_file_stat.stat.exists
+  no_log: true
+
+- name: Persist the generated SigNoz JWT signing secret
+  ansible.builtin.copy:
+    dest: "{{ observability_signoz_state_directory }}/signoz.env"
+    content: >-
+      SIGNOZ_TOKENIZER_JWT_SECRET={{ observability_signoz_jwt_secret_generated.stdout }}
+    owner: root
+    group: root
+    mode: "0600"
+  when:
+    - observability_signoz_enabled_here
+    - observability_signoz_jwt_secret_generated.changed | default(false)
+  no_log: true
+
+- name: Re-inspect the persistent SigNoz JWT signing secret
+  ansible.builtin.stat:
+    path: "{{ observability_signoz_state_directory }}/signoz.env"
+    follow: false
+  register: observability_signoz_jwt_secret_file_stat
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Validate existing SigNoz JWT signing secret permissions
+  ansible.builtin.assert:
+    that:
+      - not observability_signoz_jwt_secret_file_stat.stat.islnk | default(false)
+      - observability_signoz_jwt_secret_file_stat.stat.isreg
+      - observability_signoz_jwt_secret_file_stat.stat.pw_name == 'root'
+      - observability_signoz_jwt_secret_file_stat.stat.mode == '0600'
+    fail_msg: SigNoz signing state must be a root-owned regular 0600 file.
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Read the persistent SigNoz JWT signing secret
+  ansible.builtin.slurp:
+    path: "{{ observability_signoz_state_directory }}/signoz.env"
+  register: observability_signoz_jwt_secret_raw
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Resolve the SigNoz JWT signing secret for the Dokploy Compose contract
+  ansible.builtin.set_fact:
+    observability_signoz_jwt_secret: >-
+      {{ observability_signoz_jwt_secret_raw.content | b64decode | trim
+         | regex_replace('^SIGNOZ_TOKENIZER_JWT_SECRET=', '') }}
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Validate the persistent SigNoz JWT signing secret value
+  ansible.builtin.assert:
+    that:
+      - observability_signoz_jwt_secret is match('^[A-Fa-f0-9]{64}$')
+    fail_msg: SigNoz signing state does not contain the expected 256-bit secret.
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Resolve the SigNoz histogram helper package
+  ansible.builtin.set_fact:
+    observability_signoz_architecture: >-
+      {{ observability_supported_architectures[ansible_facts.architecture] }}
+    observability_signoz_histogram_archive: >-
+      histogram-quantile_linux_{{ observability_supported_architectures[ansible_facts.architecture] }}.tar.gz
+    observability_signoz_histogram_url: >-
+      https://github.com/SigNoz/signoz/releases/download/histogram-quantile%2F{{ observability_signoz_histogram_version }}/histogram-quantile_linux_{{ observability_supported_architectures[ansible_facts.architecture] }}.tar.gz
+  when: observability_signoz_enabled_here
+
+- name: Download the checksum-pinned SigNoz histogram helper
+  ansible.builtin.get_url:
+    url: "{{ observability_signoz_histogram_url }}"
+    dest: "{{ observability_signoz_cache_directory }}/{{ observability_signoz_histogram_archive }}"
+    checksum: "sha256:{{ observability_signoz_histogram_checksums[observability_signoz_architecture] }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: observability_signoz_enabled_here
+
+- name: Unpack the SigNoz histogram helper
+  ansible.builtin.unarchive:
+    src: "{{ observability_signoz_cache_directory }}/{{ observability_signoz_histogram_archive }}"
+    dest: "{{ observability_signoz_state_directory }}/user_scripts"
+    remote_src: true
+    creates: "{{ observability_signoz_state_directory }}/user_scripts/histogram-quantile"
+  when: observability_signoz_enabled_here
+
+- name: Install the SigNoz histogram helper under the configured function name
+  ansible.builtin.copy:
+    src: "{{ observability_signoz_state_directory }}/user_scripts/histogram-quantile"
+    dest: "{{ observability_signoz_state_directory }}/user_scripts/histogramQuantile"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0755"
+  when: observability_signoz_enabled_here
+
+- name: Render SigNoz service configuration files
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ observability_signoz_state_directory }}/{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - {src: signoz-clickhouse-cluster.xml.j2, dest: clickhouse-cluster.xml}
+    - {src: signoz-clickhouse-function.xml.j2, dest: clickhouse-function.xml}
+    - {src: signoz-collector.yaml.j2, dest: collector.yaml}
+    - {src: signoz-manager.yaml.j2, dest: manager.yaml}
+  register: observability_signoz_configuration
+  when: observability_signoz_enabled_here
+
+- name: Render the immutable SigNoz Dokploy Compose contract
+  ansible.builtin.set_fact:
+    observability_signoz_configuration_hash: >-
+      {{ observability_signoz_configuration.results
+         | map(attribute='checksum') | join | hash('sha256') }}
+    observability_signoz_compose_file: >-
+      {{ {
+        'services': {
+          'signoz-init-clickhouse': {
+            'image': observability_signoz_images.clickhouse,
+            'command': ['sh', '-ec', 'cp /opt/signoz/user_scripts/histogramQuantile /var/lib/clickhouse/user_scripts/histogramQuantile && chmod 0755 /var/lib/clickhouse/user_scripts/histogramQuantile'],
+            'restart': 'on-failure',
+            'networks': [observability_signoz_internal_network],
+            'volumes': [
+              observability_signoz_state_directory + '/user_scripts:/opt/signoz/user_scripts:ro',
+              'user_scripts:/var/lib/clickhouse/user_scripts'
+            ]
+          },
+          'signoz-zookeeper': {
+            'image': observability_signoz_images.zookeeper,
+            'restart': 'unless-stopped',
+            'user': 'root',
+            'networks': [observability_signoz_internal_network],
+            'environment': {
+              'ZOO_SERVER_ID': '1',
+              'ALLOW_ANONYMOUS_LOGIN': 'yes',
+              'ZOO_AUTOPURGE_INTERVAL': '1',
+              'ZOO_ENABLE_PROMETHEUS_METRICS': 'yes',
+              'ZOO_PROMETHEUS_METRICS_PORT_NUMBER': '9141'
+            },
+            'volumes': ['zookeeper:/bitnami/zookeeper'],
+            'healthcheck': {
+              'test': ['CMD-SHELL', 'curl -s -m 2 http://localhost:8080/commands/ruok | grep error | grep null'],
+              'interval': '30s', 'timeout': '5s', 'retries': 3
+            }
+          },
+          'signoz-clickhouse': {
+            'image': observability_signoz_images.clickhouse,
+            'restart': 'unless-stopped',
+            'networks': [observability_signoz_internal_network],
+            'depends_on': {
+              'signoz-init-clickhouse': {'condition': 'service_completed_successfully'},
+              'signoz-zookeeper': {'condition': 'service_healthy'}
+            },
+            'environment': {'CLICKHOUSE_SKIP_USER_SETUP': '1'},
+            'labels': {'foundry.config-sha256': observability_signoz_configuration.results | map(attribute='checksum') | join | hash('sha256')},
+            'ulimits': {'nproc': 65535, 'nofile': {'soft': 262144, 'hard': 262144}},
+            'volumes': [
+              observability_signoz_state_directory + '/clickhouse-cluster.xml:/etc/clickhouse-server/config.d/signoz-cluster.xml:ro',
+              observability_signoz_state_directory + '/clickhouse-function.xml:/etc/clickhouse-server/config.d/signoz-function.xml:ro',
+              'user_scripts:/var/lib/clickhouse/user_scripts',
+              'clickhouse:/var/lib/clickhouse'
+            ],
+            'healthcheck': {
+              'test': ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:8123/ping'],
+              'interval': '30s', 'timeout': '5s', 'retries': 5
+            }
+          },
+          'signoz-ui': {
+            'image': observability_signoz_images.ui,
+            'restart': 'unless-stopped',
+            'networks': [observability_signoz_internal_network, foundry_platform_resolved.traefik.ingress_network],
+            'depends_on': {'signoz-clickhouse': {'condition': 'service_healthy'}},
+            'environment': {
+              'SIGNOZ_ALERTMANAGER_PROVIDER': 'signoz',
+              'SIGNOZ_TELEMETRYSTORE_CLICKHOUSE_DSN': 'tcp://signoz-clickhouse:9000',
+              'SIGNOZ_SQLSTORE_SQLITE_PATH': '/var/lib/signoz/signoz.db',
+              'SIGNOZ_TOKENIZER_JWT_SECRET': observability_signoz_jwt_secret
+            },
+            'volumes': ['sqlite:/var/lib/signoz'],
+            'healthcheck': {
+              'test': ['CMD', 'wget', '--spider', '-q', 'http://localhost:8080/api/v1/health'],
+              'interval': '30s', 'timeout': '5s', 'retries': 5
+            },
+            'labels': ({
+              'foundry.config-sha256': observability_signoz_configuration.results | map(attribute='checksum') | join | hash('sha256'),
+              'traefik.enable': 'true',
+              'traefik.docker.network': foundry_platform_resolved.traefik.ingress_network,
+              'traefik.http.routers.foundry-' + observability_signoz_project_name + '-signoz.rule': 'Host(`' + observability_signoz_hostname + '`)',
+              'traefik.http.routers.foundry-' + observability_signoz_project_name + '-signoz.entrypoints': 'websecure',
+              'traefik.http.routers.foundry-' + observability_signoz_project_name + '-signoz.tls': 'true',
+              'traefik.http.services.foundry-' + observability_signoz_project_name + '-signoz.loadbalancer.server.port': '8080'
+            } | combine(
+              {
+                'traefik.http.routers.foundry-' + observability_signoz_project_name + '-signoz.tls.certresolver': 'letsencrypt'
+              }
+              if foundry_platform_resolved.traefik.tls.mode == 'public_acme' else {}
+            ))
+          },
+          'signoz-telemetrystore-migrator': {
+            'image': observability_signoz_images.collector,
+            'restart': 'on-failure',
+            'networks': [observability_signoz_internal_network],
+            'depends_on': {'signoz-clickhouse': {'condition': 'service_healthy'}},
+            'entrypoint': ['/bin/sh'],
+            'command': ['-ec', '/signoz-otel-collector migrate bootstrap && /signoz-otel-collector migrate sync up && /signoz-otel-collector migrate async up'],
+            'environment': {
+              'SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_DSN': 'tcp://signoz-clickhouse:9000',
+              'SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_CLUSTER': 'cluster',
+              'SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_REPLICATION': 'true',
+              'SIGNOZ_OTEL_COLLECTOR_TIMEOUT': '10m'
+            }
+          },
+          'signoz-collector': {
+            'image': observability_signoz_images.collector,
+            'restart': 'unless-stopped',
+            'networks': [observability_signoz_internal_network],
+            'depends_on': {
+              'signoz-clickhouse': {'condition': 'service_healthy'},
+              'signoz-telemetrystore-migrator': {'condition': 'service_completed_successfully'}
+            },
+            'entrypoint': ['/bin/sh'],
+            'command': ['-ec', '/signoz-otel-collector migrate sync check && /signoz-otel-collector --config=/etc/signoz/collector.yaml --manager-config=/etc/signoz/manager.yaml --copy-path=/var/tmp/collector-config.yaml'],
+            'environment': {
+              'OTEL_RESOURCE_ATTRIBUTES': 'host.name=signoz-host,os.type=linux',
+              'LOW_CARDINAL_EXCEPTION_GROUPING': 'false',
+              'SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_DSN': 'tcp://signoz-clickhouse:9000',
+              'SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_CLUSTER': 'cluster',
+              'SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_REPLICATION': 'true',
+              'SIGNOZ_OTEL_COLLECTOR_TIMEOUT': '10m'
+            },
+            'labels': {'foundry.config-sha256': observability_signoz_configuration.results | map(attribute='checksum') | join | hash('sha256')},
+            'volumes': [
+              observability_signoz_state_directory + '/collector.yaml:/etc/signoz/collector.yaml:ro',
+              observability_signoz_state_directory + '/manager.yaml:/etc/signoz/manager.yaml:ro'
+            ],
+            'ports': ['127.0.0.1:' + (observability_signoz_otlp_grpc_port | string) + ':4317']
+          }
+        },
+        'networks': {
+          observability_signoz_internal_network: {'name': observability_signoz_internal_network},
+          foundry_platform_resolved.traefik.ingress_network: {'external': true}
+        },
+        'volumes': {
+          'clickhouse': {'name': observability_signoz_internal_network + '-clickhouse'},
+          'sqlite': {'name': observability_signoz_internal_network + '-sqlite'},
+          'zookeeper': {'name': observability_signoz_internal_network + '-zookeeper'},
+          'user_scripts': {'name': observability_signoz_internal_network + '-user-scripts'}
+        }
+      } | to_nice_yaml(indent=2) }}
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Read the Dokploy SigNoz Compose service
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - "{{ infrastructure_services_dokploy_api_url }}/api/compose.search?environmentId={{ observability_signoz_environment_id }}&name={{ observability_signoz_compose_name }}&limit=100"
+  register: observability_signoz_compose_search_raw
+  changed_when: false
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Normalize the Dokploy SigNoz Compose search response
+  ansible.builtin.set_fact:
+    observability_signoz_compose_search_payload: >-
+      {{ observability_signoz_compose_search_raw.stdout | from_json }}
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Resolve matching Dokploy SigNoz Compose services
+  ansible.builtin.set_fact:
+    observability_signoz_compose_matches: >-
+      {{ (
+          observability_signoz_compose_search_payload
+          if observability_signoz_compose_search_payload is sequence
+             and observability_signoz_compose_search_payload is not string
+             and observability_signoz_compose_search_payload is not mapping
+          else observability_signoz_compose_search_payload.get('data', observability_signoz_compose_search_payload.get('items', observability_signoz_compose_search_payload.get('results', [])))
+        ) | select('mapping') | selectattr('name', 'equalto', observability_signoz_compose_name) | list }}
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Refuse ambiguous Dokploy SigNoz Compose services
+  ansible.builtin.assert:
+    that: [observability_signoz_compose_matches | length <= 1]
+    fail_msg: More than one Dokploy SigNoz Compose service exists in the target environment.
+  when: observability_signoz_enabled_here
+
+- name: Create the missing Dokploy SigNoz Compose service
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --request
+      - POST
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - --header
+      - "Content-Type: application/json"
+      - --data
+      - >-
+        {{ {'name': observability_signoz_compose_name, 'appName': observability_signoz_compose_app_name, 'environmentId': observability_signoz_environment_id, 'sourceType': 'raw', 'composeType': 'docker-compose', 'composeFile': observability_signoz_compose_file} | to_json }}
+      - "{{ infrastructure_services_dokploy_api_url }}/api/compose.create"
+  register: observability_signoz_compose_create
+  changed_when: true
+  when:
+    - observability_signoz_enabled_here
+    - observability_signoz_compose_matches | length == 0
+  no_log: true
+
+- name: Re-read the Dokploy SigNoz Compose service
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - "{{ infrastructure_services_dokploy_api_url }}/api/compose.search?environmentId={{ observability_signoz_environment_id }}&name={{ observability_signoz_compose_name }}&limit=100"
+  register: observability_signoz_compose_after_raw
+  changed_when: false
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Resolve the Dokploy SigNoz Compose identity
+  ansible.builtin.set_fact:
+    observability_signoz_compose: >-
+      {{ (
+          (observability_signoz_compose_after_raw.stdout | from_json)
+          if (observability_signoz_compose_after_raw.stdout | from_json) is sequence
+             and (observability_signoz_compose_after_raw.stdout | from_json) is not string
+             and (observability_signoz_compose_after_raw.stdout | from_json) is not mapping
+          else (observability_signoz_compose_after_raw.stdout | from_json).get(
+            'data',
+            (observability_signoz_compose_after_raw.stdout | from_json).get(
+              'items',
+              (observability_signoz_compose_after_raw.stdout | from_json).get('results', [])
+            )
+          )
+        ) | select('mapping') | selectattr('name', 'equalto', observability_signoz_compose_name) | list | first | default({}, true) }}
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Require the Dokploy SigNoz Compose identity
+  ansible.builtin.assert:
+    that:
+      - observability_signoz_compose.get('composeId', observability_signoz_compose.get('id', '')) | string | length > 0
+    fail_msg: Dokploy did not return an identifier for the SigNoz Compose service.
+  when: observability_signoz_enabled_here
+
+- name: Resolve the Dokploy SigNoz Compose identifier
+  ansible.builtin.set_fact:
+    observability_signoz_compose_id: >-
+      {{ observability_signoz_compose.get('composeId', observability_signoz_compose.get('id', '')) }}
+  when: observability_signoz_enabled_here
+  no_log: true
+
+# Dokploy can retain a successful application status after a manual cleanup or
+# an interrupted deployment.  Its status alone is therefore not ownership
+# proof: reconcile the Compose again whenever none of its containers exist.
+- name: Inspect existing local SigNoz Compose containers
+  ansible.builtin.command:
+    argv:
+      - docker
+      - ps
+      - --all
+      - --format
+      - "{{ '{{.Names}} {{.Labels}}' }}"
+  register: observability_signoz_existing_containers_raw
+  changed_when: false
+  when: observability_signoz_enabled_here
+
+- name: Resolve existing local SigNoz Compose containers
+  ansible.builtin.set_fact:
+    observability_signoz_existing_containers: >-
+      {{ observability_signoz_existing_containers_raw.stdout_lines
+         | select('search', 'signoz') | list }}
+  when: observability_signoz_enabled_here
+
+# Docker bind-mounts a file inode.  Ansible templates are atomically replaced,
+# so a running ClickHouse container can retain an older inode even though the
+# host path has the desired contents.  Compare its rendered-contract label to
+# make the next Dokploy deployment recreate that stale container.
+- name: Find the local SigNoz ClickHouse container
+  ansible.builtin.command:
+    argv:
+      - docker
+      - ps
+      - --all
+      - --filter
+      - label=com.docker.compose.service=signoz-clickhouse
+      - --format
+      - "{{ '{{.ID}}' }}"
+  register: observability_signoz_clickhouse_container_ids
+  changed_when: false
+  when: observability_signoz_enabled_here
+
+- name: Inspect the local SigNoz ClickHouse configuration contract
+  ansible.builtin.command:
+    argv:
+      - docker
+      - inspect
+      - "{{ observability_signoz_clickhouse_container_ids.stdout }}"
+  register: observability_signoz_clickhouse_container_inspect
+  changed_when: false
+  when:
+    - observability_signoz_enabled_here
+    - observability_signoz_clickhouse_container_ids.stdout_lines | length == 1
+
+- name: Resolve local SigNoz ClickHouse configuration drift
+  ansible.builtin.set_fact:
+    observability_signoz_expected_configuration_hash: >-
+      {{ observability_signoz_configuration.results
+         | map(attribute='checksum') | join | hash('sha256') }}
+    observability_signoz_clickhouse_configuration_hash: >-
+      {{ (
+          (observability_signoz_clickhouse_container_inspect.stdout | from_json)
+          | first | default({}, true)
+        ).get('Config', {}).get('Labels', {}).get('foundry.config-sha256', '') }}
+  when:
+    - observability_signoz_enabled_here
+    - observability_signoz_clickhouse_container_ids.stdout_lines | length == 1
+  no_log: true
+
+- name: Update the Dokploy SigNoz Compose service when its contract changed
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --silent
+      - --show-error
+      - --output
+      - /dev/null
+      - --write-out
+      - "%{http_code}"
+      - --request
+      - POST
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - --header
+      - "Content-Type: application/json"
+      - --data
+      - >-
+        {{ {'composeId': observability_signoz_compose_id, 'sourceType': 'raw', 'composeType': 'docker-compose', 'composeFile': observability_signoz_compose_file} | to_json }}
+      - "{{ infrastructure_services_dokploy_api_url }}/api/compose.update"
+  register: observability_signoz_compose_update
+  changed_when: true
+  failed_when: false
+  when:
+    - observability_signoz_enabled_here
+    - >-
+      observability_signoz_compose_create.changed | default(false)
+      or observability_signoz_configuration.changed | default(false)
+      or (
+        observability_signoz_clickhouse_configuration_hash | default('')
+        != observability_signoz_expected_configuration_hash | default('')
+      )
+      or observability_signoz_compose.get('composeFile', '') != observability_signoz_compose_file
+      or observability_signoz_compose.get('applicationStatus', 'idle') not in ['running', 'done']
+      or observability_signoz_existing_containers | length == 0
+  no_log: true
+
+- name: Require Dokploy to accept the SigNoz Compose update
+  ansible.builtin.assert:
+    that:
+      - observability_signoz_compose_update.rc | default(0) == 0
+      - observability_signoz_compose_update.stdout | default('200') == '200'
+    fail_msg: >-
+      Dokploy rejected the SigNoz Compose update (curl rc
+      {{ observability_signoz_compose_update.rc | default('not run') }}, HTTP
+      {{ observability_signoz_compose_update.stdout | default('no response', true) }}).
+  when:
+    - observability_signoz_enabled_here
+    - observability_signoz_compose_update is defined
+
+- name: Deploy the Dokploy SigNoz Compose service
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --silent
+      - --show-error
+      - --output
+      - /dev/null
+      - --write-out
+      - "%{http_code}"
+      - --request
+      - POST
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - --header
+      - "Content-Type: application/json"
+      - --data
+      - "{{ {'composeId': observability_signoz_compose_id} | to_json }}"
+      - "{{ infrastructure_services_dokploy_api_url }}/api/compose.deploy"
+  register: observability_signoz_compose_deploy
+  changed_when: true
+  failed_when: false
+  when:
+    - observability_signoz_enabled_here
+    - >-
+      observability_signoz_compose_create.changed | default(false)
+      or observability_signoz_configuration.changed | default(false)
+      or (
+        observability_signoz_clickhouse_configuration_hash | default('')
+        != observability_signoz_expected_configuration_hash | default('')
+      )
+      or observability_signoz_compose_update.changed | default(false)
+      or observability_signoz_compose.get('applicationStatus', 'idle') not in ['running', 'done']
+      or observability_signoz_existing_containers | length == 0
+  no_log: true
+
+- name: Require Dokploy to accept the SigNoz Compose deployment
+  ansible.builtin.assert:
+    that:
+      - observability_signoz_compose_deploy.rc | default(0) == 0
+      - observability_signoz_compose_deploy.stdout | default('200') == '200'
+    fail_msg: >-
+      Dokploy rejected the SigNoz Compose deployment (curl rc
+      {{ observability_signoz_compose_deploy.rc | default('not run') }}, HTTP
+      {{ observability_signoz_compose_deploy.stdout | default('no response', true) }}).
+  when:
+    - observability_signoz_enabled_here
+    - observability_signoz_compose_deploy is defined
+
+- name: Read Dokploy deployment history for SigNoz
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - "{{ infrastructure_services_dokploy_api_url }}/api/deployment.allByCompose?composeId={{ observability_signoz_compose_id }}"
+  register: observability_signoz_deployments_raw
+  changed_when: false
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Resolve the latest Dokploy SigNoz deployment
+  ansible.builtin.set_fact:
+    observability_signoz_deployment_items: >-
+      {{ (
+          observability_signoz_deployments_raw.stdout | from_json
+          if observability_signoz_deployments_raw.stdout | from_json is sequence
+             and observability_signoz_deployments_raw.stdout | from_json is not string
+             and observability_signoz_deployments_raw.stdout | from_json is not mapping
+          else (observability_signoz_deployments_raw.stdout | from_json).get(
+            'data',
+            (observability_signoz_deployments_raw.stdout | from_json).get(
+              'items',
+              (observability_signoz_deployments_raw.stdout | from_json).get('results', [])
+            )
+          )
+        ) | select('mapping') | list }}
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Resolve the latest Dokploy SigNoz deployment identity
+  ansible.builtin.set_fact:
+    observability_signoz_latest_deployment: >-
+      {{ observability_signoz_deployment_items | first | default({}, true) }}
+    observability_signoz_latest_deployment_id: >-
+      {{ (
+          observability_signoz_deployment_items | first | default({}, true)
+        ).get('deploymentId', (
+          observability_signoz_deployment_items | first | default({}, true)
+        ).get('id', '')) }}
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Read the latest Dokploy SigNoz deployment log
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - "{{ infrastructure_services_dokploy_api_url }}/api/deployment.readLogs?deploymentId={{ observability_signoz_latest_deployment_id }}&tail=200"
+  register: observability_signoz_deployment_log_raw
+  changed_when: false
+  when:
+    - observability_signoz_enabled_here
+    - observability_signoz_latest_deployment_id | length > 0
+  no_log: true
+
+- name: Persist the latest Dokploy SigNoz deployment log for root-only diagnosis
+  ansible.builtin.copy:
+    dest: "{{ observability_signoz_state_directory }}/latest-deployment.log"
+    content: "{{ observability_signoz_deployment_log_raw.stdout }}\n"
+    owner: root
+    group: root
+    mode: "0600"
+  when:
+    - observability_signoz_enabled_here
+    - observability_signoz_latest_deployment_id | length > 0
+  no_log: true
+
+- name: Wait for the local self-hosted SigNoz OTLP endpoint
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ observability_signoz_otlp_grpc_port }}"
+    state: started
+    timeout: 300
+  register: observability_signoz_otlp_wait
+  failed_when: false
+  when: observability_signoz_enabled_here
+
+- name: Inspect local SigNoz container states after deployment
+  ansible.builtin.command:
+    argv:
+      - docker
+      - ps
+      - --all
+      - --format
+      - "{{ '{{.Names}} {{.Status}} {{.Labels}}' }}"
+  register: observability_signoz_container_states
+  changed_when: false
+  failed_when: false
+  when: observability_signoz_enabled_here
+
+- name: Resolve local SigNoz container state summary
+  ansible.builtin.set_fact:
+    observability_signoz_container_state_lines: >-
+      {{ observability_signoz_container_states.stdout_lines
+         | select('search', 'signoz') | list }}
+  when: observability_signoz_enabled_here
+
+- name: Require the self-hosted SigNoz OTLP endpoint
+  ansible.builtin.assert:
+    that:
+      - not (observability_signoz_otlp_wait.failed | default(false))
+    fail_msg: >-
+      SigNoz did not expose its local OTLP endpoint on
+      127.0.0.1:{{ observability_signoz_otlp_grpc_port }} within five minutes.
+      Containers: {{ observability_signoz_container_state_lines | default(['none found'], true) | join('; ') }}.
+      Inspect the failed container with `docker logs <container>`; an exited
+      process (especially exit 137) indicates the VM ran out of memory.
+  when: observability_signoz_enabled_here
+
+- name: Wait for the self-hosted SigNoz dashboard container
+  ansible.builtin.command:
+    argv:
+      - docker
+      - ps
+      - --all
+      - --filter
+      - label=com.docker.compose.service=signoz-ui
+      - --format
+      - "{{ '{{.ID}}' }}"
+  register: observability_signoz_ui_container_lookup
+  retries: 30
+  delay: 5
+  until: observability_signoz_ui_container_lookup.stdout_lines | length == 1
+  changed_when: false
+  failed_when: false
+  when: observability_signoz_enabled_here
+
+- name: Require exactly one self-hosted SigNoz dashboard container
+  ansible.builtin.assert:
+    that:
+      - observability_signoz_ui_container_lookup.stdout_lines | length == 1
+    fail_msg: >-
+      Dokploy did not create exactly one SigNoz dashboard container. Found:
+      {{ observability_signoz_ui_container_lookup.stdout_lines | default(['none'], true) | join('; ') }}.
+      Other SigNoz containers:
+      {{ observability_signoz_container_state_lines | default(['none found'], true) | join('; ') }}.
+      Latest Dokploy deployment: {{ observability_signoz_latest_deployment_id | default('none', true) }}
+      (status {{ observability_signoz_latest_deployment.get('status', observability_signoz_latest_deployment.get('deploymentStatus', 'unknown')) | default('unknown', true) }}).
+      Its root-only log is
+      {{ observability_signoz_state_directory }}/latest-deployment.log.
+  when: observability_signoz_enabled_here
+
+- name: Inspect the self-hosted SigNoz dashboard container state
+  ansible.builtin.command:
+    argv:
+      - docker
+      - container
+      - inspect
+      - --format
+      - "{{ '{{.State.Status}} {{.State.ExitCode}} {{.State.Error}}' }}"
+      - "{{ observability_signoz_ui_container_lookup.stdout }}"
+  register: observability_signoz_ui_container_state
+  retries: 30
+  delay: 5
+  until: observability_signoz_ui_container_state.stdout.startswith('running ')
+  changed_when: false
+  failed_when: false
+  when: observability_signoz_enabled_here
+
+- name: Require the self-hosted SigNoz dashboard container to be running
+  ansible.builtin.assert:
+    that:
+      - observability_signoz_ui_container_state.stdout.startswith('running ')
+    fail_msg: >-
+      The SigNoz dashboard container is not running:
+      {{ observability_signoz_ui_container_state.stdout | default('container not found', true) }}.
+      Inspect its logs with `docker logs {{ observability_signoz_ui_container_lookup.stdout | default('signoz-ui', true) }}`.
+  when: observability_signoz_enabled_here
+
+- name: Resolve the internal SigNoz dashboard address
+  ansible.builtin.command:
+    argv:
+      - docker
+      - container
+      - inspect
+      - --format
+      - "{{ '{{with index .NetworkSettings.Networks \"' + observability_signoz_internal_network + '\"}}{{.IPAddress}}{{end}}' }}"
+      - "{{ observability_signoz_ui_container_lookup.stdout }}"
+  register: observability_signoz_ui_address
+  changed_when: false
+  when: observability_signoz_enabled_here
+
+- name: Require an internal SigNoz dashboard address
+  ansible.builtin.assert:
+    that:
+      - observability_signoz_ui_address.stdout | length > 0
+    fail_msg: >-
+      The running SigNoz dashboard is not attached to its internal Foundry
+      network '{{ observability_signoz_internal_network }}'.
+  when: observability_signoz_enabled_here
+
+- name: Validate self-hosted SigNoz dashboard health
+  ansible.builtin.uri:
+    url: "http://{{ observability_signoz_ui_address.stdout }}:8080/api/v1/health"
+    method: GET
+    status_code: 200
+  register: observability_signoz_health
+  retries: 30
+  delay: 5
+  until: observability_signoz_health.status == 200
+  changed_when: false
+  when: observability_signoz_enabled_here

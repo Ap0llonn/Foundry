@@ -26,7 +26,18 @@
       {{ database_access_defaults | combine(database_access | default({}), recursive=true) }}
     infrastructure_services_environment_names: >-
       {{ environments | default([]) | map(attribute='name') | list }}
+    foundry_dokploy_node_role_resolved: "{{ foundry_dokploy_node_role | default('manager') }}"
   no_log: true
+
+- name: Validate the inventory Dokploy node role
+  ansible.builtin.assert:
+    that:
+      - foundry_dokploy_node_role_resolved in ['manager', 'remote_server']
+    fail_msg: foundry_dokploy_node_role must be manager or remote_server.
+
+- name: Resolve whether this host owns the Dokploy control plane
+  ansible.builtin.set_fact:
+    foundry_dokploy_is_manager: "{{ foundry_dokploy_node_role_resolved == 'manager' }}"
 
 - name: Validate known option names
   ansible.builtin.assert:
@@ -35,8 +46,18 @@
       - ((infrastructure_services | default({})).get('minio', {})).keys() | difference(infrastructure_services_allowed_minio_keys) | length == 0
       - (services | default({})).keys() | difference(infrastructure_services_allowed_services_keys) | length == 0
       - ((services | default({})).get('postgres', {})).keys() | difference(infrastructure_services_allowed_postgres_keys) | length == 0
+      - ((services | default({})).get('postgres', {}).get('backup', {})) is mapping
+      - >-
+        ((services | default({})).get('postgres', {}).get('backup', {})).keys()
+        | difference(infrastructure_services_allowed_postgres_backup_keys)
+        | length == 0
       - ((services | default({})).get('redis', {})).keys() | difference(infrastructure_services_allowed_redis_keys) | length == 0
       - ((services | default({})).get('object_storage', {})).keys() | difference(infrastructure_services_allowed_object_storage_keys) | length == 0
+      - ((services | default({})).get('object_storage', {}).get('console', {})) is mapping
+      - >-
+        ((services | default({})).get('object_storage', {}).get('console', {})).keys()
+        | difference(infrastructure_services_allowed_object_storage_console_keys)
+        | length == 0
       - (platform | default({})).keys() | difference(infrastructure_services_allowed_platform_keys) | length == 0
       - ((platform | default({})).get('swarm', {})).keys() | difference(infrastructure_services_allowed_swarm_keys) | length == 0
       - ((platform | default({})).get('traefik', {})).keys() | difference(infrastructure_services_allowed_traefik_keys) | length == 0
@@ -46,6 +67,12 @@
         ((platform | default({})).get('dokploy', {}).get('bootstrap', {})).keys()
         | difference(infrastructure_services_allowed_dokploy_bootstrap_keys)
         | length == 0
+      - ((platform | default({})).get('dokploy', {}).get('remote_servers', [])) is sequence
+      - ((platform | default({})).get('dokploy', {}).get('remote_servers', [])) is not string
+      - >-
+        ((platform | default({})).get('dokploy', {}).get('remote_servers', [])
+        | select('mapping') | list | length)
+        == ((platform | default({})).get('dokploy', {}).get('remote_servers', []) | length)
       - (domains | default({})).keys() | difference(infrastructure_services_allowed_domain_keys) | length == 0
       - (domains | default({})).get('cloudflare', {}) is mapping
       - >-
@@ -72,10 +99,30 @@
     that:
       - project.name | default('') is string
       - project.name | default('') is match(infrastructure_services_identifier_pattern)
+      - project.resource_prefix | default('foundry') is string
+      - project.resource_prefix | default('foundry') | length == 0 or project.resource_prefix | default('foundry') is match(infrastructure_services_resource_prefix_pattern)
       - infrastructure_services_environment_names | length > 0
       - infrastructure_services_environment_names | unique | length == infrastructure_services_environment_names | length
       - infrastructure_services_environment_names | select('match', infrastructure_services_environment_pattern) | list | length == infrastructure_services_environment_names | length
     fail_msg: Project and environment names must be unique lowercase Foundry identifiers.
+
+- name: Validate Dokploy Remote Server declarations
+  ansible.builtin.assert:
+    that:
+      - item.keys() | difference(infrastructure_services_allowed_dokploy_remote_server_keys) | length == 0
+      - item.name | default('') is match(infrastructure_services_identifier_pattern)
+      - item.host | default('') is string
+      - item.host | default('') in groups['all']
+      - item.host != inventory_hostname
+      - item.port | default(22) | int >= 1
+      - item.port | default(22) | int <= 65535
+      - item.username | default('root') == 'root'
+      - item.description | default('') is string
+      - item.docker_cleanup | default(true) is boolean
+    fail_msg: Dokploy remote_servers entries must name a different inventory host and use root SSH.
+  loop: "{{ foundry_platform_resolved.dokploy.remote_servers }}"
+  loop_control:
+    label: "{{ item.name | default('unnamed') }}"
 
 - name: Validate service configuration types
   ansible.builtin.assert:
@@ -93,6 +140,12 @@
       - foundry_services_resolved.object_storage.environments is sequence
       - foundry_services_resolved.object_storage.environments is not string
       - foundry_services_resolved.postgres.credentials is mapping
+      - foundry_services_resolved.postgres.backup is mapping
+      - foundry_services_resolved.postgres.backup.enabled is boolean
+      - foundry_services_resolved.postgres.backup.schedule is string
+      - foundry_services_resolved.postgres.backup.schedule is match('^\\S+(?:\\s+\\S+){4}$')
+      - foundry_services_resolved.postgres.backup.keep_latest is number
+      - foundry_services_resolved.postgres.backup.keep_latest | int >= 1
       - foundry_services_resolved.redis.credentials is mapping
       - foundry_services_resolved.object_storage.credentials is mapping
       - foundry_services_resolved.postgres.major | int == 17
@@ -102,6 +155,20 @@
       - foundry_services_resolved.postgres.resources.keys() | difference(infrastructure_services_allowed_resource_keys) | length == 0
       - foundry_services_resolved.redis.resources.keys() | difference(infrastructure_services_allowed_resource_keys) | length == 0
       - foundry_services_resolved.object_storage.provider == 'minio'
+      - foundry_services_resolved.object_storage.credentials.keys() | difference(['root_user', 'root_password']) | length == 0
+      - foundry_services_resolved.object_storage.credentials.get('root_user', 'foundryadmin') is string
+      - foundry_services_resolved.object_storage.credentials.get('root_user', 'foundryadmin') is match('^[a-zA-Z0-9][a-zA-Z0-9_-]{2,62}$')
+      - foundry_services_resolved.object_storage.credentials.get('root_password', '') is string
+      - foundry_services_resolved.object_storage.credentials.get('root_password', '') | length == 0 or foundry_services_resolved.object_storage.credentials.get('root_password', '') | length >= 16
+      - foundry_services_resolved.object_storage.allow_root_filesystem is boolean
+      - foundry_services_resolved.object_storage.domain_name is string
+      - foundry_services_resolved.object_storage.region is string
+      - foundry_services_resolved.object_storage.region is match('^[a-z]{2}-[a-z]+-[0-9]+$')
+      - foundry_services_resolved.object_storage.console is mapping
+      - foundry_services_resolved.object_storage.console.enabled is boolean
+      - foundry_services_resolved.object_storage.console.tailscale_port is number
+      - foundry_services_resolved.object_storage.console.tailscale_port | int >= 1024
+      - foundry_services_resolved.object_storage.console.tailscale_port | int <= 65535
       - foundry_services_resolved.object_storage.run_as_uid is number
       - foundry_services_resolved.object_storage.run_as_uid | int >= 1
       - foundry_services_resolved.object_storage.run_as_gid is number
@@ -189,17 +256,12 @@
   loop: "{{ foundry_services_resolved.redis.credentials | dict2items }}"
   no_log: true
 
-- name: Validate object-storage credential overrides
+- name: Validate shared object-storage root credentials
   ansible.builtin.assert:
     that:
-      - item.value is mapping
-      - item.value.keys() | difference(['root_user', 'root_password']) | length == 0
-      - item.value.get('root_user', 'foundryadmin') is string
-      - item.value.get('root_user', 'foundryadmin') | length >= 3
-      - item.value.get('root_password', '') is string
-      - item.value.get('root_password', '') | length == 0 or item.value.get('root_password', '') | length >= 16
-    fail_msg: Object-storage credential overrides accept only root_user/root_password Vault values.
-  loop: "{{ foundry_services_resolved.object_storage.credentials | dict2items }}"
+      - foundry_services_resolved.object_storage.credentials.get('root_user', 'foundryadmin') | length >= 3
+      - foundry_services_resolved.object_storage.credentials.get('root_password', '') | length == 0 or foundry_services_resolved.object_storage.credentials.get('root_password', '') | length >= 16
+    fail_msg: Object storage accepts only an optional shared root_user/root_password pair.
   no_log: true
 
 - name: Resolve implicit service environment selections
@@ -223,7 +285,14 @@
       - infrastructure_services_object_storage_environments | difference(infrastructure_services_environment_names) | length == 0
       - foundry_services_resolved.postgres.credentials.keys() | difference(infrastructure_services_postgres_environments) | length == 0
       - foundry_services_resolved.redis.credentials.keys() | difference(infrastructure_services_redis_environments) | length == 0
-      - foundry_services_resolved.object_storage.credentials.keys() | difference(infrastructure_services_object_storage_environments) | length == 0
+      - >-
+        not foundry_services_resolved.postgres.backup.enabled
+        or (
+          foundry_services_resolved.object_storage.enabled
+          and infrastructure_services_postgres_environments
+              | difference(infrastructure_services_object_storage_environments)
+              | length == 0
+        )
     fail_msg: A service references an unknown/duplicate environment or credential key.
   no_log: true
 
@@ -256,6 +325,8 @@
       - foundry_platform_resolved.traefik.tls is mapping
       - foundry_platform_resolved.traefik.tls.keys() | difference(infrastructure_services_allowed_tls_keys) | length == 0
       - foundry_platform_resolved.traefik.tls.enabled is boolean
+      - foundry_platform_resolved.traefik.tls.mode is string
+      - foundry_platform_resolved.traefik.tls.mode in ['public_acme', 'cloudflare_origin']
       - foundry_platform_resolved.dokploy.credentials is mapping
       - foundry_platform_resolved.dokploy.credentials.keys() | difference(['postgres_password', 'auth_secret']) | length == 0
       - foundry_platform_resolved.dokploy.secret_version is match('^[a-z0-9][a-z0-9.-]{0,31}$')
@@ -302,7 +373,19 @@
       - not foundry_platform_resolved.dokploy.enabled or foundry_platform_resolved.dokploy.image is match(infrastructure_services_immutable_image_pattern)
       - not foundry_platform_resolved.dokploy.enabled or foundry_platform_resolved.dokploy.postgres_image is match(infrastructure_services_immutable_image_pattern)
       - not foundry_platform_resolved.traefik.tls.enabled or foundry_domains_resolved.base | length > 0
-      - not foundry_platform_resolved.traefik.tls.enabled or foundry_platform_resolved.traefik.tls.email | length > 3
+      - >-
+        not foundry_platform_resolved.traefik.tls.enabled
+        or foundry_platform_resolved.traefik.tls.mode != 'public_acme'
+        or foundry_platform_resolved.traefik.tls.email | length > 3
+      - >-
+        not foundry_platform_resolved.traefik.tls.enabled
+        or foundry_platform_resolved.traefik.tls.mode != 'cloudflare_origin'
+        or (
+          foundry_domains_resolved.cloudflare.enabled
+          and foundry_domains_resolved.cloudflare.proxied
+          and foundry_domains_resolved.cloudflare.security.enabled
+          and foundry_domains_resolved.cloudflare.security.ssl_mode == 'strict'
+        )
       - >-
         not foundry_platform_resolved.dokploy.enabled
         or ((management | default({})).get('restrict_by_cidr', false) | bool
@@ -331,6 +414,50 @@
       services.postgres is managed through the Dokploy API and therefore
       requires platform.dokploy.enabled=true.
 
+- name: Resolve shared MinIO hostname
+  ansible.builtin.set_fact:
+    infrastructure_services_object_storage_hostname: >-
+      {{
+        foundry_services_resolved.object_storage.domain_name
+        if foundry_services_resolved.object_storage.domain_name | length > 0
+        else 'minio.' + foundry_domains_resolved.base
+      }}
+  when: foundry_services_resolved.object_storage.enabled
+
+- name: Validate shared MinIO disk, domain, and Dokploy dependencies
+  ansible.builtin.assert:
+    that:
+      - not foundry_services_resolved.object_storage.enabled or foundry_platform_resolved.dokploy.enabled
+      - >-
+        not foundry_services_resolved.object_storage.enabled
+        or foundry_platform_resolved.traefik.enabled
+        or foundry_platform_resolved.dokploy.enabled
+      - not foundry_services_resolved.object_storage.enabled or foundry_platform_resolved.traefik.tls.enabled
+      - not foundry_services_resolved.object_storage.enabled or foundry_domains_resolved.base | length > 0
+      - not foundry_services_resolved.object_storage.enabled or foundry_services_resolved.object_storage.data_root | length > 0
+      - >-
+        not foundry_services_resolved.object_storage.enabled
+        or foundry_services_resolved.object_storage.allow_root_filesystem
+        or ((os | default({})).get('mounts', [])
+            | selectattr('path', 'equalto', foundry_services_resolved.object_storage.data_root)
+            | list | length == 1)
+      - >-
+        not foundry_services_resolved.object_storage.enabled
+        or infrastructure_services_object_storage_hostname is match(infrastructure_services_domain_pattern)
+      - >-
+        not foundry_services_resolved.object_storage.enabled
+        or infrastructure_services_object_storage_hostname.endswith('.' + foundry_domains_resolved.base)
+      - >-
+        not (foundry_services_resolved.object_storage.enabled
+             and foundry_services_resolved.object_storage.console.enabled)
+        or (foundry_database_access_resolved.enabled
+            and foundry_database_access_resolved.mode == 'tailscale')
+    fail_msg: >-
+      Shared MinIO requires Dokploy, TLS-enabled Traefik, a hostname inside
+      domains.base, and either a dedicated data_root declared in os.mounts or
+      an explicit allow_root_filesystem opt-in. Its private console requires
+      database_access.mode=tailscale.
+
 - name: Validate optional Dokploy Vault secret lengths
   ansible.builtin.assert:
     that:
@@ -343,14 +470,15 @@
 - name: Resolve effective platform dependencies
   ansible.builtin.set_fact:
     infrastructure_services_swarm_enabled: >-
-      {{ foundry_platform_resolved.swarm.enabled or foundry_platform_resolved.dokploy.enabled }}
+      {{ foundry_dokploy_is_manager and (foundry_platform_resolved.swarm.enabled or foundry_platform_resolved.dokploy.enabled) }}
     infrastructure_services_traefik_enabled: >-
-      {{ foundry_platform_resolved.traefik.enabled or foundry_platform_resolved.dokploy.enabled }}
+      {{ foundry_dokploy_is_manager and (foundry_platform_resolved.traefik.enabled or foundry_platform_resolved.dokploy.enabled) }}
     infrastructure_services_domain_enabled: "{{ foundry_domains_resolved.base | length > 0 }}"
     infrastructure_services_cloudflare_proxy_enabled: false
     infrastructure_services_cloudflare_origin_cidrs: []
     infrastructure_services_any_enabled: >-
       {{
+        foundry_dokploy_is_manager and (
         foundry_services_resolved.postgres.enabled
         or foundry_services_resolved.redis.enabled
         or foundry_services_resolved.object_storage.enabled
@@ -358,7 +486,7 @@
         or foundry_platform_resolved.traefik.enabled
         or foundry_platform_resolved.dokploy.enabled
         or foundry_platform_resolved.swarm.enabled
-        or foundry_database_access_resolved.enabled
+        or foundry_database_access_resolved.enabled)
       }}
 
 - name: Validate required host exposure is declared before Security convergence
@@ -439,42 +567,3 @@
     that:
       - infrastructure_services_resolved.minio.instances | map(attribute='environment') | unique | length == infrastructure_services_resolved.minio.instances | length
     fail_msg: Only one MinIO instance may be declared per environment.
-- name: Initialize normalized object-storage instances
-  ansible.builtin.set_fact:
-    infrastructure_services_object_storage_instances: []
-  when: foundry_services_resolved.object_storage.enabled
-
-- name: Normalize object-storage environments for the existing MinIO engine
-  ansible.builtin.set_fact:
-    infrastructure_services_object_storage_instances: >-
-      {{
-        infrastructure_services_object_storage_instances + [{
-          'environment': item,
-          'image': foundry_services_resolved.object_storage.image,
-          'data_path': (
-            foundry_services_resolved.object_storage.data_root + '/' + project.name + '/' + item
-            if foundry_services_resolved.object_storage.data_root | length > 0 else ''
-          ),
-          'root_user': foundry_services_resolved.object_storage.credentials.get(item, {}).get('root_user', 'foundryadmin'),
-          'root_password': foundry_services_resolved.object_storage.credentials.get(item, {}).get('root_password', '')
-        }]
-      }}
-  loop: "{{ infrastructure_services_object_storage_environments }}"
-  when: foundry_services_resolved.object_storage.enabled
-  no_log: true
-
-- name: Activate normalized object-storage configuration
-  ansible.builtin.set_fact:
-    infrastructure_services_resolved: >-
-      {{
-        infrastructure_services_resolved | combine({
-          'minio': {
-            'enabled': true,
-            'run_as_uid': foundry_services_resolved.object_storage.run_as_uid,
-            'run_as_gid': foundry_services_resolved.object_storage.run_as_gid,
-            'instances': infrastructure_services_object_storage_instances
-          }
-        }, recursive=true)
-      }}
-  when: foundry_services_resolved.object_storage.enabled
-  no_log: true

@@ -1,0 +1,19 @@
+---
+- name: Resolve per-environment MinIO contracts
+  ansible.builtin.import_tasks: resolve.yml
+
+- name: Prepare per-environment MinIO state and credentials
+  ansible.builtin.import_tasks: prepare.yml
+
+- name: Reconcile MinIO Compose services through Dokploy
+  ansible.builtin.import_tasks: dokploy_compose.yml
+
+- name: Converge loopback-only MinIO Console proxies
+  ansible.builtin.import_tasks: console_proxies.yml
+  when: foundry_services_resolved.object_storage.console.enabled
+
+- name: Create isolated S3 buckets and MinIO users
+  ansible.builtin.import_tasks: buckets.yml
+
+- name: Validate per-environment MinIO S3 contracts
+  ansible.builtin.import_tasks: validate.yml

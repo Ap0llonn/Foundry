@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<clickhouse>
+  <!--
+    SigNoz migrations create ReplicatedMergeTree tables whose ZooKeeper paths
+    reference these two ClickHouse macros.  This deployment has one shard and
+    one replica, but the macros are still mandatory for schema bootstrap.
+  -->
+  <macros>
+    <shard>01</shard>
+    <replica>signoz-clickhouse-01</replica>
+  </macros>
+  <zookeeper>
+    <node index="1">
+      <host>signoz-zookeeper</host>
+      <port>2181</port>
+    </node>
+  </zookeeper>
+  <remote_servers>
+    <cluster>
+      <shard>
+        <replica>
+          <host>signoz-clickhouse</host>
+          <port>9000</port>
+        </replica>
+      </shard>
+    </cluster>
+  </remote_servers>
+</clickhouse>

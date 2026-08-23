@@ -3,6 +3,17 @@
 # Ce fichier orchestre seulement les sous-étapes. Chaque responsabilité est
 # implémentée dans un fichier dédié afin de rester testable et remplaçable.
 
+- name: 2.0 Resolve grouped OS configuration
+  ansible.builtin.import_tasks: 00_resolve_config.yml
+  tags:
+    - always
+    - os_base
+    - os_validation
+    - os_bootstrap
+    - os_security_patching
+    - os_full_maintenance
+    - os_reboot
+
 - name: 2.1 OS validation
   ansible.builtin.import_tasks: 01_os_validation.yml
   tags:

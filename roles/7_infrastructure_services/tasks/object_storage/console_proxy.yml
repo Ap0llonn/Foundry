@@ -1,0 +1,87 @@
+---
+- name: Inspect the MinIO Console loopback proxy
+  ansible.builtin.command:
+    argv: [docker, container, inspect, "{{ infrastructure_services_minio_console_proxy_container_name }}"]
+  register: infrastructure_services_object_storage_console_proxy_inspect
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Refuse an unowned MinIO Console proxy collision
+  ansible.builtin.assert:
+    that:
+      - >-
+        infrastructure_services_object_storage_console_proxy_inspect.rc != 0
+        or (
+          ((infrastructure_services_object_storage_console_proxy_inspect.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.managed') == 'true'
+          and ((infrastructure_services_object_storage_console_proxy_inspect.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.project') == project.name
+          and ((infrastructure_services_object_storage_console_proxy_inspect.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.resource') == 'object-storage-console-proxy'
+        )
+    fail_msg: A same-name MinIO Console proxy is not owned by this Foundry project.
+  no_log: true
+
+- name: Resolve MinIO Console proxy reconciliation
+  ansible.builtin.set_fact:
+    infrastructure_services_object_storage_console_proxy_hash: >-
+      {{ {
+        'image': infrastructure_services_database_access_proxy_image,
+        'network': foundry_platform_resolved.traefik.ingress_network,
+        'port': foundry_services_resolved.object_storage.console.tailscale_port
+      } | to_json | hash('sha256') }}
+    infrastructure_services_object_storage_console_proxy_recreate: >-
+      {{
+        infrastructure_services_object_storage_console_proxy_inspect.rc == 0
+        and ((infrastructure_services_object_storage_console_proxy_inspect.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.config-sha256')
+            != ({
+              'image': infrastructure_services_database_access_proxy_image,
+              'network': foundry_platform_resolved.traefik.ingress_network,
+              'port': foundry_services_resolved.object_storage.console.tailscale_port
+            } | to_json | hash('sha256'))
+      }}
+  no_log: true
+
+- name: Recreate drifted MinIO Console loopback proxy
+  ansible.builtin.command:
+    argv: [docker, container, rm, --force, "{{ infrastructure_services_minio_console_proxy_container_name }}"]
+  when: infrastructure_services_object_storage_console_proxy_recreate
+  no_log: true
+
+- name: Create the MinIO Console loopback proxy
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --detach
+      - --name
+      - "{{ infrastructure_services_minio_console_proxy_container_name }}"
+      - --restart
+      - unless-stopped
+      - --network
+      - "{{ foundry_platform_resolved.traefik.ingress_network }}"
+      - --publish
+      - "127.0.0.1:{{ foundry_services_resolved.object_storage.console.tailscale_port }}:9001"
+      - --label
+      - foundry.managed=true
+      - --label
+      - "foundry.project={{ project.name }}"
+      - --label
+      - foundry.resource=object-storage-console-proxy
+      - --label
+      - "foundry.config-sha256={{ infrastructure_services_object_storage_console_proxy_hash }}"
+      - "{{ infrastructure_services_database_access_proxy_image }}"
+      - TCP-LISTEN:9001,fork,reuseaddr,bind=0.0.0.0
+      - TCP:minio:9001
+  when: >-
+    infrastructure_services_object_storage_console_proxy_inspect.rc != 0
+    or infrastructure_services_object_storage_console_proxy_recreate
+  no_log: true
+
+- name: Start the existing MinIO Console loopback proxy
+  ansible.builtin.command:
+    argv: [docker, container, start, "{{ infrastructure_services_minio_console_proxy_container_name }}"]
+  when:
+    - infrastructure_services_object_storage_console_proxy_inspect.rc == 0
+    - not infrastructure_services_object_storage_console_proxy_recreate
+    - not (infrastructure_services_object_storage_console_proxy_inspect.stdout | from_json | first).State.Running
+  no_log: true

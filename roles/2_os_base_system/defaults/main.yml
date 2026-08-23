@@ -1,10 +1,38 @@
 ---
-# Foundry currently supports only the end-to-end combinations below. Debian is
-# intentionally excluded until the security role has a Debian firewall path.
+# Foundry supports only the end-to-end combinations below. Patch releases are
+# accepted for Debian 12 as long as the release remains Bookworm.
 os_base_supported_platforms:
   - distribution: Ubuntu
     versions: ["26.04"]
+    releases: [resolute]
     architectures: [x86_64]
+  - distribution: Debian
+    versions: ["12"]
+    releases: [bookworm]
+    allow_patch_versions: true
+    architectures: [x86_64]
+
+# Public `config.yml` shape. The role keeps using os_base_* internally so its
+# task files remain stable while users get a grouped `os:` configuration.
+os_config_defaults:
+  operation_mode: bootstrap
+  mounts: []
+  maintenance:
+    approved: false
+    window: ""
+    autoremove: false
+    removals_approved: false
+    autoclean: false
+  reboot:
+    enabled: false
+    approved: false
+    only_if_required: true
+    precheck_commands: []
+    postcheck_commands: []
+
+os_config_allowed_keys: [operation_mode, mounts, maintenance, reboot]
+os_config_allowed_maintenance_keys: [approved, window, autoremove, removals_approved, autoclean]
+os_config_allowed_reboot_keys: [enabled, approved, only_if_required, precheck_commands, postcheck_commands]
 
 # 2.2 - Package lifecycle. Ordinary convergence defaults to bootstrap and never
 # performs a broad upgrade or autoremove. Broad maintenance requires both an
@@ -43,14 +71,43 @@ os_base_apt_repositories: []
 #   signed_by: /usr/share/keyrings/example-archive-keyring.gpg
 #   state: present
 
-# Optional Foundry-owned Ubuntu mirror definition. It is opt-in because taking
-# ownership disables Ubuntu's vendor source files.
+# Optional Foundry-owned distribution mirror definition. It is opt-in because
+# taking ownership disables the vendor source files for the active platform.
 os_base_apt_manage_distribution_sources: false
-os_base_apt_mirror: http://archive.ubuntu.com/ubuntu
-os_base_apt_ports_mirror: http://ports.ubuntu.com/ubuntu-ports
-os_base_apt_security_mirror: http://security.ubuntu.com/ubuntu
-os_base_apt_components: [main, restricted, universe, multiverse]
-os_base_apt_distribution_keyring: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+os_base_apt_mirror: >-
+  {{
+    'http://deb.debian.org/debian'
+    if ansible_facts.get('distribution', '') == 'Debian'
+    else 'http://archive.ubuntu.com/ubuntu'
+  }}
+os_base_apt_ports_mirror: >-
+  {{
+    'http://deb.debian.org/debian'
+    if ansible_facts.get('distribution', '') == 'Debian'
+    else 'http://ports.ubuntu.com/ubuntu-ports'
+  }}
+os_base_apt_security_mirror: >-
+  {{
+    'http://security.debian.org/debian-security'
+    if ansible_facts.get('distribution', '') == 'Debian'
+    else 'http://security.ubuntu.com/ubuntu'
+  }}
+os_base_apt_components: >-
+  {{
+    ['main', 'contrib', 'non-free', 'non-free-firmware']
+    if ansible_facts.get('distribution', '') == 'Debian'
+    else ['main', 'restricted', 'universe', 'multiverse']
+  }}
+os_base_apt_distribution_keyring: >-
+  {{
+    '/usr/share/keyrings/debian-archive-keyring.gpg'
+    if ansible_facts.get('distribution', '') == 'Debian'
+    else '/usr/share/keyrings/ubuntu-archive-keyring.gpg'
+  }}
+os_base_apt_distribution_source_filename: >-
+  {{ 'debian.sources' if ansible_facts.get('distribution', '') == 'Debian' else 'ubuntu.sources' }}
+os_base_apt_foundry_distribution_source_filename: >-
+  {{ 'foundry-debian.sources' if ansible_facts.get('distribution', '') == 'Debian' else 'foundry-ubuntu.sources' }}
 
 os_base_apt_proxy:
   # Proxy URLs may contain credentials. Supply them from Ansible Vault or an
@@ -63,7 +120,12 @@ os_base_apt_holds: []
 # Security-patching mode uses unattended-upgrade only with these approved
 # origin patterns. It does not enable periodic unattended upgrades.
 os_base_apt_security_origins:
-  - "origin=Ubuntu,codename=${distro_codename}-security,label=Ubuntu"
+  - >-
+    {{
+      'origin=Debian,codename=${distro_codename}-security,label=Debian-Security'
+      if ansible_facts.get('distribution', '') == 'Debian'
+      else 'origin=Ubuntu,codename=${distro_codename}-security,label=Ubuntu'
+    }}
 os_base_needrestart_mode: report
 os_base_allowed_needrestart_modes:
   - report
@@ -73,6 +135,10 @@ os_base_packages:
   - ca-certificates
   - curl
   - git
+  # Provides swapon on Debian and supports the filesystem/swap validation and
+  # controlled-reboot health gates on minimal images.
+  - mount
+  - util-linux
   - unzip
 os_base_package_control_packages:
   - needrestart
@@ -99,7 +165,7 @@ os_base_time_service: chrony
 os_base_time_own_all_sources: true
 os_base_time_sources:
   - type: pool
-    name: ntp.ubuntu.com
+    name: "{{ 'pool.ntp.org' if ansible_facts.get('distribution', '') == 'Debian' else 'ntp.ubuntu.com' }}"
     options: iburst maxsources 4
     nts: false
 os_base_time_conflicting_services:
@@ -107,8 +173,8 @@ os_base_time_conflicting_services:
 os_base_time_max_offset_seconds: 1.0
 os_base_time_sync_retries: 12
 os_base_time_sync_delay: 5
-# Ubuntu 26.04 provides /usr/bin/dig from this concrete package. Avoid the
-# dnsutils virtual/transitional name so package-fact validation is exact.
+# Avoid the dnsutils virtual/transitional name so package-fact validation is
+# exact on both supported distributions.
 os_base_dns_package: bind9-dnsutils
 
 # 2.6 - LANG is the global default. Individual LC_* categories are opt-in;

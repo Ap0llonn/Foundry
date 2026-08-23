@@ -7,4 +7,6 @@ galaxy_info:
   platforms:
     - name: Ubuntu
       versions: [resolute]
+    - name: Debian
+      versions: [bookworm]
 dependencies: []

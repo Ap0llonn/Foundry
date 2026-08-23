@@ -1,0 +1,48 @@
+---
+- name: Add the {{ infrastructure_services_object_storage_environment }} {{ infrastructure_services_object_storage_bucket_role.key }} bucket contract
+  ansible.builtin.set_fact:
+    infrastructure_services_object_storage_buckets: >-
+      {{ infrastructure_services_object_storage_buckets + [{
+        'contract_key': infrastructure_services_object_storage_environment + '-' + infrastructure_services_object_storage_bucket_role.key,
+        'environment': infrastructure_services_object_storage_environment,
+        'purpose': infrastructure_services_object_storage_bucket_role.key,
+        'public_read': infrastructure_services_object_storage_bucket_role.public_read,
+        'internal_endpoint': infrastructure_services_object_storage_instances[infrastructure_services_object_storage_environment].internal_endpoint,
+        'endpoint': infrastructure_services_object_storage_instances[infrastructure_services_object_storage_environment].endpoint,
+        'bucket': (
+          infrastructure_services_object_storage_name_prefix
+          + (project.name | truncate(25 - (infrastructure_services_object_storage_resource_prefix | length), true, ''))
+          + '-'
+          + (infrastructure_services_object_storage_environment | truncate(12, true, ''))
+          + '-'
+          + infrastructure_services_object_storage_bucket_role.suffix
+          + '-'
+          + ((project.name + '-' + infrastructure_services_object_storage_environment + '-' + infrastructure_services_object_storage_bucket_role.key) | hash('sha256') | truncate(8, true, ''))
+        ),
+        'access_key': (
+          'f'
+          + ((project.name + '-' + infrastructure_services_object_storage_environment + '-' + infrastructure_services_object_storage_bucket_role.key) | hash('sha256') | truncate(19, true, ''))
+        ),
+        'policy_name': (
+          infrastructure_services_object_storage_name_prefix
+          + ((project.name + '-' + infrastructure_services_object_storage_environment + '-' + infrastructure_services_object_storage_bucket_role.key) | hash('sha256') | truncate(20, true, ''))
+        ),
+        'destination_name': (
+          infrastructure_services_object_storage_name_prefix
+          + (project.name | truncate(25 - (infrastructure_services_object_storage_resource_prefix | length), true, ''))
+          + '-'
+          + (infrastructure_services_object_storage_environment | truncate(10, true, ''))
+          + '-'
+          + (infrastructure_services_object_storage_bucket_role.key | replace('_', '-') | truncate(12, true, ''))
+          + '-s3-'
+          + ((project.name + '-' + infrastructure_services_object_storage_environment + '-' + infrastructure_services_object_storage_bucket_role.key) | hash('sha256') | truncate(8, true, ''))
+        )
+      }] }}
+  vars:
+    # Keep this task self-contained: it is also safe when included directly by
+    # a focused Ansible tag run which bypasses the parent resolve task.
+    infrastructure_services_object_storage_resource_prefix: >-
+      {{ project.resource_prefix | default('foundry') }}
+    infrastructure_services_object_storage_name_prefix: >-
+      {{ (project.resource_prefix | default('foundry')) + '-'
+         if (project.resource_prefix | default('foundry')) | length > 0 else '' }}

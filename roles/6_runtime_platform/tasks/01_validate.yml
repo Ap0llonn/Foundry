@@ -71,17 +71,48 @@
     gather_subset: [min]
   when: runtime_resolved.docker.enabled | bool
 
+- name: Select the certified Docker platform contract
+  ansible.builtin.set_fact:
+    runtime_docker_matching_platforms: >-
+      {{
+        runtime_docker_supported_platforms
+        | selectattr('distribution', 'equalto', ansible_facts['distribution'])
+        | list
+      }}
+  when: runtime_resolved.docker.enabled | bool
+
 - name: Fail before mutation on an unsupported runtime platform
   ansible.builtin.assert:
     that:
-      - ansible_facts.distribution == 'Ubuntu'
-      - ansible_facts.distribution_version == '26.04'
-      - ansible_facts.distribution_release == runtime_docker_repository_suite
-      - ansible_facts.architecture == 'x86_64'
+      - runtime_docker_matching_platforms | length == 1
+      - >-
+        (
+          (ansible_facts['distribution_version'] | string)
+          in runtime_docker_matching_platforms[0].versions
+        )
+        or (
+          runtime_docker_matching_platforms[0].allow_patch_versions | default(false)
+          and (ansible_facts['distribution_version'] | string)
+              is match('^' + (runtime_docker_matching_platforms[0].versions[0] | string) + '[.]')
+        )
+      - >-
+        runtime_docker_matching_platforms[0].get('releases', []) | length == 0
+        or ansible_facts['distribution_release']
+           in runtime_docker_matching_platforms[0].releases
+      - ansible_facts.architecture in runtime_docker_matching_platforms[0].architectures
       - ansible_facts.pkg_mgr == 'apt'
     fail_msg: >-
-      Runtime V1 supports only Ubuntu 26.04 (resolute) on x86_64 with APT.
-      No Docker mutation was attempted.
+      Runtime V1 supports only the exact Docker platform contracts declared in
+      runtime_docker_supported_platforms. No Docker mutation was attempted.
+  when: runtime_resolved.docker.enabled | bool
+
+- name: Resolve the certified Docker repository and package contract
+  ansible.builtin.set_fact:
+    runtime_docker_platform: "{{ runtime_docker_matching_platforms[0] }}"
+    runtime_docker_packages: "{{ runtime_docker_matching_platforms[0].packages }}"
+    runtime_docker_repository_url: "{{ runtime_docker_matching_platforms[0].repository_url }}"
+    runtime_docker_repository_suite: "{{ runtime_docker_matching_platforms[0].repository_suite }}"
+    runtime_docker_key_url: "{{ runtime_docker_matching_platforms[0].key_url }}"
   when: runtime_resolved.docker.enabled | bool
 
 - name: Inspect an explicitly customized Docker data root before mutation

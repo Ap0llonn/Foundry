@@ -1,0 +1,53 @@
+---
+- name: Publish each shared MinIO bucket endpoint
+  ansible.builtin.set_fact:
+    foundry_resolved_services: >-
+      {{
+        (foundry_resolved_services | default({})) | combine({
+          item.environment: {
+            'object_storage': {
+              'provider': 'minio',
+              'endpoint': item.endpoint,
+              'internal_endpoint': item.internal_endpoint,
+              'region': foundry_services_resolved.object_storage.region,
+              'console_endpoint': (
+                'http://' + foundry_database_access_tailscale_ip + ':' + (infrastructure_services_object_storage_instances[item.environment].console_port | string)
+                if foundry_services_resolved.object_storage.console.enabled
+                else none
+              ),
+              'buckets': {
+                item.purpose: {
+                  'name': item.bucket,
+                  'public_read': item.public_read
+                }
+                | combine(
+                    {
+                      'dokploy_destination': infrastructure_services_dokploy_destination_contracts[item.contract_key].name,
+                      'dokploy_destination_id': infrastructure_services_dokploy_destination_contracts[item.contract_key].destination_id
+                    }
+                    if item.purpose == 'db_backups' else {}
+                  )
+              }
+            }
+          }
+        }, recursive=true)
+      }}
+    infrastructure_services_backup_targets: >-
+      {{
+        (infrastructure_services_backup_targets | default([]))
+        + ([{
+            'project': project.name,
+            'environment': item.environment,
+            'service': 'object_storage',
+            'purpose': 'db_backups',
+            'provider': 'minio',
+          'compose_service': infrastructure_services_object_storage_instances[item.environment].service_name,
+            'data_path': foundry_services_resolved.object_storage.data_root,
+            'bucket': item.bucket,
+            'dokploy_destination_id': infrastructure_services_dokploy_destination_contracts[item.contract_key].destination_id
+          }] if item.purpose == 'db_backups' else [])
+      }}
+  loop: "{{ infrastructure_services_object_storage_bucket_credentials | dict2items | map(attribute='value') | list }}"
+  loop_control:
+    label: "{{ item.environment }} / {{ item.purpose }}"
+  no_log: true

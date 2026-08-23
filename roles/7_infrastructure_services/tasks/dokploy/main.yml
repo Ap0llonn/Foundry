@@ -248,7 +248,8 @@
           if infrastructure_services_cloudflare_proxy_enabled
           else (management | default({})).get('allowed_cidrs', [])
         ) | sort,
-        'tls': foundry_platform_resolved.traefik.tls.enabled
+        'tls': foundry_platform_resolved.traefik.tls.enabled,
+        'tls_mode': (foundry_platform_resolved.traefik.tls.mode if foundry_platform_resolved.traefik.tls.enabled else none)
       } | to_json | hash('sha256') }}
 
 - name: Inspect Dokploy internal PostgreSQL service
@@ -405,12 +406,14 @@
         + (['--label', 'traefik.http.middlewares.dokploy-redirect.redirectscheme.scheme=https',
             '--label', 'traefik.http.middlewares.dokploy-redirect.redirectscheme.permanent=true']
            if foundry_platform_resolved.traefik.tls.enabled else [])
-        + (['--label', 'traefik.http.routers.dokploy-secure.rule=' + infrastructure_services_dokploy_host_rule,
-            '--label', 'traefik.http.routers.dokploy-secure.entrypoints=websecure',
-            '--label', 'traefik.http.routers.dokploy-secure.tls=true',
-            '--label', 'traefik.http.routers.dokploy-secure.tls.certresolver=letsencrypt',
-            '--label', 'traefik.http.routers.dokploy-secure.service=dokploy',
-            '--label', 'traefik.http.routers.dokploy-secure.middlewares=dokploy-allow@swarm']
+        + ((['--label', 'traefik.http.routers.dokploy-secure.rule=' + infrastructure_services_dokploy_host_rule,
+             '--label', 'traefik.http.routers.dokploy-secure.entrypoints=websecure',
+             '--label', 'traefik.http.routers.dokploy-secure.tls=true']
+            + (['--label', 'traefik.http.routers.dokploy-secure.tls.certresolver=letsencrypt']
+               if foundry_platform_resolved.traefik.tls.mode == 'public_acme'
+               else ['--label', 'foundry.tls.mode=cloudflare-origin'])
+            + ['--label', 'traefik.http.routers.dokploy-secure.service=dokploy',
+               '--label', 'traefik.http.routers.dokploy-secure.middlewares=dokploy-allow@swarm'])
            if infrastructure_services_domain_enabled and foundry_platform_resolved.traefik.tls.enabled else [])
         + [foundry_platform_resolved.dokploy.image]
       }}

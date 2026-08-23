@@ -26,6 +26,9 @@
           'dokploy_id': infrastructure_services_dokploy_postgres_contracts[postgres_instance.environment].postgres_id,
           'service_name': infrastructure_services_dokploy_postgres_contracts[postgres_instance.environment].service_name,
           'database': postgres_instance.database,
+          'scheduled': foundry_services_resolved.postgres.backup.enabled,
+          'schedule': foundry_services_resolved.postgres.backup.schedule,
+          'keep_latest': foundry_services_resolved.postgres.backup.keep_latest,
           'managed_by': 'dokploy'
         }]
       }}

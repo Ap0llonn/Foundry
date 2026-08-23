@@ -1,0 +1,23 @@
+---
+- name: Wait for every Dokploy-managed MinIO S3 health endpoint
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ foundry_platform_resolved.traefik.ingress_network }}"
+      - curlimages/curl:8.15.0
+      - --fail
+      - --silent
+      - --show-error
+      - "{{ item.internal_endpoint }}/minio/health/live"
+  loop: "{{ infrastructure_services_object_storage_instances | dict2items | map(attribute='value') | list }}"
+  loop_control:
+    label: "{{ item.environment }}"
+  register: infrastructure_services_object_storage_health
+  changed_when: false
+  retries: "{{ infrastructure_services_minio_health_retries }}"
+  delay: "{{ infrastructure_services_minio_health_delay }}"
+  until: infrastructure_services_object_storage_health.rc == 0
+  no_log: true

@@ -1,16 +1,20 @@
 # Foundry OS / Base System role
 
-This role turns a reasonably initialized Ubuntu VM into a known base-system
-state. The only currently accepted managed-host tuple is Ubuntu 26.04 on
-x86_64. See the repository's [supported-platform matrix](../../docs/supported-platforms.md)
-for test status and promotion requirements.
+This role turns a reasonably initialized Ubuntu or Debian VM into a known
+base-system state. The accepted managed-host tuples are Ubuntu 26.04 and
+Debian 12 (Bookworm), both on x86_64. See the repository's
+[supported-platform matrix](../../docs/supported-platforms.md) for test status
+and promotion requirements.
 
 ## Safe default
 
 ```yaml
-os_base_operation_mode: bootstrap
-os_base_maintenance_approved: false
-os_base_reboot_enabled: false
+os:
+  operation_mode: bootstrap
+  maintenance:
+    approved: false
+  reboot:
+    enabled: false
 ```
 
 `bootstrap` refreshes APT metadata, installs the baseline, and validates the
@@ -19,9 +23,8 @@ host. It does not run `dist-upgrade`, autoremove/purge, or reboot.
 ## Security patching
 
 ```yaml
-os_base_operation_mode: security_patching
-os_base_apt_security_origins:
-  - "origin=Ubuntu,codename=${distro_codename}-security,label=Ubuntu"
+os:
+  operation_mode: security_patching
 ```
 
 Foundry first records an `unattended-upgrade --dry-run` plan under
@@ -32,12 +35,14 @@ policy.
 ## Full maintenance
 
 ```yaml
-os_base_operation_mode: full_maintenance
-os_base_maintenance_approved: true
-os_base_maintenance_window: change-2026-08-14
-os_base_maintenance_autoremove: false
-os_base_maintenance_removals_approved: false
-os_base_maintenance_autoclean: false
+os:
+  operation_mode: full_maintenance
+  maintenance:
+    approved: true
+    window: change-2026-08-14
+    autoremove: false
+    removals_approved: false
+    autoclean: false
 ```
 
 The mode, approval, and non-empty window identifier are all required. Foundry
@@ -58,13 +63,15 @@ Reboot is detached from the normal role and can be invoked only as a final
 rolling phase after the other implemented roles:
 
 ```yaml
-os_base_reboot_enabled: true
-os_base_reboot_approved: true
-os_base_reboot_only_if_required: true
-os_base_reboot_precheck_commands:
-  - [/usr/local/bin/foundry-app-health, pre-reboot]
-os_base_reboot_postcheck_commands:
-  - [/usr/local/bin/foundry-app-health, post-reboot]
+os:
+  reboot:
+    enabled: true
+    approved: true
+    only_if_required: true
+    precheck_commands:
+      - [/usr/local/bin/foundry-app-health, pre-reboot]
+    postcheck_commands:
+      - [/usr/local/bin/foundry-app-health, post-reboot]
 ```
 
 A `/var/run/reboot-required` marker never authorizes a reboot by itself. Keep
@@ -90,6 +97,9 @@ fstab, SSH, sudo, service, mount, time, capacity, swap, and failed-unit checks.
 
 ## Locale, mounts, swap, and services
 
+- Public mount declarations live under `os.mounts`. Use stable UUID paths,
+  not volatile `/dev/vdX` names. Foundry mounts and validates a supplied
+  filesystem but does not format provider disks.
 - Foundry persists `LANG`, never global `LC_ALL`. Optional individual `LC_*`
   values belong in `os_base_locale_categories`.
 - Mounts declare source, target, filesystem type, options, persistence, and

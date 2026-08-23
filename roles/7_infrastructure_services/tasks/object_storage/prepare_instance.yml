@@ -1,0 +1,30 @@
+---
+- name: Create {{ infrastructure_services_object_storage_instance.environment }} MinIO runtime directory
+  ansible.builtin.file:
+    path: "{{ infrastructure_services_object_storage_instance.state_path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+    follow: false
+
+- name: Render {{ infrastructure_services_object_storage_instance.environment }} MinIO runtime credential files
+  ansible.builtin.copy:
+    dest: "{{ item.path }}"
+    owner: "{{ foundry_services_resolved.object_storage.run_as_uid }}"
+    group: "{{ foundry_services_resolved.object_storage.run_as_gid }}"
+    mode: "0400"
+    content: "{{ item.content }}\n"
+    force: true
+  loop:
+    - {path: "{{ infrastructure_services_object_storage_instance.state_path }}/root-user", content: "{{ infrastructure_services_object_storage_root_user }}"}
+    - {path: "{{ infrastructure_services_object_storage_instance.state_path }}/root-password", content: "{{ infrastructure_services_object_storage_root_password }}"}
+
+- name: Create {{ infrastructure_services_object_storage_instance.environment }} MinIO data directory
+  ansible.builtin.file:
+    path: "{{ infrastructure_services_object_storage_instance.data_path }}"
+    state: directory
+    owner: "{{ foundry_services_resolved.object_storage.run_as_uid }}"
+    group: "{{ foundry_services_resolved.object_storage.run_as_gid }}"
+    mode: "0750"
+    follow: false

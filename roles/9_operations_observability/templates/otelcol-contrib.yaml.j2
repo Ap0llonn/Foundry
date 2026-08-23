@@ -1,0 +1,54 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 127.0.0.1:{{ observability_collector_grpc_port }}
+      http:
+        endpoint: 127.0.0.1:{{ observability_collector_http_port }}
+  hostmetrics:
+    collection_interval: {{ observability_collector_hostmetrics_interval }}
+    scrapers:
+      cpu: {}
+      memory: {}
+      load: {}
+      disk: {}
+      filesystem: {}
+      network: {}
+
+processors:
+  batch: {}
+
+exporters:
+  otlp:
+    endpoint: {{ observability_resolved.backend.endpoint | to_json }}
+    tls:
+      insecure: {{ observability_resolved.backend.tls_insecure | bool | lower }}
+{% if observability_resolved.backend.headers | length > 0 %}
+    headers:
+{% for name, value in observability_resolved.backend.headers | dictsort %}
+      {{ name | to_json }}: {{ value | to_json }}
+{% endfor %}
+{% endif %}
+
+service:
+  telemetry:
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: {{ observability_collector_metrics_host | to_json }}
+                port: {{ observability_collector_metrics_port }}
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp]
+    metrics:
+      receivers: [otlp, hostmetrics]
+      processors: [batch]
+      exporters: [otlp]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp]

@@ -1,0 +1,125 @@
+---
+- name: Resolve matching {{ infrastructure_services_object_storage_destination.environment }} {{ infrastructure_services_object_storage_destination.purpose }} Dokploy destination
+  ansible.builtin.set_fact:
+    infrastructure_services_object_storage_destination_matches: >-
+      {{
+        infrastructure_services_dokploy_destinations
+        | selectattr('name', 'equalto', infrastructure_services_object_storage_destination.destination_name)
+        | list
+      }}
+
+- name: Reject ambiguous Dokploy destination ownership
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_object_storage_destination_matches | length <= 1
+    fail_msg: >-
+      More than one Dokploy destination has the Foundry name
+      '{{ infrastructure_services_object_storage_destination.destination_name }}'.
+
+- name: Resolve legacy Dokploy destination migration eligibility
+  ansible.builtin.set_fact:
+    infrastructure_services_object_storage_destination_is_current: >-
+      {{
+        infrastructure_services_object_storage_destination_matches | length == 1
+        and (infrastructure_services_object_storage_destination_matches | first).get('bucket', '') == infrastructure_services_object_storage_destination.bucket
+        and (infrastructure_services_object_storage_destination_matches | first).get('endpoint', '') == infrastructure_services_object_storage_destination.internal_endpoint
+        and (infrastructure_services_object_storage_destination_matches | first).get('region', '') == foundry_services_resolved.object_storage.region
+      }}
+    infrastructure_services_object_storage_destination_is_legacy_shared: >-
+      {{
+        infrastructure_services_object_storage_destination_matches | length == 1
+        and (infrastructure_services_object_storage_destination_matches | first).get('provider', '') == infrastructure_services_minio_dokploy_provider
+        and (infrastructure_services_object_storage_destination_matches | first).get('bucket', '') == infrastructure_services_object_storage_destination.bucket
+        and (infrastructure_services_object_storage_destination_matches | first).get('region', '') == foundry_services_resolved.object_storage.region
+        and (infrastructure_services_object_storage_destination_matches | first).get('endpoint', '') == infrastructure_services_minio_shared_endpoint
+      }}
+    infrastructure_services_object_storage_destination_id: >-
+      {{
+        (infrastructure_services_object_storage_destination_matches | first | default({}, true)).get(
+          'destinationId',
+          (infrastructure_services_object_storage_destination_matches | first | default({}, true)).get('id', '')
+        )
+      }}
+  no_log: true
+
+- name: Refuse to adopt a mismatched Dokploy destination
+  ansible.builtin.assert:
+    that:
+      - >-
+        infrastructure_services_object_storage_destination_matches | length == 0
+        or infrastructure_services_object_storage_destination_is_current
+        or infrastructure_services_object_storage_destination_is_legacy_shared
+    fail_msg: >-
+      Dokploy destination '{{ infrastructure_services_object_storage_destination.destination_name }}'
+      already exists with a different bucket, endpoint, or region.
+
+- name: Migrate the legacy shared {{ infrastructure_services_object_storage_destination.environment }} {{ infrastructure_services_object_storage_destination.purpose }} Dokploy S3 destination
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --request
+      - POST
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - --header
+      - "Content-Type: application/json"
+      - --data
+      - >-
+        {{ {
+          'destinationId': infrastructure_services_object_storage_destination_id,
+          'name': infrastructure_services_object_storage_destination.destination_name,
+          'provider': infrastructure_services_minio_dokploy_provider,
+          'accessKey': infrastructure_services_object_storage_destination.access_key,
+          'secretAccessKey': infrastructure_services_object_storage_destination.secret_key,
+          'bucket': infrastructure_services_object_storage_destination.bucket,
+          'region': foundry_services_resolved.object_storage.region,
+          'endpoint': infrastructure_services_object_storage_destination.internal_endpoint,
+          'additionalFlags': []
+        } | to_json }}
+      - "{{ infrastructure_services_dokploy_api_url }}/api/destination.update"
+  when: infrastructure_services_object_storage_destination_is_legacy_shared
+  changed_when: true
+  no_log: true
+
+- name: Create missing {{ infrastructure_services_object_storage_destination.environment }} {{ infrastructure_services_object_storage_destination.purpose }} Dokploy S3 destination
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --request
+      - POST
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - --header
+      - "Content-Type: application/json"
+      - --data
+      - >-
+        {{ {
+          'name': infrastructure_services_object_storage_destination.destination_name,
+          'provider': infrastructure_services_minio_dokploy_provider,
+          'accessKey': infrastructure_services_object_storage_destination.access_key,
+          'secretAccessKey': infrastructure_services_object_storage_destination.secret_key,
+          'bucket': infrastructure_services_object_storage_destination.bucket,
+          'region': foundry_services_resolved.object_storage.region,
+          'endpoint': infrastructure_services_object_storage_destination.internal_endpoint,
+          'additionalFlags': []
+        } | to_json }}
+      - "{{ infrastructure_services_dokploy_api_url }}/api/destination.create"
+  when: infrastructure_services_object_storage_destination_matches | length == 0
+  changed_when: true
+  no_log: true

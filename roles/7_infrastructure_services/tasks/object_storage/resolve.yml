@@ -1,0 +1,64 @@
+---
+- name: Verify Docker before managing shared MinIO
+  ansible.builtin.command:
+    argv: [docker, info]
+  register: infrastructure_services_object_storage_docker_info
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Require the Docker runtime for shared MinIO
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_object_storage_docker_info.rc == 0
+    fail_msg: Shared MinIO requires the role-6 Docker runtime.
+
+- name: Resolve shared MinIO base contract
+  ansible.builtin.set_fact:
+    infrastructure_services_object_storage_resource_prefix: >-
+      {{ project.resource_prefix | default('foundry') }}
+    infrastructure_services_object_storage_name_prefix: >-
+      {{ (project.resource_prefix | default('foundry')) + '-'
+         if (project.resource_prefix | default('foundry')) | length > 0 else '' }}
+    infrastructure_services_object_storage_root_user: >-
+      {{ foundry_services_resolved.object_storage.credentials.get('root_user', 'foundryadmin') }}
+    infrastructure_services_object_storage_container_hash: >-
+      {{ {
+        'image': foundry_services_resolved.object_storage.image,
+        'data_root': foundry_services_resolved.object_storage.data_root,
+        'network': foundry_platform_resolved.traefik.ingress_network,
+        'hostname': infrastructure_services_object_storage_hostname,
+        'uid': foundry_services_resolved.object_storage.run_as_uid,
+        'gid': foundry_services_resolved.object_storage.run_as_gid,
+        'tls_mode': (foundry_platform_resolved.traefik.tls.mode if foundry_platform_resolved.traefik.tls.enabled else none)
+      } | to_json | hash('sha256') }}
+    infrastructure_services_object_storage_bucket_roles:
+      - key: assets_public
+        suffix: assets-public
+        public_read: true
+      - key: assets_private
+        suffix: assets-private
+        public_read: false
+      - key: db_backups
+        suffix: db-backups
+        public_read: false
+    infrastructure_services_object_storage_buckets: []
+    infrastructure_services_object_storage_instances: {}
+  no_log: true
+
+- name: Resolve each Dokploy-managed MinIO instance contract
+  ansible.builtin.include_tasks: resolve_instance.yml
+  loop: "{{ infrastructure_services_object_storage_environments }}"
+  loop_control:
+    loop_var: infrastructure_services_object_storage_environment
+    index_var: infrastructure_services_object_storage_environment_index
+    label: "{{ infrastructure_services_object_storage_environment }}"
+  no_log: true
+
+- name: Resolve each environment's object-storage bucket contracts
+  ansible.builtin.include_tasks: resolve_bucket.yml
+  loop: "{{ infrastructure_services_object_storage_environments }}"
+  loop_control:
+    loop_var: infrastructure_services_object_storage_environment
+    label: "{{ infrastructure_services_object_storage_environment }}"
+  no_log: true

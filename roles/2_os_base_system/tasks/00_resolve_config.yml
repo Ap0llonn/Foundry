@@ -1,0 +1,32 @@
+---
+- name: Resolve grouped OS configuration
+  ansible.builtin.set_fact:
+    os_config: "{{ os | default({}) }}"
+
+- name: Validate grouped OS configuration shape
+  ansible.builtin.assert:
+    that:
+      - os_config is mapping
+      - os_config.keys() | difference(os_config_allowed_keys) | length == 0
+      - os_config.get('mounts', []) is sequence
+      - os_config.get('mounts', []) is not string
+      - os_config.get('maintenance', {}) is mapping
+      - os_config.get('maintenance', {}).keys() | difference(os_config_allowed_maintenance_keys) | length == 0
+      - os_config.get('reboot', {}) is mapping
+      - os_config.get('reboot', {}).keys() | difference(os_config_allowed_reboot_keys) | length == 0
+    fail_msg: "The grouped os configuration contains an unknown option or invalid section."
+
+- name: Map grouped OS configuration to internal role variables
+  ansible.builtin.set_fact:
+    os_base_operation_mode: "{{ os_config.get('operation_mode', os_config_defaults.operation_mode) }}"
+    os_base_mounts: "{{ os_config.get('mounts', os_config_defaults.mounts) }}"
+    os_base_maintenance_approved: "{{ os_config.get('maintenance', {}).get('approved', os_config_defaults.maintenance.approved) }}"
+    os_base_maintenance_window: "{{ os_config.get('maintenance', {}).get('window', os_config_defaults.maintenance.window) }}"
+    os_base_maintenance_autoremove: "{{ os_config.get('maintenance', {}).get('autoremove', os_config_defaults.maintenance.autoremove) }}"
+    os_base_maintenance_removals_approved: "{{ os_config.get('maintenance', {}).get('removals_approved', os_config_defaults.maintenance.removals_approved) }}"
+    os_base_maintenance_autoclean: "{{ os_config.get('maintenance', {}).get('autoclean', os_config_defaults.maintenance.autoclean) }}"
+    os_base_reboot_enabled: "{{ os_config.get('reboot', {}).get('enabled', os_config_defaults.reboot.enabled) }}"
+    os_base_reboot_approved: "{{ os_config.get('reboot', {}).get('approved', os_config_defaults.reboot.approved) }}"
+    os_base_reboot_only_if_required: "{{ os_config.get('reboot', {}).get('only_if_required', os_config_defaults.reboot.only_if_required) }}"
+    os_base_reboot_precheck_commands: "{{ os_config.get('reboot', {}).get('precheck_commands', os_config_defaults.reboot.precheck_commands) }}"
+    os_base_reboot_postcheck_commands: "{{ os_config.get('reboot', {}).get('postcheck_commands', os_config_defaults.reboot.postcheck_commands) }}"

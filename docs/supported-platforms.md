@@ -10,7 +10,7 @@ firewall, SSH, and validation behavior on that platform.
 | Ubuntu | 26.04 | aarch64 | Planned | No clean-image convergence and reboot test yet |
 | Ubuntu | 24.04 LTS | x86_64/aarch64 | Planned | No clean-image convergence and reboot test yet |
 | Ubuntu | 22.04 LTS | x86_64/aarch64 | Planned | No clean-image convergence and reboot test yet |
-| Debian | Any | Any | Unsupported | Security currently assumes Ubuntu service names, UFW, and Ubuntu policy |
+| Debian | 12 (Bookworm) | x86_64 | Implementation added; certification pending | Debian APT sources, Docker repository/package contract, UFW, AppArmor, and systemd paths are implemented; clean-image certification is still required |
 
 ## Promotion criteria
 
@@ -30,6 +30,6 @@ clean image:
 
 Syntax checks alone do not promote a platform to supported status.
 
-The role currently rejects every tuple except Ubuntu 26.04 x86_64. This narrow
-gate prevents accidental execution on an unimplemented Debian or Ubuntu path;
-it does not replace the promotion evidence above.
+The role currently accepts Ubuntu 26.04 x86_64 and Debian 12 (Bookworm) x86_64.
+The platform gate prevents accidental execution on other tuples; it does not
+replace the promotion evidence above.

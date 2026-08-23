@@ -1,0 +1,41 @@
+---
+- name: Inspect the legacy shared MinIO Console loopback proxy
+  ansible.builtin.command:
+    argv:
+      - docker
+      - container
+      - inspect
+      - "{{ infrastructure_services_minio_console_proxy_container_name }}"
+  register: infrastructure_services_object_storage_legacy_console_proxy_inspect
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Refuse an unowned legacy shared MinIO Console proxy collision
+  ansible.builtin.assert:
+    that:
+      - >-
+        infrastructure_services_object_storage_legacy_console_proxy_inspect.rc != 0
+        or (
+          ((infrastructure_services_object_storage_legacy_console_proxy_inspect.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.managed') == 'true'
+          and ((infrastructure_services_object_storage_legacy_console_proxy_inspect.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.project') == project.name
+          and ((infrastructure_services_object_storage_legacy_console_proxy_inspect.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.resource') == 'object-storage-console-proxy'
+        )
+    fail_msg: The legacy shared MinIO Console proxy is not owned by this Foundry project.
+
+- name: Remove the superseded shared MinIO Console loopback proxy
+  ansible.builtin.command:
+    argv:
+      - docker
+      - container
+      - rm
+      - --force
+      - "{{ infrastructure_services_minio_console_proxy_container_name }}"
+  when: infrastructure_services_object_storage_legacy_console_proxy_inspect.rc == 0
+
+- name: Converge each loopback-only MinIO Console proxy
+  ansible.builtin.include_tasks: console_proxy_instance.yml
+  loop: "{{ infrastructure_services_object_storage_instances | dict2items | map(attribute='value') | list }}"
+  loop_control:
+    loop_var: infrastructure_services_object_storage_instance
+    label: "{{ infrastructure_services_object_storage_instance.environment }}"

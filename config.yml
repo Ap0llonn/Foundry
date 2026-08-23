@@ -73,27 +73,33 @@ runtime:
       max_size: 10m
       max_files: 3
 
-# OS package lifecycle. The default bootstrap mode installs and validates the
-# baseline but never runs a distribution upgrade, autoremove, purge, or reboot.
-os_base_operation_mode: bootstrap
-
-# Full maintenance requires all three values to be set intentionally. Keep
-# these disabled during ordinary application deployments.
-os_base_maintenance_approved: false
-os_base_maintenance_window: ""
-os_base_maintenance_autoremove: false
-# Autoremove/purge is a separate destructive approval from the distribution
-# upgrade itself.
-os_base_maintenance_removals_approved: false
-os_base_maintenance_autoclean: false
-
-# Reboot is evaluated only after all implemented roles have converged. A
-# reboot-required marker is a signal, not an authorization.
-os_base_reboot_enabled: false
-os_base_reboot_approved: false
-os_base_reboot_only_if_required: true
-os_base_reboot_precheck_commands: []
-os_base_reboot_postcheck_commands: []
+# OS lifecycle. Bootstrap is safe for normal runs; maintenance and reboot need
+# their own explicit approvals.
+os:
+  operation_mode: bootstrap
+  # Attach and format the VM-provider data disk first, then declare its stable
+  # UUID here before enabling services.object_storage. Foundry mounts it but
+  # deliberately never formats an unspecified block device.
+  # mounts:
+  #   - path: /srv/foundry/minio
+  #     src: /dev/disk/by-uuid/REPLACE-WITH-DISK-UUID
+  #     fstype: ext4
+  #     opts: defaults,noatime
+  #     state: mounted
+  #     min_free_percent: 10
+  maintenance:
+    approved: false
+    window: ""
+    autoremove: false
+    # Autoremove/purge is a separate destructive approval.
+    removals_approved: false
+    autoclean: false
+  reboot:
+    enabled: false
+    approved: false
+    only_if_required: true
+    precheck_commands: []
+    postcheck_commands: []
 
 identity:
   # Optional Foundry role customization. Built-ins are developer, operator,
@@ -181,10 +187,32 @@ database_access:
     local_port: 15432
   tailscale:
     # Supply this through Vault or a secure extra variable when mode=tailscale.
-    auth_key: "tskey-auth-kuYRxgQT1J11CNTRL-rAaCQ3wUxuWbaHKgPFTXuWs5g35kB4pz"
+    auth_key: "tskey-auth-kEYf6yzSp221CNTRL-Dy9YXFu1xaTAWxiLAgymaTC9wZCqwZ2m1"
     hostname: "foundry-db"
     port: 5432
     cidr: 100.64.0.0/10
+
+# Host and application telemetry. The collector stays backend-neutral and sends
+# OTLP to backend.endpoint. SigNoz is the initial supported dashboard.
+observability:
+  enabled: true
+  dashboard: signoz
+  backend:
+    # The self-hosted SigNoz collector listens only on this VM. For multiple
+    # application VMs, replace it with the dashboard VM's private OTLP address.
+    endpoint: "127.0.0.1:14317"
+    headers: {}
+    tls_insecure: true
+  signoz:
+    enabled: true
+    # The inventory host that runs the dashboard and its persistent data.
+    host: app-vm
+    # SigNoz is shared by every application environment, so it gets its own
+    # Dokploy project and environment rather than being placed in dev/prod.
+    project: monitoring
+    environment: monitoring
+    # Empty becomes signoz.samuelcourchesne.com.
+    hostname: ""
 
 security:
   ssh:
@@ -252,6 +280,11 @@ services:
         password: "DevPassword123456789"
       production:
         password: "K8vP2mN7xQ4rT9zL6aBcW3"
+    backup:
+      enabled: true
+      # Standard cron: every day at 03:00. Change this frequency as needed.
+      schedule: "0 0 * * 0" # Every sunday at 00:00
+      keep_latest: 3
     resources:
       memory: ""
       cpus: ""
@@ -267,6 +300,30 @@ services:
     resources:
       memory: ""
       cpus: ""
+  # One MinIO Compose service per environment. Foundry creates separate
+  # versioned assets-public, assets-private, and db-backups buckets.
+  object_storage:
+    enabled: true
+    provider: minio
+    environments:
+      - dev
+      - production
+    data_root: /srv/foundry/minio
+    # This VM has no second volume. Store MinIO under the root filesystem and
+    # monitor free capacity before relying on it for backups.
+    allow_root_filesystem: true
+    # Empty uses minio.<domains.base>; set a full hostname inside domains.base
+    # to use a different name, for example storage.example.com.
+    domain_name: ""
+    region: us-east-1
+    console:
+      enabled: true
+      # Accessible only through the tailnet, never through the public domain.
+      tailscale_port: 9001
+    credentials:
+      root_user: foundryminio
+      # Leave empty for a stable generated value, or supply a Vault value.
+      root_password: ""
 
 # Dokploy requires a narrowly owned single-manager Swarm. Enabling Dokploy
 # automatically enables that dependency and the one Dokploy-compatible Traefik.
@@ -284,6 +341,7 @@ platform:
     https_port: 443
     tls:
       enabled: true
+      mode: cloudflare_origin
       email: samuelcourchesne2004@gmail.com
 
   dokploy:

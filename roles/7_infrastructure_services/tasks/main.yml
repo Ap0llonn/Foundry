@@ -14,7 +14,17 @@
       or foundry_database_access_resolved.enabled
   tags: [infrastructure_services, infrastructure_services_resolution, database_access]
 
-- name: 7.3 Configure optional Cloudflare DNS and edge security
+- name: 7.3 Prepare Cloudflare Origin CA material
+  ansible.builtin.import_tasks: traefik/origin_ca_prepare.yml
+  become: true
+  when:
+    - infrastructure_services_traefik_enabled
+    - foundry_platform_resolved.traefik.tls.enabled
+    - foundry_platform_resolved.traefik.tls.mode == 'cloudflare_origin'
+    - not ansible_check_mode
+  tags: [infrastructure_services, infrastructure_services_domains, cloudflare, traefik]
+
+- name: 7.4 Configure optional Cloudflare DNS and edge security
   ansible.builtin.import_tasks: cloudflare/main.yml
   when:
     - infrastructure_services_any_enabled
@@ -22,7 +32,7 @@
     - not ansible_check_mode
   tags: [infrastructure_services, infrastructure_services_domains, cloudflare]
 
-- name: 7.4 Resolve optional global and environment domains
+- name: 7.5 Resolve optional global and environment domains
   ansible.builtin.import_tasks: common/resolve_domains.yml
   when: infrastructure_services_any_enabled
   # Dokploy and Traefik both consume the resolved Dokploy hostname.  Keep this
@@ -86,55 +96,75 @@
   when: infrastructure_services_traefik_enabled
   tags: [infrastructure_services, ingress, traefik, dokploy]
 
-- name: 7.14 Converge pinned Dokploy platform services
+- name: 7.15 Converge pinned Dokploy platform services
   ansible.builtin.import_tasks: dokploy/main.yml
   become: true
-  when: foundry_platform_resolved.dokploy.enabled
+  when: foundry_platform_resolved.dokploy.enabled and foundry_dokploy_is_manager
   tags: [infrastructure_services, platform, dokploy]
 
-- name: 7.15 Converge the single Dokploy-compatible Traefik authority
+- name: 7.16 Converge the single Dokploy-compatible Traefik authority
   ansible.builtin.import_tasks: traefik/main.yml
   become: true
   when: infrastructure_services_traefik_enabled
   tags: [infrastructure_services, ingress, traefik]
 
-- name: 7.16 Validate Dokploy health and report onboarding state
+- name: 7.17 Validate Dokploy health and report onboarding state
   ansible.builtin.import_tasks: dokploy/validate.yml
   become: true
-  when: foundry_platform_resolved.dokploy.enabled
+  when: foundry_platform_resolved.dokploy.enabled and foundry_dokploy_is_manager
   tags: [infrastructure_services, platform, dokploy, infrastructure_services_result]
 
-- name: 7.17 Bootstrap healthy Dokploy
+- name: 7.18 Bootstrap healthy Dokploy
   ansible.builtin.import_tasks: dokploy/bootstrap.yml
   become: true
-  when: foundry_platform_resolved.dokploy.enabled
+  when: foundry_platform_resolved.dokploy.enabled and foundry_dokploy_is_manager
   tags: [infrastructure_services, platform, dokploy, dokploy_bootstrap]
 
-- name: 7.18 Configure healthy Dokploy
+- name: 7.19 Configure healthy Dokploy
   ansible.builtin.import_tasks: dokploy/configure.yml
   become: true
-  when: foundry_platform_resolved.dokploy.enabled
+  when: foundry_platform_resolved.dokploy.enabled and foundry_dokploy_is_manager
   tags: [infrastructure_services, platform, dokploy, dokploy_configure]
 
-- name: 7.19 Create and reconcile PostgreSQL services through Dokploy
+- name: 7.20 Create one MinIO Compose service per Dokploy environment
+  ansible.builtin.import_tasks: object_storage/main.yml
+  become: true
+  when: foundry_services_resolved.object_storage.enabled
+  tags: [infrastructure_services, object_storage, minio, dokploy]
+
+- name: 7.21 Register MinIO buckets as Dokploy S3 destinations
+  ansible.builtin.import_tasks: object_storage/dokploy_destinations.yml
+  become: true
+  when: foundry_services_resolved.object_storage.enabled
+  tags: [infrastructure_services, object_storage, minio, dokploy]
+
+- name: 7.22 Create and reconcile PostgreSQL services through Dokploy
   ansible.builtin.import_tasks: postgres/main.yml
   become: true
   when: foundry_services_resolved.postgres.enabled
   tags: [infrastructure_services, postgres, dokploy, database_access]
 
-- name: 7.20 Create and reconcile Redis services through Dokploy
+- name: 7.23 Create and reconcile Redis services through Dokploy
   ansible.builtin.import_tasks: redis/main.yml
   become: true
   when: foundry_services_resolved.redis.enabled
   tags: [infrastructure_services, redis, dokploy]
 
-- name: 7.21 Configure PostgreSQL developer access
+- name: 7.24 Configure PostgreSQL developer access
   ansible.builtin.import_tasks: database_access/main.yml
   become: true
   when: foundry_database_access_resolved.enabled
   tags: [infrastructure_services, database_access]
 
-- name: 7.22 Publish non-secret service and backup contracts
+- name: 7.25 Publish private MinIO Consoles through Tailscale
+  ansible.builtin.import_tasks: object_storage/tailscale_console.yml
+  become: true
+  when:
+    - foundry_services_resolved.object_storage.enabled
+    - foundry_services_resolved.object_storage.console.enabled
+  tags: [infrastructure_services, object_storage, minio, tailscale]
+
+- name: 7.26 Publish non-secret service and backup contracts
   ansible.builtin.import_tasks: output/main.yml
   become: true
   when: infrastructure_services_any_enabled

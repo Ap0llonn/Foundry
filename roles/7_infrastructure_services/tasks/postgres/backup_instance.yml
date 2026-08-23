@@ -1,0 +1,170 @@
+---
+- name: Resolve {{ postgres_instance.environment }} PostgreSQL backup contract
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_postgres_backup_destination_id: >-
+      {{ infrastructure_services_dokploy_destination_contracts[postgres_instance.environment + '-db_backups'].destination_id }}
+    infrastructure_services_dokploy_postgres_backup_prefix: >-
+      {{
+        ((project.resource_prefix | default('foundry')) + '-'
+         if (project.resource_prefix | default('foundry')) | length > 0 else '')
+        + project.name + '-' + postgres_instance.environment + '-postgres'
+      }}
+    infrastructure_services_dokploy_postgres_backup_metadata:
+      foundry:
+        project: "{{ project.name }}"
+        environment: "{{ postgres_instance.environment }}"
+        service: postgres
+  no_log: true
+
+- name: Read {{ postgres_instance.environment }} Dokploy PostgreSQL backups
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - >-
+        {{ infrastructure_services_dokploy_api_url }}/api/postgres.one?postgresId={{ infrastructure_services_dokploy_postgres_contracts[postgres_instance.environment].postgres_id }}
+  register: infrastructure_services_dokploy_postgres_backup_service_raw
+  changed_when: false
+  no_log: true
+
+- name: Parse {{ postgres_instance.environment }} Dokploy PostgreSQL backups
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_postgres_backup_service: >-
+      {{ infrastructure_services_dokploy_postgres_backup_service_raw.stdout | from_json }}
+  no_log: true
+
+- name: Require a valid {{ postgres_instance.environment }} Dokploy PostgreSQL backup list
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_dokploy_postgres_backup_service is mapping
+      - infrastructure_services_dokploy_postgres_backup_service.get('backups', []) is sequence
+      - infrastructure_services_dokploy_postgres_backup_service.get('backups', []) is not string
+      - infrastructure_services_dokploy_postgres_backup_service.get('backups', []) is not mapping
+    fail_msg: Dokploy did not return a valid PostgreSQL backup list.
+  no_log: true
+
+- name: Resolve matching {{ postgres_instance.environment }} Foundry PostgreSQL backup
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_postgres_backup_matches: >-
+      {{
+        infrastructure_services_dokploy_postgres_backup_service.get('backups', [])
+        | select('mapping')
+        | selectattr('postgresId', 'equalto', infrastructure_services_dokploy_postgres_contracts[postgres_instance.environment].postgres_id)
+        | selectattr('prefix', 'equalto', infrastructure_services_dokploy_postgres_backup_prefix)
+        | list
+      }}
+  no_log: true
+
+- name: Reject ambiguous {{ postgres_instance.environment }} Foundry PostgreSQL backups
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_dokploy_postgres_backup_matches | length <= 1
+    fail_msg: More than one Dokploy PostgreSQL backup has the Foundry backup prefix.
+  no_log: true
+
+- name: Resolve {{ postgres_instance.environment }} PostgreSQL backup reconciliation
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_postgres_backup_id: >-
+      {{
+        (infrastructure_services_dokploy_postgres_backup_matches | first | default({}, true)).get(
+          'backupId',
+          (infrastructure_services_dokploy_postgres_backup_matches | first | default({}, true)).get('id', '')
+        )
+      }}
+    infrastructure_services_dokploy_postgres_backup_needs_update: >-
+      {{
+        infrastructure_services_dokploy_postgres_backup_matches | length == 1
+        and (
+          (infrastructure_services_dokploy_postgres_backup_matches | first).get('schedule', '') != foundry_services_resolved.postgres.backup.schedule
+          or (infrastructure_services_dokploy_postgres_backup_matches | first).get('enabled', true) != true
+          or (infrastructure_services_dokploy_postgres_backup_matches | first).get('destinationId', '') != infrastructure_services_dokploy_postgres_backup_destination_id
+          or (infrastructure_services_dokploy_postgres_backup_matches | first).get('database', '') != postgres_instance.database
+          or ((infrastructure_services_dokploy_postgres_backup_matches | first).get('keepLatestCount', 0) | int) != (foundry_services_resolved.postgres.backup.keep_latest | int)
+          or (infrastructure_services_dokploy_postgres_backup_matches | first).get('databaseType', '') != 'postgres'
+        )
+      }}
+  no_log: true
+
+- name: Create missing {{ postgres_instance.environment }} scheduled PostgreSQL backup
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --request
+      - POST
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - --header
+      - "Content-Type: application/json"
+      - --data
+      - >-
+        {{ {
+          'schedule': foundry_services_resolved.postgres.backup.schedule,
+          'enabled': true,
+          'prefix': infrastructure_services_dokploy_postgres_backup_prefix,
+          'destinationId': infrastructure_services_dokploy_postgres_backup_destination_id,
+          'keepLatestCount': foundry_services_resolved.postgres.backup.keep_latest | int,
+          'database': postgres_instance.database,
+          'postgresId': infrastructure_services_dokploy_postgres_contracts[postgres_instance.environment].postgres_id,
+          'databaseType': 'postgres',
+          'backupType': 'database',
+          'serviceName': infrastructure_services_dokploy_postgres_contracts[postgres_instance.environment].service_name,
+          'metadata': infrastructure_services_dokploy_postgres_backup_metadata
+        } | to_json }}
+      - "{{ infrastructure_services_dokploy_api_url }}/api/backup.create"
+  when: infrastructure_services_dokploy_postgres_backup_matches | length == 0
+  changed_when: true
+  no_log: true
+
+- name: Update drifted {{ postgres_instance.environment }} scheduled PostgreSQL backup
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --request
+      - POST
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - --header
+      - "Content-Type: application/json"
+      - --data
+      - >-
+        {{ {
+          'backupId': infrastructure_services_dokploy_postgres_backup_id,
+          'schedule': foundry_services_resolved.postgres.backup.schedule,
+          'enabled': true,
+          'prefix': infrastructure_services_dokploy_postgres_backup_prefix,
+          'destinationId': infrastructure_services_dokploy_postgres_backup_destination_id,
+          'keepLatestCount': foundry_services_resolved.postgres.backup.keep_latest | int,
+          'database': postgres_instance.database,
+          'serviceName': infrastructure_services_dokploy_postgres_contracts[postgres_instance.environment].service_name,
+          'metadata': infrastructure_services_dokploy_postgres_backup_metadata,
+          'databaseType': 'postgres'
+        } | to_json }}
+      - "{{ infrastructure_services_dokploy_api_url }}/api/backup.update"
+  when: infrastructure_services_dokploy_postgres_backup_needs_update
+  changed_when: true
+  no_log: true

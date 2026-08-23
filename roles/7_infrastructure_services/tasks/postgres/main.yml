@@ -22,6 +22,18 @@
     label: "{{ postgres_instance.environment }}"
   no_log: true
 
+- name: Reconcile scheduled PostgreSQL backups through Dokploy API
+  ansible.builtin.include_tasks:
+    file: backup_instance.yml
+    apply:
+      no_log: true
+  loop: "{{ infrastructure_services_postgres_instances }}"
+  loop_control:
+    loop_var: postgres_instance
+    label: "{{ postgres_instance.environment }}"
+  when: foundry_services_resolved.postgres.backup.enabled
+  no_log: true
+
 - name: Publish non-secret Dokploy PostgreSQL service contracts
   ansible.builtin.include_tasks:
     file: publish_instance.yml

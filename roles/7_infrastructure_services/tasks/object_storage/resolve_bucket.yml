@@ -1,0 +1,8 @@
+---
+- name: Add {{ infrastructure_services_object_storage_environment }} storage-purpose contracts
+  ansible.builtin.include_tasks: resolve_bucket_kind.yml
+  loop: "{{ infrastructure_services_object_storage_bucket_roles }}"
+  loop_control:
+    loop_var: infrastructure_services_object_storage_bucket_role
+    label: "{{ infrastructure_services_object_storage_bucket_role.key }}"
+  no_log: true

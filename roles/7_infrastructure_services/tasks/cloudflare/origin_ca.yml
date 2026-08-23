@@ -1,0 +1,81 @@
+---
+- name: Inspect the managed Cloudflare Origin CA certificate
+  ansible.builtin.stat:
+    path: "{{ infrastructure_services_traefik_origin_ca_certificate }}"
+    follow: false
+  register: infrastructure_services_cloudflare_origin_ca_certificate
+  no_log: true
+
+- name: Read the pending Cloudflare Origin CA certificate request
+  ansible.builtin.slurp:
+    src: "{{ infrastructure_services_traefik_origin_ca_csr }}"
+  register: infrastructure_services_cloudflare_origin_ca_csr
+  when: not infrastructure_services_cloudflare_origin_ca_certificate.stat.exists
+  no_log: true
+
+- name: Request a Cloudflare Origin CA certificate
+  ansible.builtin.uri:
+    url: "{{ infrastructure_services_cloudflare_api_url }}/certificates"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ foundry_domains_resolved.cloudflare.api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      csr: "{{ infrastructure_services_cloudflare_origin_ca_csr.content | b64decode }}"
+      hostnames:
+        - "{{ foundry_domains_resolved.base }}"
+        - "*.{{ foundry_domains_resolved.base }}"
+      request_type: origin-rsa
+      requested_validity: 5475
+    return_content: true
+    status_code: 200
+    validate_certs: true
+  delegate_to: localhost
+  become: false
+  register: infrastructure_services_cloudflare_origin_ca_response
+  when: not infrastructure_services_cloudflare_origin_ca_certificate.stat.exists
+  no_log: true
+
+- name: Require a Cloudflare Origin CA certificate response
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_cloudflare_origin_ca_response.json.success | default(false)
+      - infrastructure_services_cloudflare_origin_ca_response.json.result.certificate | default('') | length > 0
+    fail_msg: >-
+      Cloudflare could not issue the Origin CA certificate. The API token needs
+      Zone / SSL and Certificates / Edit access for domains.cloudflare.zone.
+  when: not infrastructure_services_cloudflare_origin_ca_certificate.stat.exists
+  no_log: true
+
+- name: Install the Cloudflare Origin CA certificate
+  ansible.builtin.copy:
+    content: "{{ infrastructure_services_cloudflare_origin_ca_response.json.result.certificate }}\n"
+    dest: "{{ infrastructure_services_traefik_origin_ca_certificate }}"
+    owner: root
+    group: root
+    mode: "0600"
+  when: not infrastructure_services_cloudflare_origin_ca_certificate.stat.exists
+  no_log: true
+
+- name: Render the Cloudflare Origin CA Traefik dynamic certificate contract
+  ansible.builtin.template:
+    src: traefik-origin-ca.yml.j2
+    dest: "{{ infrastructure_services_traefik_origin_ca_dynamic_config }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Validate the Cloudflare Origin CA certificate lifetime
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - x509
+      - -in
+      - "{{ infrastructure_services_traefik_origin_ca_certificate }}"
+      - -noout
+      - -checkend
+      - "2592000"
+  changed_when: false
+  no_log: true

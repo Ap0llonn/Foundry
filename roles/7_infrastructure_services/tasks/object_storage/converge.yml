@@ -1,0 +1,119 @@
+---
+- name: Inspect the shared MinIO container
+  ansible.builtin.command:
+    argv: [docker, container, inspect, "{{ infrastructure_services_minio_shared_container_name }}"]
+  register: infrastructure_services_object_storage_container_inspect
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Reject an unowned shared MinIO container collision
+  ansible.builtin.assert:
+    that:
+      - >-
+        infrastructure_services_object_storage_container_inspect.rc != 0
+        or (
+          ((infrastructure_services_object_storage_container_inspect.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.managed') == 'true'
+          and ((infrastructure_services_object_storage_container_inspect.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.project') == project.name
+          and ((infrastructure_services_object_storage_container_inspect.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.resource') == 'object-storage'
+        )
+    fail_msg: A same-name MinIO container is not owned by this Foundry project.
+  no_log: true
+
+- name: Resolve shared MinIO container reconciliation
+  ansible.builtin.set_fact:
+    infrastructure_services_object_storage_container_recreate: >-
+      {{
+        infrastructure_services_object_storage_container_inspect.rc == 0
+        and ((infrastructure_services_object_storage_container_inspect.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.config-sha256')
+            != infrastructure_services_object_storage_container_hash
+      }}
+  no_log: true
+
+- name: Recreate drifted shared MinIO without deleting data
+  ansible.builtin.command:
+    argv: [docker, container, rm, --force, "{{ infrastructure_services_minio_shared_container_name }}"]
+  when: infrastructure_services_object_storage_container_recreate
+
+- name: Create the shared MinIO S3 container
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --detach
+      - --name
+      - "{{ infrastructure_services_minio_shared_container_name }}"
+      - --restart
+      - unless-stopped
+      - --user
+      - "{{ foundry_services_resolved.object_storage.run_as_uid }}:{{ foundry_services_resolved.object_storage.run_as_gid }}"
+      - --network
+      - "{{ foundry_platform_resolved.traefik.ingress_network }}"
+      - --network-alias
+      - minio
+      - --label
+      - foundry.managed=true
+      - --label
+      - "foundry.project={{ project.name }}"
+      - --label
+      - foundry.resource=object-storage
+      - --label
+      - "foundry.config-sha256={{ infrastructure_services_object_storage_container_hash }}"
+      - --label
+      - traefik.enable=true
+      - --label
+      - "traefik.docker.network={{ foundry_platform_resolved.traefik.ingress_network }}"
+      - --label
+      - "traefik.http.routers.foundry-{{ project.name }}-minio.rule=Host(`{{ infrastructure_services_object_storage_hostname }}`)"
+      - --label
+      - "traefik.http.routers.foundry-{{ project.name }}-minio.entrypoints=web"
+      - --label
+      - "traefik.http.routers.foundry-{{ project.name }}-minio.middlewares=foundry-{{ project.name }}-minio-redirect@docker"
+      - --label
+      - "traefik.http.middlewares.foundry-{{ project.name }}-minio-redirect.redirectscheme.scheme=https"
+      - --label
+      - "traefik.http.middlewares.foundry-{{ project.name }}-minio-redirect.redirectscheme.permanent=true"
+      - --label
+      - "traefik.http.routers.foundry-{{ project.name }}-minio-secure.rule=Host(`{{ infrastructure_services_object_storage_hostname }}`)"
+      - --label
+      - "traefik.http.routers.foundry-{{ project.name }}-minio-secure.entrypoints=websecure"
+      - --label
+      - "traefik.http.routers.foundry-{{ project.name }}-minio-secure.tls=true"
+      - --label
+      - >-
+        {{ 'traefik.http.routers.foundry-' + project.name + '-minio-secure.tls.certresolver=letsencrypt'
+           if foundry_platform_resolved.traefik.tls.mode == 'public_acme'
+           else 'foundry.tls.mode=cloudflare-origin' }}
+      - --label
+      - "traefik.http.routers.foundry-{{ project.name }}-minio-secure.service=foundry-{{ project.name }}-minio"
+      - --label
+      - "traefik.http.services.foundry-{{ project.name }}-minio.loadbalancer.server.port=9000"
+      - --env
+      - MINIO_ROOT_USER_FILE=/run/secrets/minio-root-user
+      - --env
+      - MINIO_ROOT_PASSWORD_FILE=/run/secrets/minio-root-password
+      - --volume
+      - "{{ infrastructure_services_minio_shared_state_directory }}/root-user:/run/secrets/minio-root-user:ro"
+      - --volume
+      - "{{ infrastructure_services_minio_shared_state_directory }}/root-password:/run/secrets/minio-root-password:ro"
+      - --volume
+      - "{{ foundry_services_resolved.object_storage.data_root }}:/data"
+      - "{{ foundry_services_resolved.object_storage.image }}"
+      - server
+      - /data
+      - --console-address
+      - ":{{ infrastructure_services_minio_console_port }}"
+  when: >-
+    infrastructure_services_object_storage_container_inspect.rc != 0
+    or infrastructure_services_object_storage_container_recreate
+  no_log: true
+
+- name: Start an existing shared MinIO container
+  ansible.builtin.command:
+    argv: [docker, container, start, "{{ infrastructure_services_minio_shared_container_name }}"]
+  when:
+    - infrastructure_services_object_storage_container_inspect.rc == 0
+    - not infrastructure_services_object_storage_container_recreate
+    - not (infrastructure_services_object_storage_container_inspect.stdout | from_json | first).State.Running
+  no_log: true

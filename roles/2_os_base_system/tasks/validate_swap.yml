@@ -1,7 +1,7 @@
 ---
 - name: Inspect active swap capacity
   ansible.builtin.command:
-    argv: [swapon, --show, --bytes, --noheadings, --raw, --output, NAME,SIZE]
+    argv: [/sbin/swapon, --show, --bytes, --noheadings, --raw, --output, NAME,SIZE]
   register: os_base_active_swap
   changed_when: false
   check_mode: false

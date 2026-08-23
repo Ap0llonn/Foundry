@@ -1,0 +1,72 @@
+---
+- name: Render bucket-scoped MinIO policies
+  ansible.builtin.copy:
+    dest: "{{ infrastructure_services_minio_shared_state_directory }}/policies/{{ item.contract_key }}.json"
+    owner: root
+    group: root
+    mode: "0640"
+    content: >-
+      {{ {
+        'Version': '2012-10-17',
+        'Statement': [
+          {
+            'Effect': 'Allow',
+            'Action': ['s3:ListBucket', 's3:GetBucketLocation'],
+            'Resource': ['arn:aws:s3:::' + item.bucket]
+          },
+          {
+            'Effect': 'Allow',
+            'Action': ['s3:GetObject', 's3:PutObject', 's3:DeleteObject', 's3:AbortMultipartUpload', 's3:ListMultipartUploadParts'],
+            'Resource': ['arn:aws:s3:::' + item.bucket + '/*']
+          }
+        ]
+      } | to_nice_json }}
+  loop: "{{ infrastructure_services_object_storage_bucket_credentials | default({}) | dict2items | map(attribute='value') | list }}"
+  loop_control:
+    label: "{{ item.environment }} / {{ item.purpose }}"
+
+- name: Converge each isolated MinIO bucket and service user
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ foundry_platform_resolved.traefik.ingress_network }}"
+      - --volume
+      - "{{ infrastructure_services_minio_shared_state_directory }}/policies/{{ item.contract_key }}.json:/policy.json:ro"
+      - --env
+      - "MINIO_ROOT_USER={{ infrastructure_services_object_storage_root_user }}"
+      - --env
+      - "MINIO_ROOT_PASSWORD={{ infrastructure_services_object_storage_root_password }}"
+      - --env
+      - "MINIO_BUCKET={{ item.bucket }}"
+      - --env
+      - "MINIO_ACCESS_KEY={{ item.access_key }}"
+      - --env
+      - "MINIO_SECRET_KEY={{ item.secret_key }}"
+      - --env
+      - "MINIO_POLICY={{ item.policy_name }}"
+      - --env
+      - "MINIO_PUBLIC_READ={{ item.public_read | ternary('true', 'false') }}"
+      - --entrypoint
+      - /bin/sh
+      - "{{ infrastructure_services_minio_client_image }}"
+      - -ec
+      - >-
+        mc alias set foundry {{ item.internal_endpoint }} "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD";
+        mc mb --ignore-existing --with-versioning foundry/"$MINIO_BUCKET";
+        mc version enable foundry/"$MINIO_BUCKET";
+        mc admin policy info foundry "$MINIO_POLICY" >/dev/null 2>&1 || mc admin policy create foundry "$MINIO_POLICY" /policy.json;
+        mc admin user info foundry "$MINIO_ACCESS_KEY" >/dev/null 2>&1 || mc admin user add foundry "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY";
+        mc admin policy attach foundry "$MINIO_POLICY" --user "$MINIO_ACCESS_KEY";
+        if [ "$MINIO_PUBLIC_READ" = true ]; then
+          mc anonymous set download foundry/"$MINIO_BUCKET";
+        else
+          mc anonymous set none foundry/"$MINIO_BUCKET";
+        fi
+  loop: "{{ infrastructure_services_object_storage_bucket_credentials | default({}) | dict2items | map(attribute='value') | list }}"
+  loop_control:
+    label: "{{ item.environment }} / {{ item.purpose }}"
+  changed_when: false
+  no_log: true

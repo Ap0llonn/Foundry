@@ -1,4 +1,202 @@
 ---
-# Role: 9 - Operations / observability
-# Placeholder — ne fait rien pour le moment.
-[]
+- name: Gather operating-system facts for observability
+  ansible.builtin.setup:
+    gather_subset: [min, hardware]
+
+- name: Resolve observability configuration
+  ansible.builtin.set_fact:
+    observability_resolved: >-
+      {{ observability_defaults | combine(observability | default({}), recursive=true) }}
+  no_log: true
+
+- name: Validate observability configuration
+  ansible.builtin.assert:
+    that:
+      - (observability | default({})).keys() | difference(['enabled', 'dashboard', 'collector', 'backend', 'signoz']) | length == 0
+      - (observability | default({})).get('collector', {}) is mapping
+      - (observability | default({})).get('collector', {}).keys() | difference(['version']) | length == 0
+      - (observability | default({})).get('backend', {}) is mapping
+      - (observability | default({})).get('backend', {}).keys() | difference(['endpoint', 'headers', 'tls_insecure']) | length == 0
+      - (observability | default({})).get('signoz', {}) is mapping
+      - (observability | default({})).get('signoz', {}).keys() | difference(['enabled', 'host', 'project', 'environment', 'hostname']) | length == 0
+      - observability_resolved is mapping
+      - observability_resolved.enabled is boolean
+      - observability_resolved.dashboard == 'signoz'
+      - observability_resolved.collector is mapping
+      - observability_resolved.collector.version is string
+      - observability_resolved.collector.version is match('^[0-9]+[.][0-9]+[.][0-9]+$')
+      - observability_resolved.backend is mapping
+      - observability_resolved.backend.endpoint is string
+      - >-
+        not observability_resolved.enabled
+        or observability_resolved.backend.endpoint is match('^[A-Za-z0-9][A-Za-z0-9.-]*:[0-9]{1,5}$')
+      - observability_resolved.backend.headers is mapping
+      - observability_resolved.backend.headers | dict2items | map(attribute='key') | select('string') | list | length == observability_resolved.backend.headers | length
+      - observability_resolved.backend.headers | dict2items | map(attribute='value') | select('string') | list | length == observability_resolved.backend.headers | length
+      - observability_resolved.backend.tls_insecure is boolean
+      - observability_resolved.signoz is mapping
+      - observability_resolved.signoz.enabled is boolean
+      - observability_resolved.signoz.host is string
+      - observability_resolved.signoz.host | length == 0 or observability_resolved.signoz.host in groups['all']
+      - observability_resolved.signoz.project is string
+      - observability_resolved.signoz.project is match('^[a-z][a-z0-9-]{0,62}$')
+      - observability_resolved.signoz.environment is string
+      - observability_resolved.signoz.environment is match('^[a-z][a-z0-9-]{0,62}$')
+      - observability_resolved.signoz.hostname is string
+      - observability_resolved.signoz.hostname | length == 0 or observability_resolved.signoz.hostname is match('^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:[.][a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$')
+      - not observability_resolved.signoz.enabled or observability_resolved.enabled
+      - >-
+        not observability_resolved.enabled
+        or (
+          ansible_facts.distribution == 'Debian'
+          and ansible_facts.distribution_major_version == '12'
+          and ansible_facts.architecture in observability_supported_architectures
+        )
+    fail_msg: >-
+      Observability requires Debian 12, a supported architecture, and an OTLP
+      backend endpoint in host:port form when enabled.
+  no_log: true
+
+- name: Reconcile self-hosted SigNoz before starting the host Collector
+  ansible.builtin.import_tasks: signoz.yml
+  when:
+    - observability_resolved.enabled
+    - observability_resolved.signoz.enabled
+
+- name: Resolve OpenTelemetry Collector package contract
+  ansible.builtin.set_fact:
+    observability_collector_architecture: >-
+      {{ observability_supported_architectures[ansible_facts.architecture] }}
+    observability_collector_package_name: >-
+      otelcol-contrib_{{ observability_resolved.collector.version }}_linux_{{ observability_supported_architectures[ansible_facts.architecture] }}.deb
+    observability_collector_package_url: >-
+      https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v{{ observability_resolved.collector.version }}/otelcol-contrib_{{ observability_resolved.collector.version }}_linux_{{ observability_supported_architectures[ansible_facts.architecture] }}.deb
+    observability_collector_package_checksums:
+      "0.159.0-amd64": 4ede8d750d6bf845e353be46cc550f590e6ccdaeeb60aae941cde6ad561877db
+      "0.159.0-arm64": 430469fbfb48f123d08dfc896973bdc205ba393901cc506e92c9c928698a6d5e
+  when: observability_resolved.enabled
+
+- name: Require a checksum-pinned OpenTelemetry Collector package
+  ansible.builtin.assert:
+    that:
+      - >-
+        observability_resolved.collector.version + '-' + observability_collector_architecture
+        in observability_collector_package_checksums
+    fail_msg: >-
+      The requested otelcol-contrib version/architecture is not certified by
+      Foundry. Add its official checksum before using it.
+  when: observability_resolved.enabled
+
+- name: Create the Foundry OpenTelemetry package cache
+  ansible.builtin.file:
+    path: "{{ observability_collector_package_directory }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: observability_resolved.enabled
+
+- name: Create the OpenTelemetry Collector configuration directory before installation
+  ansible.builtin.file:
+    path: "{{ observability_collector_config_file | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: observability_resolved.enabled
+
+- name: Stage a loopback-only OpenTelemetry configuration before package activation
+  ansible.builtin.template:
+    src: otelcol-contrib-bootstrap.yaml.j2
+    dest: "{{ observability_collector_config_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: observability_resolved.enabled
+
+- name: Download the checksum-pinned OpenTelemetry Collector Contrib package
+  ansible.builtin.get_url:
+    url: "{{ observability_collector_package_url }}"
+    dest: "{{ observability_collector_package_directory }}/{{ observability_collector_package_name }}"
+    checksum: >-
+      sha256:{{ observability_collector_package_checksums[observability_resolved.collector.version + '-' + observability_collector_architecture] }}
+    owner: root
+    group: root
+    mode: "0644"
+  when: observability_resolved.enabled
+
+- name: Install OpenTelemetry Collector Contrib
+  ansible.builtin.apt:
+    deb: "{{ observability_collector_package_directory }}/{{ observability_collector_package_name }}"
+    state: present
+  when: observability_resolved.enabled
+
+- name: Configure the Foundry OpenTelemetry Collector
+  ansible.builtin.template:
+    src: otelcol-contrib.yaml.j2
+    dest: "{{ observability_collector_config_file }}"
+    owner: root
+    group: otelcol-contrib
+    mode: "0640"
+  register: observability_collector_config
+  when: observability_resolved.enabled
+  no_log: true
+
+- name: Validate the OpenTelemetry Collector configuration before activation
+  ansible.builtin.command:
+    argv:
+      - otelcol-contrib
+      - validate
+      - "--config={{ observability_collector_config_file }}"
+  changed_when: false
+  when: observability_resolved.enabled
+  no_log: true
+
+- name: Enable and start the Foundry OpenTelemetry Collector
+  ansible.builtin.systemd:
+    name: "{{ observability_collector_service_name }}"
+    enabled: true
+    state: "{{ 'restarted' if observability_collector_config.changed else 'started' }}"
+    daemon_reload: true
+  when: observability_resolved.enabled
+
+- name: Validate OpenTelemetry Collector systemd state
+  ansible.builtin.systemd:
+    name: "{{ observability_collector_service_name }}"
+  register: observability_collector_service
+  changed_when: false
+  when: observability_resolved.enabled
+
+- name: Require the OpenTelemetry Collector service to be running
+  ansible.builtin.assert:
+    that:
+      - observability_collector_service.status.ActiveState == 'active'
+      - observability_collector_service.status.SubState == 'running'
+    fail_msg: OpenTelemetry Collector Contrib is not running after configuration.
+  when: observability_resolved.enabled
+
+- name: Validate local OTLP receivers
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ item }}"
+    state: started
+    timeout: 20
+  loop:
+    - "{{ observability_collector_grpc_port }}"
+    - "{{ observability_collector_http_port }}"
+  when: observability_resolved.enabled
+
+- name: Verify host metrics reach the Collector pipeline
+  ansible.builtin.uri:
+    url: "http://{{ observability_collector_metrics_host }}:{{ observability_collector_metrics_port }}/metrics"
+    return_content: true
+    status_code: 200
+  register: observability_collector_metrics
+  retries: 12
+  delay: 2
+  until: >-
+    observability_collector_metrics.content is search(
+      'otelcol_receiver_accepted_metric_points.*receiver="hostmetrics"'
+    )
+  changed_when: false
+  when: observability_resolved.enabled

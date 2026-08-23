@@ -18,13 +18,16 @@
     that:
       - project.name | default('') is string
       - project.name | default('') is match(networking_identifier_pattern)
+      - project.resource_prefix | default('foundry') is string
+      - project.resource_prefix | default('foundry') | length == 0 or project.resource_prefix | default('foundry') is match(networking_resource_prefix_pattern)
       - project.keys() | difference(networking_allowed_project_keys) | length == 0
       - networking_resolved.keys() | difference(networking_allowed_root_keys) | length == 0
       - networking_resolved.stale_network_policy in networking_allowed_stale_network_policies
       - networking_resolved.overlay_migration_approved is boolean
       - environments | length > 0
     fail_msg: >-
-      project.name is required and must be a lowercase unambiguous identifier;
+      project.name and optional project.resource_prefix must be lowercase
+      unambiguous identifiers;
       networking contains an unknown option or environments is empty.
 
 - name: Validate every environment is a mapping

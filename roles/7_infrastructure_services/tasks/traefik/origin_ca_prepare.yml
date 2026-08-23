@@ -1,0 +1,101 @@
+---
+- name: Ensure the Cloudflare Origin CA material directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+    follow: false
+  loop:
+    - "{{ infrastructure_services_state_directory }}"
+    - "{{ infrastructure_services_traefik_dynamic_directory }}"
+
+- name: Inspect managed Cloudflare Origin CA material
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop:
+    - "{{ infrastructure_services_traefik_origin_ca_key }}"
+    - "{{ infrastructure_services_traefik_origin_ca_certificate }}"
+  register: infrastructure_services_traefik_origin_ca_material
+  no_log: true
+
+- name: Refuse unsafe Cloudflare Origin CA material
+  ansible.builtin.assert:
+    that:
+      - not item.stat.exists or (item.stat.isreg and not item.stat.islnk)
+      - not item.stat.exists or item.stat.pw_name == 'root'
+      - not item.stat.exists or item.stat.gr_name == 'root'
+    fail_msg: "Unsafe Cloudflare Origin CA path: {{ item.item }}"
+  loop: "{{ infrastructure_services_traefik_origin_ca_material.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  no_log: true
+
+- name: Resolve Cloudflare Origin CA material state
+  ansible.builtin.set_fact:
+    infrastructure_services_traefik_origin_ca_key_exists: >-
+      {{ infrastructure_services_traefik_origin_ca_material.results[0].stat.exists | default(false) }}
+    infrastructure_services_traefik_origin_ca_certificate_exists: >-
+      {{ infrastructure_services_traefik_origin_ca_material.results[1].stat.exists | default(false) }}
+  no_log: true
+
+- name: Require the private key for an existing Cloudflare Origin CA certificate
+  ansible.builtin.assert:
+    that: infrastructure_services_traefik_origin_ca_key_exists
+    fail_msg: >-
+      The managed Cloudflare Origin CA certificate exists but its private key is
+      missing. Remove the certificate only if you intentionally want Foundry to
+      issue and install a replacement certificate.
+  when: infrastructure_services_traefik_origin_ca_certificate_exists
+  no_log: true
+
+- name: Generate the Cloudflare Origin CA private key once
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - genpkey
+      - -algorithm
+      - RSA
+      - -pkeyopt
+      - rsa_keygen_bits:4096
+      - -out
+      - "{{ infrastructure_services_traefik_origin_ca_key }}"
+    creates: "{{ infrastructure_services_traefik_origin_ca_key }}"
+  when: not infrastructure_services_traefik_origin_ca_key_exists
+  no_log: true
+
+- name: Restrict the Cloudflare Origin CA private key
+  ansible.builtin.file:
+    path: "{{ infrastructure_services_traefik_origin_ca_key }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Build a Cloudflare Origin CA certificate request
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - req
+      - -new
+      - -key
+      - "{{ infrastructure_services_traefik_origin_ca_key }}"
+      - -subj
+      - "/CN={{ foundry_domains_resolved.base }}"
+      - -addext
+      - "subjectAltName=DNS:{{ foundry_domains_resolved.base }},DNS:*.{{ foundry_domains_resolved.base }}"
+      - -out
+      - "{{ infrastructure_services_traefik_origin_ca_csr }}"
+  when: not infrastructure_services_traefik_origin_ca_certificate_exists
+  no_log: true
+
+- name: Restrict the Cloudflare Origin CA certificate request
+  ansible.builtin.file:
+    path: "{{ infrastructure_services_traefik_origin_ca_csr }}"
+    owner: root
+    group: root
+    mode: "0600"
+  when: not infrastructure_services_traefik_origin_ca_certificate_exists
+  no_log: true

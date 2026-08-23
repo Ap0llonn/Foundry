@@ -1,0 +1,58 @@
+---
+observability_defaults:
+  enabled: false
+  # The dashboard is intentionally only an operator-facing label. The Collector
+  # exports plain OTLP and can therefore be pointed at another backend later.
+  dashboard: signoz
+  collector:
+    version: "0.159.0"
+  backend:
+    # OTLP/gRPC authority, without a URL scheme; e.g. ingest.example.com:443.
+    endpoint: ""
+    # Optional OTLP exporter headers. SigNoz Cloud uses signoz-ingestion-key.
+    headers: {}
+    tls_insecure: false
+  # SigNoz is optional and runs as a Dokploy Compose service.  The UI remains
+  # public through Traefik; ingestion is deliberately loopback-only by default.
+  signoz:
+    enabled: false
+    # Empty selects the first inventory host. Set this explicitly for a
+    # multi-VM inventory so the dashboard has a stable home.
+    host: ""
+    # SigNoz has its own Dokploy project/environment, separate from the
+    # application project's dev and production environments.
+    project: monitoring
+    environment: monitoring
+    # Empty resolves to signoz.<domains.base>.
+    hostname: ""
+
+observability_supported_architectures:
+  x86_64: amd64
+  aarch64: arm64
+
+observability_collector_config_file: /etc/otelcol-contrib/config.yaml
+observability_collector_service_name: otelcol-contrib
+observability_collector_package_directory: /var/cache/foundry/otelcol-contrib
+observability_collector_metrics_host: 127.0.0.1
+observability_collector_metrics_port: 8888
+observability_collector_grpc_port: 4317
+observability_collector_http_port: 4318
+observability_collector_hostmetrics_interval: 10s
+
+observability_signoz_version: v0.127.1
+observability_signoz_collector_version: v0.144.5
+observability_signoz_state_directory: /var/lib/foundry/signoz
+observability_signoz_cache_directory: /var/cache/foundry/signoz
+observability_signoz_otlp_grpc_port: 14317
+# Cloud providers commonly describe a 4 GB VM in decimal units, which Linux
+# reports as roughly 3815 MiB. Keep a small margin for that unit difference.
+observability_signoz_minimum_memory_mb: 3800
+observability_signoz_images:
+  clickhouse: "clickhouse/clickhouse-server@sha256:4536143e22dc9bddb217c7e610f6b7ed5e6efd8fefdbc61acdeadb5d8022213a"
+  zookeeper: "signoz/zookeeper@sha256:fcc4a3288154ccaa3bdb5ae6dc10180c084d29a8a6a26b62ac8e30a8940dc2e6"
+  ui: "signoz/signoz@sha256:77de0af293c030e409147d1fdb71d1499f5ce720cd1eb083880ea1349d8880b4"
+  collector: "signoz/signoz-otel-collector@sha256:f9bf94d566055d06581f3befbf361cc26d670f31ad00cb31fda2ec380210c5ec"
+observability_signoz_histogram_version: v0.0.1
+observability_signoz_histogram_checksums:
+  amd64: 33997073eb6d82b7be4f27f9fc8ec9e28a395e0f20674d5d54bb2fa28a75488d
+  arm64: e5605ebffa82a450ebbcdf6cf19dad546e1e40d52dbf3e03cfd2d2d5b7394211

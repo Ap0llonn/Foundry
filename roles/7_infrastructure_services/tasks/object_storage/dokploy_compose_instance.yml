@@ -1,0 +1,244 @@
+---
+- name: Render {{ infrastructure_services_object_storage_instance.environment }} MinIO Compose contract
+  ansible.builtin.set_fact:
+    infrastructure_services_object_storage_compose_file: >-
+      {{ {
+        'services': {
+          infrastructure_services_object_storage_instance.service_name: {
+            'image': foundry_services_resolved.object_storage.image,
+            'user': (foundry_services_resolved.object_storage.run_as_uid | string) + ':' + (foundry_services_resolved.object_storage.run_as_gid | string),
+            'command': ['server', '/data', '--console-address', ':9001'],
+            'restart': 'unless-stopped',
+            'environment': {
+              'MINIO_ROOT_USER_FILE': '/run/secrets/minio-root-user',
+              'MINIO_ROOT_PASSWORD_FILE': '/run/secrets/minio-root-password'
+            },
+            'volumes': [
+              infrastructure_services_object_storage_instance.state_path + '/root-user:/run/secrets/minio-root-user:ro',
+              infrastructure_services_object_storage_instance.state_path + '/root-password:/run/secrets/minio-root-password:ro',
+              infrastructure_services_object_storage_instance.data_path + ':/data'
+            ],
+            'networks': [foundry_platform_resolved.traefik.ingress_network],
+            'labels': ({
+              'traefik.enable': 'true',
+              'traefik.docker.network': foundry_platform_resolved.traefik.ingress_network,
+              'traefik.http.routers.foundry-' + project.name + '-' + infrastructure_services_object_storage_instance.environment + '-minio.rule': 'Host(`' + (infrastructure_services_object_storage_instance.endpoint | regex_replace('^https://', '')) + '`)',
+              'traefik.http.routers.foundry-' + project.name + '-' + infrastructure_services_object_storage_instance.environment + '-minio.entrypoints': 'websecure',
+              'traefik.http.routers.foundry-' + project.name + '-' + infrastructure_services_object_storage_instance.environment + '-minio.tls': 'true',
+              'traefik.http.services.foundry-' + project.name + '-' + infrastructure_services_object_storage_instance.environment + '-minio.loadbalancer.server.port': '9000'
+            } | combine(
+              {
+                'traefik.http.routers.foundry-' + project.name + '-' + infrastructure_services_object_storage_instance.environment + '-minio.tls.certresolver': 'letsencrypt'
+              }
+              if foundry_platform_resolved.traefik.tls.mode == 'public_acme' else {}
+            ))
+          }
+        },
+        'networks': {
+          foundry_platform_resolved.traefik.ingress_network: {'external': true}
+        }
+      } | to_nice_yaml(indent=2) }}
+    infrastructure_services_object_storage_compose_hash: >-
+      {{ {
+        'compose': infrastructure_services_object_storage_instance,
+        'image': foundry_services_resolved.object_storage.image,
+        'uid': foundry_services_resolved.object_storage.run_as_uid,
+        'gid': foundry_services_resolved.object_storage.run_as_gid,
+        'network': foundry_platform_resolved.traefik.ingress_network,
+        'tls_mode': (foundry_platform_resolved.traefik.tls.mode if foundry_platform_resolved.traefik.tls.enabled else none)
+      } | to_json | hash('sha256') }}
+
+- name: Read {{ infrastructure_services_object_storage_instance.environment }} Dokploy Compose services
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - "{{ infrastructure_services_dokploy_api_url }}/api/compose.search?environmentId={{ infrastructure_services_dokploy_environment_map[infrastructure_services_object_storage_instance.environment] }}&name={{ infrastructure_services_object_storage_instance.compose_name }}&limit=100"
+  register: infrastructure_services_object_storage_compose_search_raw
+  changed_when: false
+
+- name: Normalize {{ infrastructure_services_object_storage_instance.environment }} Dokploy Compose search response
+  ansible.builtin.include_tasks: normalize_compose_search.yml
+  vars:
+    infrastructure_services_object_storage_compose_search_response: >-
+      {{ infrastructure_services_object_storage_compose_search_raw.stdout }}
+
+- name: Resolve matching {{ infrastructure_services_object_storage_instance.environment }} MinIO Compose service
+  ansible.builtin.set_fact:
+    infrastructure_services_object_storage_compose_matches: >-
+      {{
+        infrastructure_services_object_storage_compose_search_results
+        | select('mapping')
+        | selectattr('name', 'equalto', infrastructure_services_object_storage_instance.compose_name)
+        | list
+      }}
+
+- name: Reject ambiguous {{ infrastructure_services_object_storage_instance.environment }} MinIO Compose services
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_object_storage_compose_matches | length <= 1
+    fail_msg: More than one Dokploy MinIO Compose service exists in this environment.
+
+- name: Create missing {{ infrastructure_services_object_storage_instance.environment }} MinIO Compose service
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --request
+      - POST
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - --header
+      - "Content-Type: application/json"
+      - --data
+      - >-
+        {{ {
+          'name': infrastructure_services_object_storage_instance.compose_name,
+          'appName': infrastructure_services_object_storage_instance.compose_app_name,
+          'environmentId': infrastructure_services_dokploy_environment_map[infrastructure_services_object_storage_instance.environment],
+          'sourceType': 'raw',
+          'composeType': 'docker-compose',
+          'composeFile': infrastructure_services_object_storage_compose_file
+        } | to_json }}
+      - "{{ infrastructure_services_dokploy_api_url }}/api/compose.create"
+  when: infrastructure_services_object_storage_compose_matches | length == 0
+  register: infrastructure_services_object_storage_compose_create
+  changed_when: true
+
+- name: Re-read {{ infrastructure_services_object_storage_instance.environment }} Dokploy MinIO Compose service
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - "{{ infrastructure_services_dokploy_api_url }}/api/compose.search?environmentId={{ infrastructure_services_dokploy_environment_map[infrastructure_services_object_storage_instance.environment] }}&name={{ infrastructure_services_object_storage_instance.compose_name }}&limit=100"
+  register: infrastructure_services_object_storage_compose_after_raw
+  changed_when: false
+
+- name: Normalize {{ infrastructure_services_object_storage_instance.environment }} refreshed Dokploy Compose search response
+  ansible.builtin.include_tasks: normalize_compose_search.yml
+  vars:
+    infrastructure_services_object_storage_compose_search_response: >-
+      {{ infrastructure_services_object_storage_compose_after_raw.stdout }}
+
+- name: Resolve {{ infrastructure_services_object_storage_instance.environment }} MinIO Compose identity
+  ansible.builtin.set_fact:
+    infrastructure_services_object_storage_compose: >-
+      {{
+        infrastructure_services_object_storage_compose_search_results
+        | select('mapping')
+        | selectattr('name', 'equalto', infrastructure_services_object_storage_instance.compose_name)
+        | list
+        | first
+        | default({}, true)
+      }}
+    infrastructure_services_object_storage_compose_id: >-
+      {{
+        (
+          infrastructure_services_object_storage_compose_search_results
+          | select('mapping')
+          | selectattr('name', 'equalto', infrastructure_services_object_storage_instance.compose_name)
+          | list
+          | first
+          | default({}, true)
+        ).get('composeId',
+          (
+            infrastructure_services_object_storage_compose_search_results
+            | select('mapping')
+            | selectattr('name', 'equalto', infrastructure_services_object_storage_instance.compose_name)
+            | list
+            | first
+            | default({}, true)
+          ).get('id', '')
+        )
+      }}
+
+- name: Require {{ infrastructure_services_object_storage_instance.environment }} MinIO Compose identity
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_object_storage_compose_id | string | length > 0
+    fail_msg: Dokploy did not return an identifier for the MinIO Compose service.
+
+- name: Update and deploy {{ infrastructure_services_object_storage_instance.environment }} MinIO Compose service
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --request
+      - POST
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - --header
+      - "Content-Type: application/json"
+      - --data
+      - "{{ {'composeId': infrastructure_services_object_storage_compose_id, 'sourceType': 'raw', 'composeType': 'docker-compose', 'composeFile': infrastructure_services_object_storage_compose_file} | to_json }}"
+      - "{{ infrastructure_services_dokploy_api_url }}/api/compose.update"
+  changed_when: true
+  when: >-
+    infrastructure_services_object_storage_compose_create.changed | default(false)
+    or infrastructure_services_object_storage_compose.get('composeFile', '') != infrastructure_services_object_storage_compose_file
+
+- name: Deploy {{ infrastructure_services_object_storage_instance.environment }} MinIO Compose service
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --request
+      - POST
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - --header
+      - "Content-Type: application/json"
+      - --data
+      - "{{ {'composeId': infrastructure_services_object_storage_compose_id} | to_json }}"
+      - "{{ infrastructure_services_dokploy_api_url }}/api/compose.deploy"
+  changed_when: true
+  when: >-
+    infrastructure_services_object_storage_compose_create.changed | default(false)
+    or infrastructure_services_object_storage_compose.get('composeFile', '') != infrastructure_services_object_storage_compose_file
+
+- name: Record {{ infrastructure_services_object_storage_instance.environment }} MinIO Compose identity
+  ansible.builtin.set_fact:
+    infrastructure_services_object_storage_instances: >-
+      {{ infrastructure_services_object_storage_instances | combine({
+        infrastructure_services_object_storage_instance.environment:
+          infrastructure_services_object_storage_instance | combine({'compose_id': infrastructure_services_object_storage_compose_id})
+      }) }}

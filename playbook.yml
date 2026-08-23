@@ -194,6 +194,10 @@
     - role: 7_infrastructure_services
       tags: [infrastructure_services]
 
+    - role: 9_operations_observability
+      become: true
+      tags: [operations_observability, observability]
+
   post_tasks:
     - name: Revalidate final Security exposure after Docker workloads exist
       ansible.builtin.include_role:

@@ -89,9 +89,9 @@
     - os_base_apt_proxy.https | default('') | length == 0
     - os_base_apt_proxy.no_proxy | default([]) | length == 0
 
-- name: Install Foundry-owned Ubuntu mirror definition
+- name: Install Foundry-owned distribution mirror definition
   ansible.builtin.copy:
-    dest: /etc/apt/sources.list.d/foundry-ubuntu.sources
+    dest: "/etc/apt/sources.list.d/{{ os_base_apt_foundry_distribution_source_filename }}"
     owner: root
     group: root
     mode: "0644"
@@ -109,15 +109,15 @@
       Signed-By: {{ os_base_apt_distribution_keyring }}
   when: os_base_apt_manage_distribution_sources | bool
 
-- name: Inspect vendor Ubuntu source definition
+- name: Inspect vendor distribution source definition
   ansible.builtin.stat:
-    path: /etc/apt/sources.list.d/ubuntu.sources
-  register: os_base_vendor_ubuntu_sources
+    path: "/etc/apt/sources.list.d/{{ os_base_apt_distribution_source_filename }}"
+  register: os_base_vendor_distribution_sources
 
-- name: Preserve vendor Ubuntu source definition before taking ownership
+- name: Preserve vendor distribution source definition before taking ownership
   ansible.builtin.copy:
-    src: /etc/apt/sources.list.d/ubuntu.sources
-    dest: /etc/apt/sources.list.d/ubuntu.sources.foundry-disabled
+    src: "/etc/apt/sources.list.d/{{ os_base_apt_distribution_source_filename }}"
+    dest: "/etc/apt/sources.list.d/{{ os_base_apt_distribution_source_filename }}.foundry-disabled"
     remote_src: true
     owner: root
     group: root
@@ -125,18 +125,18 @@
     force: false
   when:
     - os_base_apt_manage_distribution_sources | bool
-    - os_base_vendor_ubuntu_sources.stat.exists
+    - os_base_vendor_distribution_sources.stat.exists
 
-- name: Disable vendor Ubuntu source definition when Foundry owns mirrors
+- name: Disable vendor distribution source definition when Foundry owns mirrors
   ansible.builtin.file:
-    path: /etc/apt/sources.list.d/ubuntu.sources
+    path: "/etc/apt/sources.list.d/{{ os_base_apt_distribution_source_filename }}"
     state: absent
   when: os_base_apt_manage_distribution_sources | bool
 
 - name: Inspect legacy distribution source list
   ansible.builtin.stat:
     path: /etc/apt/sources.list
-  register: os_base_legacy_ubuntu_sources
+  register: os_base_legacy_distribution_sources
 
 - name: Preserve legacy source list before taking ownership
   ansible.builtin.copy:
@@ -149,7 +149,7 @@
     force: false
   when:
     - os_base_apt_manage_distribution_sources | bool
-    - os_base_legacy_ubuntu_sources.stat.exists
+    - os_base_legacy_distribution_sources.stat.exists
 
 - name: Own legacy distribution source list when Foundry owns mirrors
   ansible.builtin.copy:
@@ -162,21 +162,21 @@
 
 - name: Inspect preserved vendor source definition
   ansible.builtin.stat:
-    path: /etc/apt/sources.list.d/ubuntu.sources.foundry-disabled
-  register: os_base_preserved_vendor_sources
+    path: "/etc/apt/sources.list.d/{{ os_base_apt_distribution_source_filename }}.foundry-disabled"
+  register: os_base_preserved_vendor_distribution_sources
   when: not (os_base_apt_manage_distribution_sources | bool)
 
 - name: Restore vendor source definition when Foundry releases ownership
   ansible.builtin.copy:
-    src: /etc/apt/sources.list.d/ubuntu.sources.foundry-disabled
-    dest: /etc/apt/sources.list.d/ubuntu.sources
+    src: "/etc/apt/sources.list.d/{{ os_base_apt_distribution_source_filename }}.foundry-disabled"
+    dest: "/etc/apt/sources.list.d/{{ os_base_apt_distribution_source_filename }}"
     remote_src: true
     owner: root
     group: root
     mode: "0644"
   when:
     - not (os_base_apt_manage_distribution_sources | bool)
-    - os_base_preserved_vendor_sources.stat.exists | default(false)
+    - os_base_preserved_vendor_distribution_sources.stat.exists | default(false)
 
 - name: Inspect preserved legacy source list
   ansible.builtin.stat:

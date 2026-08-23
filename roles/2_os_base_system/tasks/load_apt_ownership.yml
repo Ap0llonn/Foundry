@@ -68,7 +68,7 @@
 - name: Record Foundry-owned distribution source
   ansible.builtin.set_fact:
     os_base_current_owned_repositories: >-
-      {{ os_base_current_owned_repositories + ['foundry-ubuntu.sources'] }}
+      {{ os_base_current_owned_repositories + [os_base_apt_foundry_distribution_source_filename] }}
   when: os_base_apt_manage_distribution_sources | bool
 
 - name: Calculate stale Foundry APT resources

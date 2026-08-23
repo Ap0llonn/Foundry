@@ -1,0 +1,51 @@
+---
+- name: Decode Dokploy Compose search response
+  ansible.builtin.set_fact:
+    infrastructure_services_object_storage_compose_search_payload: >-
+      {{ infrastructure_services_object_storage_compose_search_response | from_json }}
+
+- name: Unwrap Dokploy Compose search response
+  ansible.builtin.set_fact:
+    infrastructure_services_object_storage_compose_search_results: >-
+      {{
+        infrastructure_services_object_storage_compose_search_payload
+        if (
+          infrastructure_services_object_storage_compose_search_payload is sequence
+          and infrastructure_services_object_storage_compose_search_payload is not string
+          and infrastructure_services_object_storage_compose_search_payload is not mapping
+        )
+        else infrastructure_services_object_storage_compose_search_payload.get(
+          'items',
+          infrastructure_services_object_storage_compose_search_payload.get(
+            'data',
+            infrastructure_services_object_storage_compose_search_payload.get('results', [])
+          )
+        )
+      }}
+
+- name: Unwrap nested Dokploy Compose search response
+  ansible.builtin.set_fact:
+    infrastructure_services_object_storage_compose_search_results: >-
+      {{
+        infrastructure_services_object_storage_compose_search_results
+        if (
+          infrastructure_services_object_storage_compose_search_results is sequence
+          and infrastructure_services_object_storage_compose_search_results is not string
+          and infrastructure_services_object_storage_compose_search_results is not mapping
+        )
+        else infrastructure_services_object_storage_compose_search_results.get(
+          'items',
+          infrastructure_services_object_storage_compose_search_results.get(
+            'data',
+            infrastructure_services_object_storage_compose_search_results.get('results', [])
+          )
+        )
+      }}
+
+- name: Require a list from Dokploy Compose search
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_object_storage_compose_search_results is sequence
+      - infrastructure_services_object_storage_compose_search_results is not string
+      - infrastructure_services_object_storage_compose_search_results is not mapping
+    fail_msg: Dokploy compose.search returned an unsupported response format.

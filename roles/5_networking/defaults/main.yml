@@ -4,12 +4,13 @@ networking_defaults:
   overlay_migration_approved: false
 
 networking_allowed_root_keys: [stale_network_policy, overlay_migration_approved]
-networking_allowed_project_keys: [name]
+networking_allowed_project_keys: [name, resource_prefix]
 networking_allowed_environment_keys: [name, network]
 networking_allowed_environment_network_keys: [name]
 networking_allowed_stale_network_policies: [report, fail, remove_unused]
 
 networking_identifier_pattern: '^[a-z][a-z0-9-]{0,31}$'
+networking_resource_prefix_pattern: '^[a-z][a-z0-9-]{0,19}$'
 networking_explicit_network_name_pattern: '^[a-z0-9][a-z0-9_.-]{0,62}$'
 networking_reserved_network_names:
   - bridge

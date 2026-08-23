@@ -1,0 +1,24 @@
+---
+- name: Require the configured Tailscale console context
+  ansible.builtin.assert:
+    that:
+      - foundry_database_access_resolved.enabled
+      - foundry_database_access_resolved.mode == 'tailscale'
+      - foundry_database_access_tailscale_ip | default('') | length > 0
+    fail_msg: MinIO Console Tailscale access requires a running Tailscale database_access configuration.
+  no_log: true
+
+- name: Publish each MinIO Console privately through Tailscale Serve
+  ansible.builtin.command:
+    argv:
+      - tailscale
+      - serve
+      - --bg
+      - --yes
+      - "--tcp={{ item.console_port }}"
+      - "tcp://127.0.0.1:{{ item.console_port }}"
+  loop: "{{ infrastructure_services_object_storage_instances | dict2items | map(attribute='value') | list }}"
+  loop_control:
+    label: "{{ item.environment }}"
+  changed_when: false
+  no_log: true

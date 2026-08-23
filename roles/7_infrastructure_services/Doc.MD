@@ -26,7 +26,8 @@ services:
     enabled: false
     provider: minio
     environments: []
-    image: "registry.example/minio@sha256:<approved-digest>"
+    data_root: /srv/foundry/minio
+    domain_name: "" # defaults to minio.<domains.base>
 
 platform:
   traefik:
@@ -45,9 +46,14 @@ PostgreSQL 17 and Redis 8.2 are the only data-service versions accepted for V1.
 PostgreSQL databases are created and deployed through the Dokploy API inside
 their exact Foundry project/environment. Redis services are created and
 deployed through the Dokploy API in the same way. Traefik, Dokploy, and
-Dokploy's internal PostgreSQL also have digest-pinned defaults. MinIO must be
-supplied as an approved immutable digest; Foundry deliberately has no mutable
-or unreviewed fallback image.
+Dokploy's internal PostgreSQL also have digest-pinned defaults. Shared MinIO
+uses a reviewed immutable server and client digest. For each enabled
+environment, it creates versioned `assets-public`, `assets-private`, and
+`db-backups` buckets. Only `db-backups` receives a bucket-scoped Dokploy S3
+destination, used by Foundry-managed PostgreSQL backups; application assets use
+their MinIO credentials directly. No environment receives the MinIO
+administrator credential. Only `assets-public` allows anonymous reads. Private
+assets and database backups are never made public.
 
 Credentials may be supplied from Ansible Vault:
 
@@ -209,8 +215,9 @@ Docker secrets, and `dokploy-traefik` resources itself with ownership checks.
 Runtime remains the only Docker installer.
 
 Exactly one Traefik authority is used. Its dashboard is disabled,
-`exposedByDefault` is false, and PostgreSQL, Redis, and MinIO never join the
-ingress network. Dokploy itself publishes no host port. Traefik enforces the
+`exposedByDefault` is false. PostgreSQL and Redis never join the ingress
+network; shared MinIO joins it only to expose its S3 API at its configured
+HTTPS hostname, while its console remains private. Dokploy itself publishes no host port. Traefik enforces the
 configured management CIDR allowlist, including during initial onboarding.
 Foundry owns the `dokploy-traefik` container and its configuration. Do not use
 Dokploy's Traefik reset/recreate operation: replacing that resource would break

@@ -32,11 +32,12 @@ not open them publicly.
 
 ## Version and repository policy
 
-V1 supports Ubuntu 26.04 `x86_64` and installs Docker Engine from Docker's
-official `resolute/stable` repository. The signing key is checksum-pinned.
-Docker Engine, CLI, containerd, Buildx, and Compose package versions are exact
-and held against incidental upgrades. Updating versions is a reviewed dependency
-change that requires fresh-VM, drift, reboot, and idempotence certification.
+V1 supports Ubuntu 26.04 `x86_64` and Debian 12 `x86_64` (Bookworm). Docker
+Engine is installed from Docker's official distribution-specific stable
+repository. The signing key is checksum-pinned. Docker Engine, CLI,
+containerd, Buildx, and Compose package versions are exact and held against
+incidental upgrades. Updating versions is a reviewed dependency change that
+requires fresh-VM, drift, reboot, and idempotence certification.
 
 ## Existing hosts and restart safety
 

@@ -33,26 +33,55 @@ runtime_allowed_smoke_test_keys: [enabled, image]
 runtime_allowed_daemon_config_adoption: [refuse, matching]
 runtime_allowed_log_drivers: [json-file, local]
 
-# V1 is deliberately an exact, tested package set. Changing these values is a
-# dependency update and must be certified before rollout.
-runtime_docker_packages:
-  docker-ce: "5:29.7.2-1~ubuntu.26.04~resolute"
-  docker-ce-cli: "5:29.7.2-1~ubuntu.26.04~resolute"
-  containerd.io: "2.3.3-1~ubuntu.26.04~resolute"
-  docker-buildx-plugin: "0.36.1-1~ubuntu.26.04~resolute"
-  docker-compose-plugin: "5.4.0-1~ubuntu.26.04~resolute"
+# V1 is deliberately an exact, tested package set. Each supported platform has
+# its own package suffix because Docker publishes distribution-specific builds.
+# Changing these values is a dependency update and must be certified before
+# rollout.
+runtime_docker_supported_platforms:
+  - distribution: Ubuntu
+    versions: ["26.04"]
+    releases: [resolute]
+    architectures: [x86_64]
+    packages:
+      docker-ce: "5:29.7.2-1~ubuntu.26.04~resolute"
+      docker-ce-cli: "5:29.7.2-1~ubuntu.26.04~resolute"
+      containerd.io: "2.3.3-1~ubuntu.26.04~resolute"
+      docker-buildx-plugin: "0.36.1-1~ubuntu.26.04~resolute"
+      docker-compose-plugin: "5.4.0-1~ubuntu.26.04~resolute"
+    repository_url: https://download.docker.com/linux/ubuntu
+    repository_suite: resolute
+    key_url: https://download.docker.com/linux/ubuntu/gpg
+  - distribution: Debian
+    versions: ["12"]
+    releases: [bookworm]
+    allow_patch_versions: true
+    architectures: [x86_64]
+    packages:
+      docker-ce: "5:29.7.2-1~debian.12~bookworm"
+      docker-ce-cli: "5:29.7.2-1~debian.12~bookworm"
+      containerd.io: "2.3.3-1~debian.12~bookworm"
+      docker-buildx-plugin: "0.36.1-1~debian.12~bookworm"
+      docker-compose-plugin: "5.5.0-1~debian.12~bookworm"
+    repository_url: https://download.docker.com/linux/debian
+    repository_suite: bookworm
+    key_url: https://download.docker.com/linux/debian/gpg
 runtime_docker_supported_engine_pattern: '^29\.7\.[0-9]+$'
 runtime_docker_supported_api_pattern: '^1\.[0-9]+$'
 runtime_docker_allowed_storage_drivers: [overlay2, overlayfs]
 
-runtime_docker_repository_url: https://download.docker.com/linux/ubuntu
-runtime_docker_repository_suite: resolute
 runtime_docker_repository_components: [stable]
-runtime_docker_key_url: https://download.docker.com/linux/ubuntu/gpg
 runtime_docker_key_checksum: sha256:1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570
 runtime_docker_keyring: /usr/share/keyrings/foundry-docker.asc
 runtime_docker_repository_name: foundry-docker
 runtime_docker_repository_file: /etc/apt/sources.list.d/foundry-docker.sources
+
+# These are resolved from runtime_docker_supported_platforms after facts are
+# gathered. They remain separate variables because the rest of the role uses
+# them as the effective certified contract.
+runtime_docker_packages: {}
+runtime_docker_repository_url: ""
+runtime_docker_repository_suite: ""
+runtime_docker_key_url: ""
 
 runtime_docker_conflicting_packages:
   - docker.io

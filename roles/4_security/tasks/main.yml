@@ -11,6 +11,11 @@
   become: true
   tags: [security, security_packages]
 
+- name: 4.2.5 Disable unnecessary LLMNR exposure
+  ansible.builtin.import_tasks: llmnr.yml
+  become: true
+  tags: [security, security_network_hardening]
+
 - name: 4.3 Converge Foundry-owned firewall exposure
   ansible.builtin.import_tasks: firewall/main.yml
   become: true

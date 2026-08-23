@@ -203,10 +203,11 @@ must not install Docker packages, configure the daemon, or own Docker services.
 
 ### AC-RUNTIME-001 — Trusted deterministic Docker supply chain
 
-On Ubuntu 26.04 x86_64, Runtime must use Docker's official HTTPS repository, a
-checksum-pinned signing key, signed-by repository configuration, exact package
-versions, and package holds. Unsupported platforms and unowned existing Docker
-installations must fail before mutation.
+On Ubuntu 26.04 x86_64 and Debian 12 (Bookworm) x86_64, Runtime must use
+Docker's official HTTPS repository, a checksum-pinned signing key, signed-by
+repository configuration, exact platform-specific package versions, and
+package holds. Unsupported platforms and unowned existing Docker installations
+must fail before mutation.
 
 ### AC-RUNTIME-002 — Safe owned daemon configuration
 

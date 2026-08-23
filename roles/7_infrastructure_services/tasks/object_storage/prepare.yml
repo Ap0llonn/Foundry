@@ -1,0 +1,83 @@
+---
+- name: Ensure shared MinIO state directories exist
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+    follow: false
+  loop:
+    - {path: "{{ infrastructure_services_minio_shared_state_directory }}", owner: root, group: root, mode: "0750"}
+    - {path: "{{ infrastructure_services_minio_shared_state_directory }}/policies", owner: root, group: root, mode: "0750"}
+    - {path: "{{ infrastructure_services_minio_shared_secret_directory }}", owner: root, group: root, mode: "0700"}
+
+- name: Inspect the shared MinIO root password state
+  ansible.builtin.stat:
+    path: "{{ infrastructure_services_minio_shared_secret_directory }}/root-password"
+    follow: false
+  register: infrastructure_services_object_storage_root_password_file
+  no_log: true
+
+- name: Reject unsafe shared MinIO root password state
+  ansible.builtin.assert:
+    that:
+      - not infrastructure_services_object_storage_root_password_file.stat.exists or infrastructure_services_object_storage_root_password_file.stat.isreg
+      - not infrastructure_services_object_storage_root_password_file.stat.islnk | default(false)
+      - not infrastructure_services_object_storage_root_password_file.stat.exists or infrastructure_services_object_storage_root_password_file.stat.pw_name == 'root'
+      - not infrastructure_services_object_storage_root_password_file.stat.exists or infrastructure_services_object_storage_root_password_file.stat.mode == '0600'
+    fail_msg: Shared MinIO root password state must be a root-owned 0600 regular file.
+  no_log: true
+
+- name: Persist the shared MinIO root password
+  ansible.builtin.copy:
+    dest: "{{ infrastructure_services_minio_shared_secret_directory }}/root-password"
+    owner: root
+    group: root
+    mode: "0600"
+    content: >-
+      {{
+        foundry_services_resolved.object_storage.credentials.get('root_password')
+        if foundry_services_resolved.object_storage.credentials.get('root_password', '') | length > 0
+        else lookup('ansible.builtin.password', '/dev/null', length=48, chars=['ascii_letters', 'digits'])
+      }}\n
+    force: true
+  when: >-
+    not infrastructure_services_object_storage_root_password_file.stat.exists
+    or foundry_services_resolved.object_storage.credentials.get('root_password', '') | length > 0
+  register: infrastructure_services_object_storage_root_password_write
+  no_log: true
+
+- name: Read the shared MinIO root password
+  ansible.builtin.slurp:
+    path: "{{ infrastructure_services_minio_shared_secret_directory }}/root-password"
+  register: infrastructure_services_object_storage_root_password_raw
+  no_log: true
+
+- name: Resolve the shared MinIO root password
+  ansible.builtin.set_fact:
+    infrastructure_services_object_storage_root_password: >-
+      {{ infrastructure_services_object_storage_root_password_raw.content | b64decode | trim }}
+    infrastructure_services_object_storage_container_hash: >-
+      {{ {
+        'container': infrastructure_services_object_storage_container_hash,
+        'root_user': infrastructure_services_object_storage_root_user,
+        'root_password': (infrastructure_services_object_storage_root_password_raw.content | b64decode | trim)
+      } | to_json | hash('sha256') }}
+  no_log: true
+
+- name: Prepare each Dokploy-managed MinIO data directory and runtime credential files
+  ansible.builtin.include_tasks: prepare_instance.yml
+  loop: "{{ infrastructure_services_object_storage_instances | dict2items | map(attribute='value') | list }}"
+  loop_control:
+    loop_var: infrastructure_services_object_storage_instance
+    label: "{{ infrastructure_services_object_storage_instance.environment }}"
+  no_log: true
+
+- name: Persist each generated bucket credential
+  ansible.builtin.include_tasks: prepare_bucket.yml
+  loop: "{{ infrastructure_services_object_storage_buckets }}"
+  loop_control:
+    loop_var: infrastructure_services_object_storage_bucket
+    label: "{{ infrastructure_services_object_storage_bucket.environment }}"
+  no_log: true

@@ -17,6 +17,11 @@ services_defaults:
     user: foundry
     database: foundry
     credentials: {}
+    backup:
+      enabled: false
+      # Dokploy cron expression; daily at 03:00 when backups are enabled.
+      schedule: "0 3 * * *"
+      keep_latest: 7
     resources:
       memory: ""
       cpus: ""
@@ -36,9 +41,17 @@ services_defaults:
     enabled: false
     provider: minio
     environments: []
-    image: ""
+    # One Dokploy-managed MinIO Compose service per environment. Each instance
+    # has assets-public, assets-private, and db-backups buckets.
+    image: "minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
     credentials: {}
     data_root: ""
+    allow_root_filesystem: false
+    domain_name: ""
+    region: us-east-1
+    console:
+      enabled: false
+      tailscale_port: 9001
     run_as_uid: 1000
     run_as_gid: 1000
 
@@ -56,6 +69,10 @@ platform_defaults:
     https_port: 443
     tls:
       enabled: false
+      # public_acme obtains a publicly trusted certificate directly from the
+      # ACME CA. cloudflare_origin installs a Cloudflare Origin CA certificate
+      # for a proxied Cloudflare zone in Full (strict) mode.
+      mode: public_acme
       email: ""
   dokploy:
     enabled: false
@@ -69,6 +86,7 @@ platform_defaults:
       name: "Samuel"
       last_name: "Courchesne"
     secret_version: v1
+    remote_servers: []
 
 domains_defaults:
   base: ""
@@ -129,7 +147,9 @@ infrastructure_services_allowed_postgres_keys:
   - user
   - database
   - credentials
+  - backup
   - resources
+infrastructure_services_allowed_postgres_backup_keys: [enabled, schedule, keep_latest]
 infrastructure_services_allowed_redis_keys:
   - enabled
   - environments
@@ -147,8 +167,13 @@ infrastructure_services_allowed_object_storage_keys:
   - image
   - credentials
   - data_root
+  - allow_root_filesystem
+  - domain_name
+  - region
+  - console
   - run_as_uid
   - run_as_gid
+infrastructure_services_allowed_object_storage_console_keys: [enabled, tailscale_port]
 infrastructure_services_allowed_resource_keys: [memory, cpus]
 infrastructure_services_allowed_platform_keys: [swarm, traefik, dokploy]
 infrastructure_services_allowed_swarm_keys:
@@ -163,7 +188,7 @@ infrastructure_services_allowed_traefik_keys:
   - http_port
   - https_port
   - tls
-infrastructure_services_allowed_tls_keys: [enabled, email]
+infrastructure_services_allowed_tls_keys: [enabled, mode, email]
 infrastructure_services_allowed_dokploy_keys:
   - enabled
   - image
@@ -172,6 +197,14 @@ infrastructure_services_allowed_dokploy_keys:
   - credentials
   - bootstrap
   - secret_version
+  - remote_servers
+infrastructure_services_allowed_dokploy_remote_server_keys:
+  - name
+  - host
+  - port
+  - username
+  - description
+  - docker_cleanup
 infrastructure_services_allowed_dokploy_bootstrap_keys:
   - email
   - password
@@ -227,14 +260,27 @@ infrastructure_services_dokploy_config_directory: /etc/dokploy/application
 infrastructure_services_traefik_directory: /etc/dokploy/traefik
 infrastructure_services_traefik_dynamic_directory: /etc/dokploy/traefik/dynamic
 infrastructure_services_traefik_candidate: /var/lib/foundry/infrastructure-services/traefik.yml.candidate
+infrastructure_services_traefik_origin_ca_key: "{{ infrastructure_services_traefik_dynamic_directory }}/cloudflare-origin-ca.key"
+infrastructure_services_traefik_origin_ca_csr: /var/lib/foundry/infrastructure-services/cloudflare-origin-ca.csr
+infrastructure_services_traefik_origin_ca_certificate: "{{ infrastructure_services_traefik_dynamic_directory }}/cloudflare-origin-ca.crt"
+infrastructure_services_traefik_origin_ca_dynamic_config: "{{ infrastructure_services_traefik_dynamic_directory }}/cloudflare-origin-ca.yml"
 infrastructure_services_minio_container_suffix: minio
 infrastructure_services_minio_api_port: 9000
 infrastructure_services_minio_console_port: 9001
 infrastructure_services_minio_label_resource: minio
 infrastructure_services_minio_health_retries: 15
 infrastructure_services_minio_health_delay: 2
+infrastructure_services_minio_client_image: "minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727"
+infrastructure_services_minio_shared_container_name: "foundry-{{ project.name }}-minio"
+infrastructure_services_minio_shared_state_directory: "{{ infrastructure_services_state_directory }}/minio/{{ project.name }}"
+infrastructure_services_minio_shared_secret_directory: "{{ infrastructure_services_secret_directory }}/{{ project.name }}/minio"
+infrastructure_services_minio_shared_alias: foundry
+infrastructure_services_minio_shared_endpoint: "http://minio:{{ infrastructure_services_minio_api_port }}"
+infrastructure_services_minio_dokploy_provider: MinIO
+infrastructure_services_minio_console_proxy_container_name: "foundry-{{ project.name }}-minio-console-proxy"
 infrastructure_services_environment_pattern: '^[a-z][a-z0-9-]{0,31}$'
 infrastructure_services_identifier_pattern: '^[a-z][a-z0-9-]{0,62}$'
+infrastructure_services_resource_prefix_pattern: '^[a-z][a-z0-9-]{0,19}$'
 infrastructure_services_domain_pattern: '^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$'
 infrastructure_services_immutable_image_pattern: '^.+@sha256:[a-f0-9]{64}$'
 infrastructure_services_memory_pattern: '^[1-9][0-9]*[bBkKmMgG]?$'

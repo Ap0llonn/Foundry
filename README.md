@@ -98,6 +98,13 @@ owns the narrowly scoped single-manager Swarm; it never adopts or force-leaves
 an external cluster. Infrastructure Services consumes both contracts and never
 installs Docker.
 
+Role 9 installs the OpenTelemetry Collector Contrib agent on configured Debian
+12 hosts. It collects host metrics and accepts application OTLP only on
+loopback, then exports to a configurable OTLP backend. SigNoz is the initial
+documented dashboard, while the telemetry transport remains backend-neutral.
+When enabled, Foundry deploys its self-hosted UI through Dokploy at
+`https://signoz.<domains.base>`.
+
 ## OS lifecycle modes
 
 The OS role has three explicit modes configured in `config.yml`:
@@ -107,13 +114,13 @@ The OS role has three explicit modes configured in `config.yml`:
 - `security_patching` applies packages only from the configured security
   origins and records the simulated plan first.
 - `full_maintenance` performs a distribution upgrade only when
-  `os_base_maintenance_approved` is true and
-  `os_base_maintenance_window` identifies the approved window. Autoremove and
+  `os.maintenance.approved` is true and
+  `os.maintenance.window` identifies the approved window. Autoremove and
   autoclean have separate switches, and autoremove/purge additionally requires
-  `os_base_maintenance_removals_approved`.
+  `os.maintenance.removals_approved`.
 
 Tags select work; they neither select the lifecycle mode nor authorize it. Set
-`os_base_operation_mode` in `config.yml` first. Maintenance still fails closed
+`os.operation_mode` in `config.yml` first. Maintenance still fails closed
 unless its independent configuration approval is present:
 
 ```bash
@@ -127,6 +134,9 @@ and approved, Foundry evaluates it only in the final, rolling playbook phase
 after Identity and Security have converged. See the
 [OS role guide](roles/2_os_base_system/Doc.MD) for policy examples and safety
 requirements.
+
+For a beginner-friendly explanation of every public `config.yml` setting, see
+the [configuration guide](docs/configuration.md).
 
 ## Updating dependencies
 
