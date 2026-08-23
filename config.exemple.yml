@@ -1,0 +1,256 @@
+---
+# Copy this file to config.yml, then replace every CHANGE_ME value before
+# running Foundry. config.yml is intentionally ignored by Git.
+
+# Public or private address Ansible uses to reach the VM.
+vm_ip: "203.0.113.10"
+
+project:
+  name: my-project
+
+environments:
+  - name: dev
+  - name: production
+
+networking:
+  stale_network_policy: report
+  overlay_migration_approved: false
+
+# Domain and optional Cloudflare automation.
+domains:
+  base: "example.com"
+  environment_style: hyphen
+  dokploy_label: dokploy
+  service_names: [api]
+  cloudflare:
+    enabled: false
+    zone: "example.com"
+    # Store this in Ansible Vault or pass it as a secure extra variable.
+    api_token: ""
+    proxied: true
+    wildcard: true
+    apex_record: false
+    ttl: 1
+    security:
+      enabled: false
+      ssl_mode: strict
+      always_use_https: true
+      min_tls_version: "1.2"
+      tls_1_3: true
+      managed_waf: true
+      rate_limit:
+        enabled: true
+        requests_per_period: 20
+        period: 10
+        mitigation_timeout: 10
+        action: block
+
+runtime:
+  docker:
+    enabled: true
+    legacy_package_migration_approved: false
+    logging:
+      driver: json-file
+      max_size: 10m
+      max_files: 3
+
+os:
+  operation_mode: bootstrap
+  # Add a mounted provider disk here before enabling object storage in
+  # production. Foundry mounts declared disks but never formats them blindly.
+  # mounts:
+  #   - path: /srv/foundry/minio
+  #     src: /dev/disk/by-uuid/CHANGE_ME
+  #     fstype: ext4
+  #     opts: defaults,noatime
+  #     state: mounted
+  #     min_free_percent: 10
+  maintenance:
+    approved: false
+    window: ""
+    autoremove: false
+    removals_approved: false
+    autoclean: false
+  reboot:
+    enabled: false
+    approved: false
+    only_if_required: true
+    precheck_commands: []
+    postcheck_commands: []
+
+identity:
+  groups: []
+  default_admin_sudo:
+    mode: passwordless
+  users:
+    - name: CHANGE_ME
+      state: present
+      admin: true
+      groups: [developer]
+      ssh_keys:
+        - "ssh-ed25519 CHANGE_ME user@example.com"
+      sudo:
+        mode: inherit
+
+network:
+  exposure:
+    - name: ssh
+      port: 22
+      protocol: tcp
+      scope: management
+
+management:
+  restrict_by_cidr: true
+  allowed_cidrs:
+    - "203.0.113.25/32"
+
+# Developer access to a database is opt-in. Choose exactly one mode when
+# enabled: tunnel (SSH forwarding) or tailscale (private tailnet address).
+database_access:
+  enabled: false
+  mode: tailscale
+  environment: dev
+  tunnel:
+    allowed_cidrs:
+      - "203.0.113.25/32"
+    local_port: 15432
+  tailscale:
+    # Supply through Vault or a secure extra variable when enabled.
+    auth_key: ""
+    hostname: foundry-db
+    port: 5432
+    cidr: 100.64.0.0/10
+
+observability:
+  enabled: false
+  dashboard: signoz
+  backend:
+    endpoint: ""
+    headers: {}
+    tls_insecure: false
+  signoz:
+    enabled: false
+    host: ""
+    # SigNoz uses production in this dedicated Dokploy project.
+    project: monitoring
+    hostname: ""
+
+security:
+  ssh:
+    enabled: true
+    port: 22
+    root_login: false
+    password_authentication: false
+    public_key_authentication: true
+    empty_passwords: false
+    forwarding:
+      agent: false
+      tcp: false
+      x11: false
+    max_auth_tries: 4
+    login_grace_time: 60
+    max_sessions: 10
+    max_startups: "10:30:60"
+    allow_groups: []
+    accept_host_key_change: false
+  firewall:
+    enabled: true
+    default_incoming: deny
+    default_outgoing: allow
+    ipv6: true
+    unexpected_listener_policy: fail
+  fail2ban:
+    enabled: true
+    ssh:
+      enabled: true
+      maxretry: 5
+      findtime: 10m
+      bantime: 1h
+    backend: systemd
+    banaction: ufw
+    ignore: []
+  updates:
+    automatic_security_updates: true
+    automatic_reboot: false
+    validate_dry_run: false
+  apparmor:
+    enabled: true
+  logging:
+    persistent_journal: true
+
+services:
+  postgres:
+    enabled: true
+    environments: [dev, production]
+    major: 17
+    # Omit passwords to have Foundry generate stable values on the VM. Put
+    # manually managed passwords in Vault instead of this file.
+    credentials: {}
+    backup:
+      enabled: false
+      schedule: "0 3 * * *"
+      keep_latest: 7
+    resources:
+      memory: ""
+      cpus: ""
+  redis:
+    enabled: true
+    environments: [dev, production]
+    credentials: {}
+    persistence: true
+    maxmemory: ""
+    maxmemory_policy: allkeys-lru
+    resources:
+      memory: ""
+      cpus: ""
+  object_storage:
+    enabled: false
+    provider: minio
+    environments: [dev, production]
+    data_root: /srv/foundry/minio
+    allow_root_filesystem: false
+    domain_name: ""
+    region: us-east-1
+    console:
+      enabled: false
+      tailscale_port: 9001
+    credentials:
+      root_user: foundryminio
+      root_password: ""
+
+platform:
+  swarm:
+    enabled: true
+    advertise_address: ""
+    default_address_pool: 10.240.0.0/16
+    subnet_size: 24
+  traefik:
+    enabled: true
+    http_port: 80
+    https_port: 443
+    tls:
+      enabled: true
+      # public_acme: direct public origin / Let's Encrypt.
+      # cloudflare_origin: Cloudflare proxy + Full (strict) + API token with
+      # Zone / SSL and Certificates / Edit.
+      mode: public_acme
+      email: "admin@example.com"
+  dokploy:
+    enabled: true
+    management_port: 3000
+    credentials: {}
+    secret_version: v1
+    bootstrap:
+      email: "admin@example.com"
+      password: "CHANGE_ME_TO_A_LONG_UNIQUE_PASSWORD"
+      name: Admin
+      last_name: User
+    remote_servers: []
+
+# Legacy interface. Keep disabled when using services.object_storage.
+infrastructure_services:
+  minio:
+    enabled: false
+    run_as_uid: 1000
+    run_as_gid: 1000
+    instances: []

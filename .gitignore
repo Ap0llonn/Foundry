@@ -2,3 +2,7 @@
 .venv/
 collections/ansible_collections/
 __pycache__/
+
+# Local infrastructure configuration contains addresses, access keys, and
+# bootstrap credentials. Commit config.exemple.yml instead.
+/config.yml
