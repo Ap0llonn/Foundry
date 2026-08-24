@@ -1,0 +1,13 @@
+---
+# Dokploy's project-level variables cannot safely contain database credentials:
+# their values differ between dev, production, and any future environment.
+# Environment-level shared variables are inherited by the environment's
+# services through Dokploy references such as ${{environment.DATABASE_URL}}.
+
+- name: Reconcile Dokploy environment-level application variables
+  ansible.builtin.include_tasks: environment_variables_instance.yml
+  loop: "{{ infrastructure_services_dokploy_environment_names }}"
+  loop_control:
+    loop_var: infrastructure_services_dokploy_variables_environment
+    label: "{{ infrastructure_services_dokploy_variables_environment }}"
+  no_log: true

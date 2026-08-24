@@ -1,0 +1,95 @@
+{
+  "title": "Foundry Host Overview",
+  "description": "Managed by Foundry. Host metrics received through OpenTelemetry.",
+  "tags": [],
+  "widgets": [
+    {
+      "bucketCount": 30, "bucketWidth": 0, "columnUnits": {}, "description": "",
+      "fillSpans": false, "id": "d4000000-0000-4000-8000-000000000001",
+      "isStacked": false, "mergeAllActiveQueries": false, "nullZeroValues": "zero",
+      "opacity": "1", "panelTypes": "graph",
+      "query": {
+        "builder": {"queryData": [{"aggregateAttribute": {"dataType": "float64", "id": "system.cpu.utilization--float64--Gauge--true", "isColumn": true, "isJSON": false, "key": "system.cpu.utilization", "type": "Gauge"}, "aggregateOperator": "avg", "aggregations": [{"metricName": "system.cpu.utilization", "reduceTo": "avg", "spaceAggregation": "avg", "temporality": null, "timeAggregation": "avg"}], "dataSource": "metrics", "disabled": false, "expression": "A", "filters": {"items": [], "op": "AND"}, "functions": [], "groupBy": [], "having": [], "legend": "CPU", "limit": null, "orderBy": [], "queryName": "A", "reduceTo": "avg", "spaceAggregation": "avg", "stepInterval": 60, "timeAggregation": "avg"}], "queryFormulas": []},
+        "clickhouse_sql": [{"disabled": false, "legend": "", "name": "A", "query": ""}], "id": "d4100000-0000-4000-8000-000000000001", "promql": [{"disabled": false, "legend": "", "name": "A", "query": ""}], "queryType": "builder"
+      },
+      "selectedLogFields": [], "selectedTracesFields": [], "softMax": null, "softMin": null,
+      "stackedBarChart": false, "thresholds": [], "timePreferance": "GLOBAL_TIME",
+      "title": "CPU utilization", "yAxisUnit": "percentunit"
+    },
+    {
+      "bucketCount": 30, "bucketWidth": 0, "columnUnits": {}, "description": "",
+      "fillSpans": false, "id": "d4000000-0000-4000-8000-000000000002",
+      "isStacked": false, "mergeAllActiveQueries": false, "nullZeroValues": "zero",
+      "opacity": "1", "panelTypes": "graph",
+      "query": {
+        "builder": {"queryData": [{"aggregateAttribute": {"dataType": "float64", "id": "system.memory.utilization--float64--Gauge--true", "isColumn": true, "isJSON": false, "key": "system.memory.utilization", "type": "Gauge"}, "aggregateOperator": "avg", "aggregations": [{"metricName": "system.memory.utilization", "reduceTo": "avg", "spaceAggregation": "avg", "temporality": null, "timeAggregation": "avg"}], "dataSource": "metrics", "disabled": false, "expression": "A", "filters": {"items": [], "op": "AND"}, "functions": [], "groupBy": [], "having": [], "legend": "Memory", "limit": null, "orderBy": [], "queryName": "A", "reduceTo": "avg", "spaceAggregation": "avg", "stepInterval": 60, "timeAggregation": "avg"}], "queryFormulas": []},
+        "clickhouse_sql": [{"disabled": false, "legend": "", "name": "A", "query": ""}], "id": "d4100000-0000-4000-8000-000000000002", "promql": [{"disabled": false, "legend": "", "name": "A", "query": ""}], "queryType": "builder"
+      },
+      "selectedLogFields": [], "selectedTracesFields": [], "softMax": null, "softMin": null,
+      "stackedBarChart": false, "thresholds": [], "timePreferance": "GLOBAL_TIME",
+      "title": "Memory utilization", "yAxisUnit": "percentunit"
+    },
+    {
+      "bucketCount": 30, "bucketWidth": 0, "columnUnits": {}, "description": "",
+      "fillSpans": false, "id": "d4000000-0000-4000-8000-000000000003",
+      "isStacked": false, "mergeAllActiveQueries": false, "nullZeroValues": "zero",
+      "opacity": "1", "panelTypes": "graph",
+      "query": {
+        "builder": {"queryData": [{"aggregateAttribute": {"dataType": "float64", "id": "system.cpu.load_average.1m--float64--Gauge--true", "isColumn": true, "isJSON": false, "key": "system.cpu.load_average.1m", "type": "Gauge"}, "aggregateOperator": "avg", "aggregations": [{"metricName": "system.cpu.load_average.1m", "reduceTo": "avg", "spaceAggregation": "avg", "temporality": null, "timeAggregation": "avg"}], "dataSource": "metrics", "disabled": false, "expression": "A", "filters": {"items": [], "op": "AND"}, "functions": [], "groupBy": [], "having": [], "legend": "1 minute", "limit": null, "orderBy": [], "queryName": "A", "reduceTo": "avg", "spaceAggregation": "avg", "stepInterval": 60, "timeAggregation": "avg"}], "queryFormulas": []},
+        "clickhouse_sql": [{"disabled": false, "legend": "", "name": "A", "query": ""}], "id": "d4100000-0000-4000-8000-000000000003", "promql": [{"disabled": false, "legend": "", "name": "A", "query": ""}], "queryType": "builder"
+      },
+      "selectedLogFields": [], "selectedTracesFields": [], "softMax": null, "softMin": null,
+      "stackedBarChart": false, "thresholds": [], "timePreferance": "GLOBAL_TIME",
+      "title": "Load average (1 minute)", "yAxisUnit": "none"
+    },
+    {
+      "bucketCount": 30, "bucketWidth": 0, "columnUnits": {}, "description": "",
+      "fillSpans": false, "id": "d4000000-0000-4000-8000-000000000004",
+      "isStacked": false, "mergeAllActiveQueries": false, "nullZeroValues": "zero",
+      "opacity": "1", "panelTypes": "graph",
+      "query": {
+        "builder": {"queryData": [{"aggregateAttribute": {"dataType": "float64", "id": "system.filesystem.utilization--float64--Gauge--true", "isColumn": true, "isJSON": false, "key": "system.filesystem.utilization", "type": "Gauge"}, "aggregateOperator": "avg", "aggregations": [{"metricName": "system.filesystem.utilization", "reduceTo": "avg", "spaceAggregation": "avg", "temporality": null, "timeAggregation": "avg"}], "dataSource": "metrics", "disabled": false, "expression": "A", "filters": {"items": [], "op": "AND"}, "functions": [], "groupBy": [], "having": [], "legend": "Filesystem", "limit": null, "orderBy": [], "queryName": "A", "reduceTo": "avg", "spaceAggregation": "avg", "stepInterval": 60, "timeAggregation": "avg"}], "queryFormulas": []},
+        "clickhouse_sql": [{"disabled": false, "legend": "", "name": "A", "query": ""}], "id": "d4100000-0000-4000-8000-000000000004", "promql": [{"disabled": false, "legend": "", "name": "A", "query": ""}], "queryType": "builder"
+      },
+      "selectedLogFields": [], "selectedTracesFields": [], "softMax": null, "softMin": null,
+      "stackedBarChart": false, "thresholds": [], "timePreferance": "GLOBAL_TIME",
+      "title": "Filesystem utilization", "yAxisUnit": "percentunit"
+    },
+    {
+      "bucketCount": 30, "bucketWidth": 0, "columnUnits": {}, "description": "",
+      "fillSpans": false, "id": "d4000000-0000-4000-8000-000000000005",
+      "isStacked": false, "mergeAllActiveQueries": false, "nullZeroValues": "zero",
+      "opacity": "1", "panelTypes": "graph",
+      "query": {
+        "builder": {"queryData": [{"aggregateAttribute": {"dataType": "float64", "id": "system.disk.io--float64--Sum--true", "isColumn": true, "isJSON": false, "key": "system.disk.io", "type": "Sum"}, "aggregateOperator": "sum_rate", "aggregations": [{"metricName": "system.disk.io", "reduceTo": "sum", "spaceAggregation": "sum", "temporality": null, "timeAggregation": "rate"}], "dataSource": "metrics", "disabled": false, "expression": "A", "filters": {"items": [], "op": "AND"}, "functions": [], "groupBy": [], "having": [], "legend": "Disk I/O", "limit": null, "orderBy": [], "queryName": "A", "reduceTo": "avg", "spaceAggregation": "sum", "stepInterval": 60, "timeAggregation": "rate"}], "queryFormulas": []},
+        "clickhouse_sql": [{"disabled": false, "legend": "", "name": "A", "query": ""}], "id": "d4100000-0000-4000-8000-000000000005", "promql": [{"disabled": false, "legend": "", "name": "A", "query": ""}], "queryType": "builder"
+      },
+      "selectedLogFields": [], "selectedTracesFields": [], "softMax": null, "softMin": null,
+      "stackedBarChart": false, "thresholds": [], "timePreferance": "GLOBAL_TIME",
+      "title": "Disk I/O rate", "yAxisUnit": "bytes"
+    },
+    {
+      "bucketCount": 30, "bucketWidth": 0, "columnUnits": {}, "description": "",
+      "fillSpans": false, "id": "d4000000-0000-4000-8000-000000000006",
+      "isStacked": false, "mergeAllActiveQueries": false, "nullZeroValues": "zero",
+      "opacity": "1", "panelTypes": "graph",
+      "query": {
+        "builder": {"queryData": [{"aggregateAttribute": {"dataType": "float64", "id": "system.network.io--float64--Sum--true", "isColumn": true, "isJSON": false, "key": "system.network.io", "type": "Sum"}, "aggregateOperator": "sum_rate", "aggregations": [{"metricName": "system.network.io", "reduceTo": "sum", "spaceAggregation": "sum", "temporality": null, "timeAggregation": "rate"}], "dataSource": "metrics", "disabled": false, "expression": "A", "filters": {"items": [], "op": "AND"}, "functions": [], "groupBy": [], "having": [], "legend": "Network I/O", "limit": null, "orderBy": [], "queryName": "A", "reduceTo": "avg", "spaceAggregation": "sum", "stepInterval": 60, "timeAggregation": "rate"}], "queryFormulas": []},
+        "clickhouse_sql": [{"disabled": false, "legend": "", "name": "A", "query": ""}], "id": "d4100000-0000-4000-8000-000000000006", "promql": [{"disabled": false, "legend": "", "name": "A", "query": ""}], "queryType": "builder"
+      },
+      "selectedLogFields": [], "selectedTracesFields": [], "softMax": null, "softMin": null,
+      "stackedBarChart": false, "thresholds": [], "timePreferance": "GLOBAL_TIME",
+      "title": "Network I/O rate", "yAxisUnit": "bytes"
+    }
+  ],
+  "layout": [
+    {"i": "d4000000-0000-4000-8000-000000000001", "x": 0, "y": 0, "w": 6, "h": 6},
+    {"i": "d4000000-0000-4000-8000-000000000002", "x": 6, "y": 0, "w": 6, "h": 6},
+    {"i": "d4000000-0000-4000-8000-000000000003", "x": 0, "y": 6, "w": 6, "h": 6},
+    {"i": "d4000000-0000-4000-8000-000000000004", "x": 6, "y": 6, "w": 6, "h": 6},
+    {"i": "d4000000-0000-4000-8000-000000000005", "x": 0, "y": 12, "w": 6, "h": 6},
+    {"i": "d4000000-0000-4000-8000-000000000006", "x": 6, "y": 12, "w": 6, "h": 6}
+  ],
+  "variables": {},
+  "version": "v5"
+}

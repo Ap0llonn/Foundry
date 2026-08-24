@@ -150,6 +150,12 @@
   when: foundry_services_resolved.redis.enabled
   tags: [infrastructure_services, redis, dokploy]
 
+- name: 7.23.5 Publish application connection variables to Dokploy environments
+  ansible.builtin.import_tasks: dokploy/environment_variables.yml
+  become: true
+  when: foundry_platform_resolved.dokploy.enabled and foundry_dokploy_is_manager
+  tags: [infrastructure_services, dokploy, dokploy_environment_variables]
+
 - name: 7.24 Configure PostgreSQL developer access
   ansible.builtin.import_tasks: database_access/main.yml
   become: true

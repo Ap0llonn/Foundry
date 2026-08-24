@@ -329,9 +329,140 @@
     mode: "0755"
   loop:
     - "{{ observability_signoz_state_directory }}"
+    - "{{ observability_signoz_state_directory }}/credentials"
     - "{{ observability_signoz_state_directory }}/user_scripts"
     - "{{ observability_signoz_cache_directory }}"
   when: observability_signoz_enabled_here
+
+- name: Restrict the SigNoz credentials directory
+  ansible.builtin.file:
+    path: "{{ observability_signoz_state_directory }}/credentials"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  when: observability_signoz_enabled_here
+
+- name: Resolve the SigNoz root user identity
+  ansible.builtin.set_fact:
+    observability_signoz_root_account_file: >-
+      {{ observability_signoz_state_directory }}/credentials/root-account.yml
+    observability_signoz_root_email: >-
+      {{ observability_resolved.signoz.account.email
+         if observability_resolved.signoz.account.email | length > 0
+         else foundry_platform_resolved.dokploy.bootstrap.email | default('', true) }}
+    observability_signoz_root_organization: >-
+      {{ observability_resolved.signoz.account.organization }}
+    observability_signoz_service_account_name: >-
+      {{ observability_resolved.signoz.service_account_name }}
+    observability_signoz_service_account_key_file: >-
+      {{ observability_signoz_state_directory }}/credentials/{{ observability_resolved.signoz.service_account_name }}.api-key
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Require a SigNoz root user email
+  ansible.builtin.assert:
+    that:
+      - observability_signoz_root_email is match('^[^@\\s]+@[^@\\s]+[.][^@\\s]+$')
+    fail_msg: >-
+      SigNoz needs signoz.account.email, or a valid
+      platform.dokploy.bootstrap.email to inherit as its initial administrator.
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Inspect the persistent SigNoz root account credentials
+  ansible.builtin.stat:
+    path: "{{ observability_signoz_root_account_file }}"
+    follow: false
+  register: observability_signoz_root_account_file_stat
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Validate existing SigNoz root account credential permissions
+  ansible.builtin.assert:
+    that:
+      - not observability_signoz_root_account_file_stat.stat.islnk | default(false)
+      - observability_signoz_root_account_file_stat.stat.isreg | default(false)
+      - observability_signoz_root_account_file_stat.stat.pw_name | default('') == 'root'
+      - observability_signoz_root_account_file_stat.stat.mode | default('') == '0600'
+    fail_msg: SigNoz root credentials must be a root-owned regular 0600 file.
+  when:
+    - observability_signoz_enabled_here
+    - observability_signoz_root_account_file_stat.stat.exists
+  no_log: true
+
+- name: Read the persistent SigNoz root account credentials
+  ansible.builtin.slurp:
+    path: "{{ observability_signoz_root_account_file }}"
+  register: observability_signoz_root_account_raw
+  when:
+    - observability_signoz_enabled_here
+    - observability_signoz_root_account_file_stat.stat.exists
+  no_log: true
+
+- name: Decode the persistent SigNoz root account credentials
+  ansible.builtin.set_fact:
+    observability_signoz_existing_root_account: >-
+      {{ observability_signoz_root_account_raw.content | b64decode | from_yaml }}
+  when:
+    - observability_signoz_enabled_here
+    - observability_signoz_root_account_file_stat.stat.exists
+  no_log: true
+
+- name: Validate the persisted SigNoz root password policy
+  ansible.builtin.set_fact:
+    observability_signoz_existing_root_password_is_valid: >-
+      {{
+        (observability_signoz_existing_root_account | default({})).get('password', '') | length >= 12
+        and (observability_signoz_existing_root_account | default({})).get('password', '') | length <= 72
+        and (observability_signoz_existing_root_account | default({})).get('password', '') is search('[A-Z]')
+        and (observability_signoz_existing_root_account | default({})).get('password', '') is search('[a-z]')
+        and (observability_signoz_existing_root_account | default({})).get('password', '') is search('[0-9]')
+        and (observability_signoz_existing_root_account | default({})).get('password', '') is search('[^A-Za-z0-9]')
+      }}
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Generate a SigNoz root password when none was supplied
+  ansible.builtin.command:
+    # The Foundry!0 prefix contributes required character classes.  Keep the
+    # complete password below bcrypt's 72-byte limit used by SigNoz.
+    argv: [openssl, rand, -hex, "24"]
+  register: observability_signoz_root_password_generated
+  changed_when: true
+  when:
+    - observability_signoz_enabled_here
+    - observability_resolved.signoz.account.password | length == 0
+    - not observability_signoz_existing_root_password_is_valid | default(false)
+  no_log: true
+
+- name: Resolve the SigNoz root password
+  ansible.builtin.set_fact:
+    observability_signoz_root_password: >-
+      {{ observability_resolved.signoz.account.password
+         if observability_resolved.signoz.account.password | length > 0
+         else (
+           (observability_signoz_existing_root_account | default({})).get('password', '')
+           if observability_signoz_existing_root_password_is_valid | default(false)
+           else 'Foundry!0' + observability_signoz_root_password_generated.stdout
+         ) }}
+  when: observability_signoz_enabled_here
+  no_log: true
+
+- name: Persist SigNoz root account credentials
+  ansible.builtin.copy:
+    dest: "{{ observability_signoz_root_account_file }}"
+    content: >-
+      {{ {
+        'email': observability_signoz_root_email,
+        'password': observability_signoz_root_password,
+        'organization': observability_signoz_root_organization
+      } | to_nice_yaml(indent=2) }}
+    owner: root
+    group: root
+    mode: "0600"
+  when: observability_signoz_enabled_here
+  no_log: true
 
 - name: Inspect the persistent SigNoz JWT signing secret
   ansible.builtin.stat:
@@ -459,6 +590,8 @@
   register: observability_signoz_configuration
   when: observability_signoz_enabled_here
 
+# The collector also joins Dokploy's ingress network so applications can send
+# OTLP/HTTP to signoz-collector:4318 without exposing ingestion on the host.
 - name: Render the immutable SigNoz Dokploy Compose contract
   ansible.builtin.set_fact:
     observability_signoz_configuration_hash: >-
@@ -526,7 +659,11 @@
               'SIGNOZ_ALERTMANAGER_PROVIDER': 'signoz',
               'SIGNOZ_TELEMETRYSTORE_CLICKHOUSE_DSN': 'tcp://signoz-clickhouse:9000',
               'SIGNOZ_SQLSTORE_SQLITE_PATH': '/var/lib/signoz/signoz.db',
-              'SIGNOZ_TOKENIZER_JWT_SECRET': observability_signoz_jwt_secret
+              'SIGNOZ_TOKENIZER_JWT_SECRET': observability_signoz_jwt_secret,
+              'SIGNOZ_USER_ROOT_ENABLED': 'true',
+              'SIGNOZ_USER_ROOT_EMAIL': observability_signoz_root_email,
+              'SIGNOZ_USER_ROOT_PASSWORD': observability_signoz_root_password,
+              'SIGNOZ_USER_ROOT_ORG_NAME': observability_signoz_root_organization
             },
             'volumes': ['sqlite:/var/lib/signoz'],
             'healthcheck': {
@@ -565,7 +702,7 @@
           'signoz-collector': {
             'image': observability_signoz_images.collector,
             'restart': 'unless-stopped',
-            'networks': [observability_signoz_internal_network],
+            'networks': [observability_signoz_internal_network, foundry_platform_resolved.traefik.ingress_network],
             'depends_on': {
               'signoz-clickhouse': {'condition': 'service_healthy'},
               'signoz-telemetrystore-migrator': {'condition': 'service_completed_successfully'}
@@ -1135,4 +1272,8 @@
   delay: 5
   until: observability_signoz_health.status == 200
   changed_when: false
+  when: observability_signoz_enabled_here
+
+- name: Reconcile the SigNoz automation service account
+  ansible.builtin.import_tasks: signoz_automation.yml
   when: observability_signoz_enabled_here

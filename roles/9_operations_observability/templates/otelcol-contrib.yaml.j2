@@ -8,11 +8,22 @@ receivers:
   hostmetrics:
     collection_interval: {{ observability_collector_hostmetrics_interval }}
     scrapers:
-      cpu: {}
-      memory: {}
+      # Utilization is opt-in in the hostmetrics receiver. Foundry enables it
+      # because it is the percentage-based signal used by the host dashboard.
+      cpu:
+        metrics:
+          system.cpu.utilization:
+            enabled: true
+      memory:
+        metrics:
+          system.memory.utilization:
+            enabled: true
       load: {}
       disk: {}
-      filesystem: {}
+      filesystem:
+        metrics:
+          system.filesystem.utilization:
+            enabled: true
       network: {}
 
 processors:

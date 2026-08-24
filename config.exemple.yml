@@ -98,6 +98,19 @@ network:
       port: 22
       protocol: tcp
       scope: management
+    # Required when platform.traefik.enabled is true. HTTP/3 uses UDP 443.
+    - name: http
+      port: 80
+      protocol: tcp
+      scope: public
+    - name: https
+      port: 443
+      protocol: tcp
+      scope: public
+    - name: http3
+      port: 443
+      protocol: udp
+      scope: public
 
 management:
   restrict_by_cidr: true
@@ -134,6 +147,14 @@ observability:
     # SigNoz uses production in this dedicated Dokploy project.
     project: monitoring
     hostname: ""
+    # Empty email inherits platform.dokploy.bootstrap.email. Leave password
+    # empty to generate it once and store it root-only on the SigNoz host.
+    account:
+      email: ""
+      password: ""
+      organization: default
+    # Foundry's non-human API identity for dashboards and alerts.
+    service_account_name: foundry-automation
 
 security:
   ssh:

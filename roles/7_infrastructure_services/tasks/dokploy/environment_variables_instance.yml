@@ -1,0 +1,215 @@
+---
+- name: Resolve {{ infrastructure_services_dokploy_variables_environment }} service credentials for Dokploy variables
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_variables_postgres: >-
+      {{ infrastructure_services_postgres_instances | default([])
+         | selectattr('environment', 'equalto', infrastructure_services_dokploy_variables_environment)
+         | list | first | default({}, true) }}
+    infrastructure_services_dokploy_variables_redis: >-
+      {{ infrastructure_services_redis_instances | default([])
+         | selectattr('environment', 'equalto', infrastructure_services_dokploy_variables_environment)
+         | list | first | default({}, true) }}
+  no_log: true
+
+- name: Resolve {{ infrastructure_services_dokploy_variables_environment }} telemetry destination for Dokploy variables
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_variables_self_hosted_signoz: >-
+      {{
+        (observability | default({})).get('enabled', false) | bool
+        and (observability | default({})).get('signoz', {}).get('enabled', false) | bool
+        and (
+          (observability | default({})).get('signoz', {}).get('host', '') | length == 0
+          or (observability | default({})).get('signoz', {}).get('host', '') == inventory_hostname
+        )
+      }}
+    infrastructure_services_dokploy_variables_external_otlp: >-
+      {{
+        (observability | default({})).get('enabled', false) | bool
+        and not ((observability | default({})).get('signoz', {}).get('enabled', false) | bool)
+        and (observability | default({})).get('backend', {}).get('endpoint', '') | length > 0
+      }}
+  no_log: true
+
+- name: Resolve {{ infrastructure_services_dokploy_variables_environment }} shared Dokploy variable contract
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_environment_variables: >-
+      {{
+        {
+          'FOUNDRY_ENVIRONMENT': infrastructure_services_dokploy_variables_environment,
+          'FOUNDRY_PROJECT': project.name
+        }
+        | combine(
+            {
+              'DATABASE_HOST': infrastructure_services_dokploy_variables_postgres.service_name,
+              'DATABASE_PORT': '5432',
+              'DATABASE_NAME': infrastructure_services_dokploy_variables_postgres.database,
+              'DATABASE_USER': infrastructure_services_dokploy_variables_postgres.user,
+              'DATABASE_PASSWORD': infrastructure_services_dokploy_variables_postgres.password,
+              'DATABASE_URL':
+                'postgresql://'
+                + (infrastructure_services_dokploy_variables_postgres.user | urlencode | replace('/', '%2F'))
+                + ':'
+                + (infrastructure_services_dokploy_variables_postgres.password | urlencode | replace('/', '%2F'))
+                + '@'
+                + infrastructure_services_dokploy_variables_postgres.service_name
+                + ':5432/'
+                + (infrastructure_services_dokploy_variables_postgres.database | urlencode | replace('/', '%2F'))
+            }
+            if infrastructure_services_dokploy_variables_postgres | length > 0
+            else {}
+          )
+        | combine(
+            {
+              'REDIS_HOST': infrastructure_services_dokploy_variables_redis.service_name,
+              'REDIS_PORT': '6379',
+              'REDIS_PASSWORD': infrastructure_services_dokploy_variables_redis.password,
+              'REDIS_URL':
+                'redis://:'
+                + (infrastructure_services_dokploy_variables_redis.password | urlencode | replace('/', '%2F'))
+                + '@'
+                + infrastructure_services_dokploy_variables_redis.service_name
+                + ':6379/0'
+            }
+            if infrastructure_services_dokploy_variables_redis | length > 0
+            else {}
+          )
+        | combine(
+            {
+              'OTEL_EXPORTER_OTLP_ENDPOINT': 'http://signoz-collector:4318',
+              'OTEL_EXPORTER_OTLP_PROTOCOL': 'http/protobuf',
+              'SIGNOZ_DASHBOARD_URL':
+                'https://'
+                + (
+                  (observability | default({})).get('signoz', {}).get('hostname', '')
+                  if (observability | default({})).get('signoz', {}).get('hostname', '') | length > 0
+                  else 'signoz.' + (domains | default({})).get('base', '')
+                )
+            }
+            if infrastructure_services_dokploy_variables_self_hosted_signoz | bool
+            else {}
+          )
+        | combine(
+            {
+              'OTEL_EXPORTER_OTLP_ENDPOINT': (observability | default({})).get('backend', {}).get('endpoint', ''),
+              'OTEL_EXPORTER_OTLP_PROTOCOL': 'grpc'
+            }
+            if infrastructure_services_dokploy_variables_external_otlp | bool
+            else {}
+          )
+      }}
+  no_log: true
+
+- name: Render {{ infrastructure_services_dokploy_variables_environment }} Foundry Dokploy variable block
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_variables_managed_block: >-
+      {{ lookup('template', 'dokploy-environment.env.j2') | trim }}
+  no_log: true
+
+- name: Read {{ infrastructure_services_dokploy_variables_environment }} Dokploy environment details
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - >-
+        {{ infrastructure_services_dokploy_api_url }}/api/environment.one?environmentId={{ infrastructure_services_dokploy_environment_map[infrastructure_services_dokploy_variables_environment] }}
+  register: infrastructure_services_dokploy_variables_environment_raw
+  changed_when: false
+  no_log: true
+
+- name: Parse {{ infrastructure_services_dokploy_variables_environment }} Dokploy environment details
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_variables_environment_details: >-
+      {{
+        (
+          infrastructure_services_dokploy_variables_environment_raw.stdout
+          | from_json
+        ).get(
+          'data',
+          infrastructure_services_dokploy_variables_environment_raw.stdout | from_json
+        )
+      }}
+  no_log: true
+
+- name: Require a valid {{ infrastructure_services_dokploy_variables_environment }} Dokploy environment response
+  ansible.builtin.assert:
+    that:
+      - infrastructure_services_dokploy_variables_environment_details is mapping
+      - infrastructure_services_dokploy_variables_environment_details.get('environmentId', infrastructure_services_dokploy_variables_environment_details.get('id', '')) | string | length > 0
+      - infrastructure_services_dokploy_variables_environment_details.get('env', '') | default('', true) is string
+    fail_msg: >-
+      Dokploy returned an invalid environment record while reconciling
+      {{ infrastructure_services_dokploy_variables_environment }} shared variables.
+  no_log: true
+
+- name: Resolve {{ infrastructure_services_dokploy_variables_environment }} merged Dokploy environment variables
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_variables_existing_env: >-
+      {{ infrastructure_services_dokploy_variables_environment_details.get('env', '') | default('', true) }}
+    infrastructure_services_dokploy_variables_unmanaged_env: >-
+      {{
+        infrastructure_services_dokploy_variables_environment_details.get('env', '')
+        | default('', true)
+        | regex_replace(
+            '(?ms)^# BEGIN Foundry-managed application connection variables\\n.*?^# END Foundry-managed application connection variables\\n?',
+            ''
+          )
+        | regex_replace(
+            '(?m)^(?:' + (infrastructure_services_dokploy_environment_variables.keys() | join('|')) + ')=.*$',
+            ''
+          )
+        | trim
+      }}
+  no_log: true
+
+- name: Build {{ infrastructure_services_dokploy_variables_environment }} desired Dokploy environment variables
+  ansible.builtin.set_fact:
+    infrastructure_services_dokploy_variables_desired_env: >-
+      {{
+        [
+          infrastructure_services_dokploy_variables_unmanaged_env,
+          infrastructure_services_dokploy_variables_managed_block
+        ]
+        | reject('equalto', '') | join('\n\n') | trim
+        + '\n'
+      }}
+  no_log: true
+
+- name: Update {{ infrastructure_services_dokploy_variables_environment }} Dokploy shared environment variables
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ infrastructure_services_dokploy_api_network }}"
+      - curlimages/curl:8.15.0
+      - --fail-with-body
+      - --silent
+      - --show-error
+      - --request
+      - POST
+      - --header
+      - "x-api-key: {{ infrastructure_services_dokploy_api_key }}"
+      - --header
+      - "Content-Type: application/json"
+      - --data
+      - >-
+        {{ {
+          'environmentId': infrastructure_services_dokploy_environment_map[infrastructure_services_dokploy_variables_environment],
+          'env': infrastructure_services_dokploy_variables_desired_env
+        } | to_json }}
+      - "{{ infrastructure_services_dokploy_api_url }}/api/environment.update"
+  when: >-
+    infrastructure_services_dokploy_variables_existing_env
+    != infrastructure_services_dokploy_variables_desired_env
+  changed_when: true
+  no_log: true

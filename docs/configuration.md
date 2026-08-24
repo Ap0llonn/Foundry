@@ -902,11 +902,49 @@ intentional rotation.
 Initial Dokploy administrator information used during first-time onboarding.
 The password must be supplied securely.
 
+### Generated Dokploy application variables
+
+After PostgreSQL and Redis are reconciled, Foundry creates a marked,
+environment-level shared-variable block in every Dokploy application environment.
+Environment scope is intentional: `dev`, `production`, and any future
+environment have distinct credentials and service names. Existing variables
+outside the Foundry-managed block are preserved.
+
+When the matching service is enabled, Foundry provides:
+
+- PostgreSQL: `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_NAME`,
+  `DATABASE_USER`, `DATABASE_PASSWORD`, and `DATABASE_URL`.
+- Redis: `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, and `REDIS_URL`.
+- Always: `FOUNDRY_PROJECT` and `FOUNDRY_ENVIRONMENT`.
+- Observability: `OTEL_EXPORTER_OTLP_ENDPOINT`,
+  `OTEL_EXPORTER_OTLP_PROTOCOL`, and, for self-hosted SigNoz,
+  `SIGNOZ_DASHBOARD_URL`.
+
+Dokploy shared variables are available to services but are not copied into a
+service automatically. In an application or Compose service environment tab,
+reference the values you need, for example:
+
+```dotenv
+DATABASE_URL=${{environment.DATABASE_URL}}
+REDIS_URL=${{environment.REDIS_URL}}
+OTEL_EXPORTER_OTLP_ENDPOINT=${{environment.OTEL_EXPORTER_OTLP_ENDPOINT}}
+OTEL_EXPORTER_OTLP_PROTOCOL=${{environment.OTEL_EXPORTER_OTLP_PROTOCOL}}
+```
+
+For self-hosted SigNoz, the endpoint is the private
+`http://signoz-collector:4318`. The application must be attached to
+`dokploy-network`; Dokploy does this for an application with a configured
+domain, while custom Compose services must declare that external network
+themselves. Database passwords are necessarily visible to users who can view
+that environment's shared variables, so only grant project access to trusted
+developers.
+
 ## 12. Observability
 
 ### `observability`
 
-Enables the Foundry host observability agent on Debian 12. It installs the
+Enables the Foundry host observability agent on a supported Foundry platform:
+Debian 12 (Bookworm) or Ubuntu 26.04 (Resolute). It installs the
 checksum-pinned `otelcol-contrib` system package and exposes OTLP only on the
 local VM:
 
@@ -931,6 +969,11 @@ observability:
     host: app-vm
     project: monitoring
     hostname: ""
+    account:
+      email: ""
+      password: ""
+      organization: default
+    service_account_name: foundry-automation
 ```
 
 `dashboard` is currently restricted to `signoz`; it documents the supported UI
@@ -968,6 +1011,28 @@ the unauthenticated receiver publicly.
 Foundry validates the rendered Collector configuration, systemd service state,
 both loopback OTLP listeners, the Collector’s own hostmetrics pipeline, the
 SigNoz dashboard health endpoint, and the local SigNoz OTLP listener.
+
+`signoz.account` bootstraps the initial human SigNoz administrator. If `email`
+is empty, Foundry reuses `platform.dokploy.bootstrap.email`. If `password` is
+empty, Foundry generates a high-entropy password once and keeps it in a
+root-owned `0600` file on the dashboard host; provide a password only through
+Vault or another protected variable source if you need to control it. The
+organization defaults to `default`. A supplied password must be 12 to 72
+characters and include uppercase, lowercase, numeric, and symbol characters;
+SigNoz uses bcrypt and cannot accept longer passwords.
+
+Foundry then creates (or reuses) `signoz.service_account_name`, assigns the
+built-in `signoz-editor` role, and writes its API key to a separate root-owned
+`0600` file. This key is for Foundry's SigNoz dashboard and alert automation.
+Dokploy continues to use its own Dokploy API key; SigNoz credentials must not
+be used as a Dokploy credential.
+
+Once that service account is ready, Foundry creates one managed dashboard named
+`Foundry Host Overview`. It shows CPU, memory, one-minute load, filesystem
+utilization, disk I/O, and network I/O from the OpenTelemetry hostmetrics
+pipeline. Foundry does not overwrite dashboards created by users; if a
+different dashboard already uses this exact name, reconciliation stops and asks
+you to rename or remove it.
 
 ## 13. Legacy MinIO interface
 

@@ -18,7 +18,9 @@
       - (observability | default({})).get('backend', {}) is mapping
       - (observability | default({})).get('backend', {}).keys() | difference(['endpoint', 'headers', 'tls_insecure']) | length == 0
       - (observability | default({})).get('signoz', {}) is mapping
-      - (observability | default({})).get('signoz', {}).keys() | difference(['enabled', 'host', 'project', 'hostname']) | length == 0
+      - (observability | default({})).get('signoz', {}).keys() | difference(['enabled', 'host', 'project', 'hostname', 'account', 'service_account_name']) | length == 0
+      - (observability | default({})).get('signoz', {}).get('account', {}) is mapping
+      - (observability | default({})).get('signoz', {}).get('account', {}).keys() | difference(['email', 'password', 'organization']) | length == 0
       - observability_resolved is mapping
       - observability_resolved.enabled is boolean
       - observability_resolved.dashboard == 'signoz'
@@ -42,17 +44,36 @@
       - observability_resolved.signoz.project is match('^[a-z][a-z0-9-]{0,62}$')
       - observability_resolved.signoz.hostname is string
       - observability_resolved.signoz.hostname | length == 0 or observability_resolved.signoz.hostname is match('^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:[.][a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$')
+      - observability_resolved.signoz.account is mapping
+      - observability_resolved.signoz.account.email is string
+      - observability_resolved.signoz.account.password is string
+      - >-
+        observability_resolved.signoz.account.password | length == 0
+        or (
+          observability_resolved.signoz.account.password | length >= 12
+          and observability_resolved.signoz.account.password | length <= 72
+          and observability_resolved.signoz.account.password is search('[A-Z]')
+          and observability_resolved.signoz.account.password is search('[a-z]')
+          and observability_resolved.signoz.account.password is search('[0-9]')
+          and observability_resolved.signoz.account.password is search('[^A-Za-z0-9]')
+        )
+      - observability_resolved.signoz.account.organization is string
+      - observability_resolved.signoz.account.organization is match('^[A-Za-z0-9][A-Za-z0-9 _.-]{0,62}$')
+      - observability_resolved.signoz.service_account_name is string
+      - observability_resolved.signoz.service_account_name is match('^[a-z][a-z0-9-]{0,49}$')
       - not observability_resolved.signoz.enabled or observability_resolved.enabled
       - >-
         not observability_resolved.enabled
         or (
-          ansible_facts.distribution == 'Debian'
-          and ansible_facts.distribution_major_version == '12'
+          ansible_facts.distribution in observability_supported_platform_versions
+          and ansible_facts.distribution_version
+              in observability_supported_platform_versions[ansible_facts.distribution]
           and ansible_facts.architecture in observability_supported_architectures
         )
     fail_msg: >-
-      Observability requires Debian 12, a supported architecture, and an OTLP
-      backend endpoint in host:port form when enabled.
+      Observability requires a supported distribution/version, architecture,
+      and an OTLP backend endpoint in host:port form when enabled. Supported
+      distributions: {{ observability_supported_platform_versions | to_json }}.
   no_log: true
 
 - name: Reconcile self-hosted SigNoz before starting the host Collector

@@ -24,10 +24,27 @@ observability_defaults:
     project: monitoring
     # Empty resolves to signoz.<domains.base>.
     hostname: ""
+    # The initial human administrator. An empty email inherits Dokploy's
+    # bootstrap email; an empty password is generated once on the dashboard.
+    account:
+      email: ""
+      password: ""
+      organization: default
+    # Foundry uses this non-human identity for SigNoz API automation. It is
+    # deliberately an editor, not an administrator.
+    service_account_name: foundry-automation
 
 observability_supported_architectures:
   x86_64: amd64
   aarch64: arm64
+
+# Extend this matrix only after the collector package, systemd unit, and
+# complete observability convergence have been exercised on a clean image.
+observability_supported_platform_versions:
+  Debian:
+    - "12"
+  Ubuntu:
+    - "26.04"
 
 observability_collector_config_file: /etc/otelcol-contrib/config.yaml
 observability_collector_service_name: otelcol-contrib

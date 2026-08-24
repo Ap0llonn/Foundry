@@ -1,0 +1,452 @@
+---
+# Bootstrap the non-human SigNoz identity after the root account has been
+# provisioned by the UI container. The root session is transient; only the
+# generated service-account key is kept on disk, root-owned and mode 0600.
+
+- name: Read SigNoz root user session context
+  ansible.builtin.uri:
+    url: >-
+      http://{{ observability_signoz_ui_address }}:8080/api/v2/sessions/context?email={{ observability_signoz_root_email | urlencode }}&ref={{ ('https://' + observability_signoz_hostname) | urlencode }}
+    method: GET
+    status_code: 200
+    return_content: true
+  register: observability_signoz_root_session_context
+  changed_when: false
+  # SigNoz reconciles SIGNOZ_USER_ROOT_* after the UI becomes healthy.  The
+  # health endpoint can therefore succeed a few seconds before the root user
+  # and its organization are available to the session API.
+  until: >-
+    (observability_signoz_root_session_context.json.data.exists | default(false) | bool)
+    and
+    ((observability_signoz_root_session_context.json.data.orgs | default([])
+      | selectattr('name', 'equalto', observability_signoz_root_organization)
+      | list | length) == 1)
+  retries: 36
+  delay: 5
+  no_log: true
+
+- name: Resolve the SigNoz root user organization
+  ansible.builtin.set_fact:
+    observability_signoz_root_organization_matches: >-
+      {{ observability_signoz_root_session_context.json.data.orgs | default([])
+         | selectattr('name', 'equalto', observability_signoz_root_organization)
+         | list }}
+  no_log: true
+
+- name: Require the configured SigNoz root user organization
+  ansible.builtin.assert:
+    that:
+      - observability_signoz_root_organization_matches | length == 1
+    fail_msg: >-
+      The SigNoz root user was not provisioned in organization
+      '{{ observability_signoz_root_organization }}'. Check the root-account
+      state and the SigNoz UI container logs.
+  no_log: true
+
+- name: Authenticate the SigNoz root user for automation bootstrap
+  ansible.builtin.uri:
+    url: "http://{{ observability_signoz_ui_address }}:8080/api/v2/sessions/email_password"
+    method: POST
+    body_format: json
+    body:
+      email: "{{ observability_signoz_root_email }}"
+      password: "{{ observability_signoz_root_password }}"
+      orgId: "{{ (observability_signoz_root_organization_matches | first).id }}"
+    status_code: 200
+    return_content: true
+  register: observability_signoz_root_session
+  changed_when: false
+  no_log: true
+
+- name: Resolve the transient SigNoz root access token
+  ansible.builtin.set_fact:
+    observability_signoz_root_access_token: >-
+      {{ observability_signoz_root_session.json.data.accessToken | default('', true) }}
+  no_log: true
+
+- name: Require a transient SigNoz root access token
+  ansible.builtin.assert:
+    that:
+      - observability_signoz_root_access_token | length > 0
+    fail_msg: SigNoz did not return a root-user access token for automation bootstrap.
+  no_log: true
+
+- name: Read existing SigNoz service accounts
+  ansible.builtin.uri:
+    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/service_accounts"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ observability_signoz_root_access_token }}"
+    status_code: 200
+    return_content: true
+  register: observability_signoz_service_accounts_raw
+  changed_when: false
+  no_log: true
+
+- name: Resolve the Foundry SigNoz automation service account
+  ansible.builtin.set_fact:
+    observability_signoz_service_account_matches: >-
+      {{ observability_signoz_service_accounts_raw.json.data
+         | selectattr('name', 'equalto', observability_signoz_service_account_name)
+         | list }}
+  no_log: true
+
+- name: Refuse ambiguous Foundry SigNoz automation service accounts
+  ansible.builtin.assert:
+    that:
+      - observability_signoz_service_account_matches | length <= 1
+    fail_msg: >-
+      More than one SigNoz service account is named
+      '{{ observability_signoz_service_account_name }}'.
+  no_log: true
+
+- name: Create the Foundry SigNoz automation service account
+  ansible.builtin.uri:
+    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/service_accounts"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ observability_signoz_root_access_token }}"
+    body_format: json
+    body:
+      name: "{{ observability_signoz_service_account_name }}"
+    # SigNoz returns 200 on current releases and 201 on some earlier builds.
+    status_code: [200, 201]
+    return_content: true
+  register: observability_signoz_service_account_create
+  changed_when: true
+  when: observability_signoz_service_account_matches | length == 0
+  no_log: true
+
+- name: Re-read SigNoz service accounts after reconciliation
+  ansible.builtin.uri:
+    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/service_accounts"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ observability_signoz_root_access_token }}"
+    status_code: 200
+    return_content: true
+  register: observability_signoz_service_accounts_after_raw
+  changed_when: false
+  no_log: true
+
+- name: Resolve the Foundry SigNoz automation service account identity
+  ansible.builtin.set_fact:
+    observability_signoz_service_account_id: >-
+      {{ (
+          observability_signoz_service_accounts_after_raw.json.data
+          | selectattr('name', 'equalto', observability_signoz_service_account_name)
+          | list | first | default({}, true)
+        ).get('id', '') }}
+  no_log: true
+
+- name: Require the Foundry SigNoz automation service account identity
+  ansible.builtin.assert:
+    that:
+      - observability_signoz_service_account_id | length > 0
+    fail_msg: SigNoz did not return an identifier for the Foundry automation service account.
+  no_log: true
+
+- name: Read SigNoz managed roles
+  ansible.builtin.uri:
+    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/roles"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ observability_signoz_root_access_token }}"
+    status_code: 200
+    return_content: true
+  register: observability_signoz_roles_raw
+  changed_when: false
+  no_log: true
+
+- name: Resolve the SigNoz editor role
+  ansible.builtin.set_fact:
+    observability_signoz_editor_role_matches: >-
+      {{ observability_signoz_roles_raw.json.data
+         | selectattr('name', 'equalto', 'signoz-editor') | list }}
+  no_log: true
+
+- name: Require the SigNoz editor role
+  ansible.builtin.assert:
+    that:
+      - observability_signoz_editor_role_matches | length == 1
+    fail_msg: SigNoz did not expose exactly one built-in signoz-editor role.
+  no_log: true
+
+- name: Read roles assigned to the Foundry SigNoz automation service account
+  ansible.builtin.uri:
+    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/service_accounts/{{ observability_signoz_service_account_id }}/roles"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ observability_signoz_root_access_token }}"
+    status_code: 200
+    return_content: true
+  register: observability_signoz_service_account_roles_raw
+  changed_when: false
+  no_log: true
+
+- name: Resolve the Foundry automation editor-role assignment
+  ansible.builtin.set_fact:
+    observability_signoz_editor_role_assignments: >-
+      {{ observability_signoz_service_account_roles_raw.json.data
+         | selectattr('id', 'equalto', (observability_signoz_editor_role_matches | first).id)
+         | list }}
+  no_log: true
+
+- name: Assign the SigNoz editor role to the Foundry automation service account
+  ansible.builtin.uri:
+    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/service_accounts/{{ observability_signoz_service_account_id }}/roles"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ observability_signoz_root_access_token }}"
+    body_format: json
+    body:
+      id: "{{ (observability_signoz_editor_role_matches | first).id }}"
+    status_code: [201, 204]
+  when: observability_signoz_editor_role_assignments | length == 0
+  changed_when: true
+  no_log: true
+
+- name: Re-read roles assigned to the Foundry SigNoz automation service account
+  ansible.builtin.uri:
+    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/service_accounts/{{ observability_signoz_service_account_id }}/roles"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ observability_signoz_root_access_token }}"
+    status_code: 200
+    return_content: true
+  register: observability_signoz_service_account_roles_after_raw
+  changed_when: false
+  no_log: true
+
+- name: Require the Foundry automation service account editor-role assignment
+  ansible.builtin.assert:
+    that:
+      - >-
+        observability_signoz_service_account_roles_after_raw.json.data
+        | selectattr('id', 'equalto', (observability_signoz_editor_role_matches | first).id)
+        | list | length == 1
+    fail_msg: >-
+      SigNoz did not assign the built-in signoz-editor role to the Foundry
+      automation service account.
+  no_log: true
+
+- name: Inspect the persistent Foundry SigNoz automation API key
+  ansible.builtin.stat:
+    path: "{{ observability_signoz_service_account_key_file }}"
+    follow: false
+  register: observability_signoz_service_account_key_file_stat
+  no_log: true
+
+- name: Validate existing Foundry SigNoz automation API key permissions
+  ansible.builtin.assert:
+    that:
+      - not observability_signoz_service_account_key_file_stat.stat.islnk | default(false)
+      - observability_signoz_service_account_key_file_stat.stat.isreg | default(false)
+      - observability_signoz_service_account_key_file_stat.stat.pw_name | default('') == 'root'
+      - observability_signoz_service_account_key_file_stat.stat.mode | default('') == '0600'
+    fail_msg: SigNoz automation credentials must be a root-owned regular 0600 file.
+  when: observability_signoz_service_account_key_file_stat.stat.exists
+  no_log: true
+
+- name: Read the persistent Foundry SigNoz automation API key
+  ansible.builtin.slurp:
+    path: "{{ observability_signoz_service_account_key_file }}"
+  register: observability_signoz_service_account_key_raw
+  when: observability_signoz_service_account_key_file_stat.stat.exists
+  no_log: true
+
+- name: Resolve the persistent Foundry SigNoz automation API key
+  ansible.builtin.set_fact:
+    observability_signoz_service_account_key: >-
+      {{ observability_signoz_service_account_key_raw.content | b64decode | trim }}
+  when: observability_signoz_service_account_key_file_stat.stat.exists
+  no_log: true
+
+- name: Validate the persistent Foundry SigNoz automation API key
+  ansible.builtin.uri:
+    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/service_accounts/me"
+    method: GET
+    headers:
+      SIGNOZ-API-KEY: "{{ observability_signoz_service_account_key }}"
+    status_code: [200, 401, 403]
+    return_content: true
+  register: observability_signoz_service_account_key_check
+  changed_when: false
+  failed_when: false
+  when: observability_signoz_service_account_key_file_stat.stat.exists
+  no_log: true
+
+- name: Create a replacement Foundry SigNoz automation API key when needed
+  ansible.builtin.uri:
+    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/service_accounts/{{ observability_signoz_service_account_id }}/keys"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ observability_signoz_root_access_token }}"
+    body_format: json
+    body:
+      name: "{{ observability_signoz_service_account_name }}"
+      expiresAt: 0
+    status_code: 201
+    return_content: true
+  register: observability_signoz_service_account_key_create
+  changed_when: true
+  when: >-
+    not observability_signoz_service_account_key_file_stat.stat.exists
+    or observability_signoz_service_account_key_check.status | default(0) != 200
+    or observability_signoz_service_account_key_check.json.data.name | default('', true) != observability_signoz_service_account_name
+  no_log: true
+
+- name: Persist the Foundry SigNoz automation API key
+  ansible.builtin.copy:
+    dest: "{{ observability_signoz_service_account_key_file }}"
+    content: "{{ observability_signoz_service_account_key_create.json.data.key }}\n"
+    owner: root
+    group: root
+    mode: "0600"
+  when: observability_signoz_service_account_key_create.changed | default(false)
+  no_log: true
+
+- name: Resolve the active Foundry SigNoz automation API key
+  ansible.builtin.set_fact:
+    observability_signoz_active_service_account_key: >-
+      {{ observability_signoz_service_account_key_create.json.data.key
+         if observability_signoz_service_account_key_create.changed | default(false)
+         else observability_signoz_service_account_key }}
+  no_log: true
+
+- name: Require the Foundry SigNoz automation API key to work
+  ansible.builtin.uri:
+    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/service_accounts/me"
+    method: GET
+    headers:
+      SIGNOZ-API-KEY: "{{ observability_signoz_active_service_account_key }}"
+    status_code: 200
+    return_content: true
+  register: observability_signoz_service_account_identity
+  changed_when: false
+  no_log: true
+
+- name: Require the active SigNoz API key to belong to Foundry automation
+  ansible.builtin.assert:
+    that:
+      - observability_signoz_service_account_identity.json.data.name == observability_signoz_service_account_name
+    fail_msg: The persisted SigNoz automation API key belongs to a different service account.
+  no_log: true
+
+# The deployed SigNoz release exposes dashboard automation through its v1 API.
+# Keep the contract intentionally small: Foundry owns this one host-level
+# overview, while users remain free to create and manage all other dashboards.
+- name: Render the Foundry host overview dashboard contract
+  ansible.builtin.set_fact:
+    observability_signoz_foundry_overview_contract: >-
+      {{ lookup('template', 'foundry-overview-dashboard.json.j2') | from_json }}
+  no_log: true
+
+- name: Read existing SigNoz dashboards
+  ansible.builtin.uri:
+    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/dashboards"
+    method: GET
+    headers:
+      SIGNOZ-API-KEY: "{{ observability_signoz_active_service_account_key }}"
+    status_code: 200
+    return_content: true
+  register: observability_signoz_dashboards_raw
+  changed_when: false
+  no_log: true
+
+- name: Resolve the Foundry host overview dashboard
+  ansible.builtin.set_fact:
+    observability_signoz_foundry_overview_matches: >-
+      {{ observability_signoz_dashboards_raw.json.data | default([])
+         | selectattr('data', 'defined')
+         | selectattr('data.title', 'defined')
+         | selectattr('data.title', 'equalto', 'Foundry Host Overview')
+         | list }}
+  no_log: true
+
+- name: Refuse ambiguous Foundry host overview dashboards
+  ansible.builtin.assert:
+    that:
+      - observability_signoz_foundry_overview_matches | length <= 1
+    fail_msg: >-
+      More than one SigNoz dashboard is named 'Foundry Host Overview'. Remove
+      the duplicate dashboards before retrying.
+  no_log: true
+
+- name: Refuse to adopt an unmanaged SigNoz host overview dashboard
+  ansible.builtin.assert:
+    that:
+      - >-
+        observability_signoz_foundry_overview_matches | length == 0
+        or (observability_signoz_foundry_overview_matches | first).data.description
+           == 'Managed by Foundry. Host metrics received through OpenTelemetry.'
+    fail_msg: >-
+      A dashboard named 'Foundry Host Overview' already exists but is not owned
+      by Foundry. Rename or remove it before retrying.
+  no_log: true
+
+- name: Create the Foundry host overview dashboard
+  ansible.builtin.uri:
+    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/dashboards"
+    method: POST
+    headers:
+      SIGNOZ-API-KEY: "{{ observability_signoz_active_service_account_key }}"
+    body_format: json
+    body: "{{ observability_signoz_foundry_overview_contract }}"
+    # SigNoz returns 201 on current releases; retain 200 compatibility for
+    # earlier supported releases.
+    status_code: [200, 201]
+    return_content: true
+  register: observability_signoz_foundry_overview_create
+  changed_when: true
+  when: observability_signoz_foundry_overview_matches | length == 0
+  no_log: true
+
+- name: Update the Foundry host overview dashboard when its contract changed
+  ansible.builtin.uri:
+    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/dashboards/{{ (observability_signoz_foundry_overview_matches | first).id }}"
+    method: PUT
+    headers:
+      SIGNOZ-API-KEY: "{{ observability_signoz_active_service_account_key }}"
+    body_format: json
+    body: "{{ observability_signoz_foundry_overview_contract }}"
+    status_code: 200
+    return_content: true
+  changed_when: true
+  when: >-
+    observability_signoz_foundry_overview_matches | length == 1
+    and (observability_signoz_foundry_overview_matches | first).data
+        != observability_signoz_foundry_overview_contract
+  no_log: true
+
+- name: Re-read SigNoz dashboards after Foundry overview reconciliation
+  ansible.builtin.uri:
+    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/dashboards"
+    method: GET
+    headers:
+      SIGNOZ-API-KEY: "{{ observability_signoz_active_service_account_key }}"
+    status_code: 200
+    return_content: true
+  register: observability_signoz_dashboards_after_raw
+  changed_when: false
+  no_log: true
+
+- name: Resolve the reconciled Foundry host overview dashboard
+  ansible.builtin.set_fact:
+    observability_signoz_foundry_overview_after_matches: >-
+      {{ observability_signoz_dashboards_after_raw.json.data | default([])
+         | selectattr('data', 'defined')
+         | selectattr('data.title', 'defined')
+         | selectattr('data.title', 'equalto', 'Foundry Host Overview')
+         | list }}
+  no_log: true
+
+- name: Require the Foundry host overview dashboard
+  ansible.builtin.assert:
+    that:
+      - observability_signoz_foundry_overview_after_matches | length == 1
+      - (observability_signoz_foundry_overview_after_matches | first).data.widgets | length == 6
+    fail_msg: >-
+      SigNoz did not create the Foundry host overview dashboard with its six
+      baseline host-metrics widgets.
+  no_log: true
