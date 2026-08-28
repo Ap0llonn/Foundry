@@ -7,6 +7,9 @@ vm_ip: "203.0.113.10"
 
 project:
   name: my-project
+  # Empty keeps deployed resource names project-owned without Foundry branding.
+  # Use a custom lowercase value such as "acme" if your team wants a prefix.
+  resource_prefix: ""
 
 environments:
   - name: dev
@@ -93,32 +96,25 @@ identity:
         mode: inherit
 
 network:
+  # Custom host listeners only. Traefik HTTP/HTTPS/HTTP3 is planned
+  # automatically when platform.traefik or platform.dokploy is enabled.
   exposure:
     - name: ssh
       port: 22
       protocol: tcp
       scope: management
-    # Required when platform.traefik.enabled is true. HTTP/3 uses UDP 443.
-    - name: http
-      port: 80
-      protocol: tcp
-      scope: public
-    - name: https
-      port: 443
-      protocol: tcp
-      scope: public
-    - name: http3
-      port: 443
-      protocol: udp
-      scope: public
 
 management:
+  # Set true when administrators travel or use changing public IPs. SSH stays
+  # key-only and Fail2ban-protected, but accepts connections from any source.
+  allow_from_anywhere: false
   restrict_by_cidr: true
   allowed_cidrs:
     - "203.0.113.25/32"
 
 # Developer access to a database is opt-in. Choose exactly one mode when
-# enabled: tunnel (SSH forwarding) or tailscale (private tailnet address).
+# enabled: tunnel (SSH forwarding), tailscale (private tailnet address), or
+# public (temporary Internet-facing dev PostgreSQL access).
 database_access:
   enabled: false
   mode: tailscale
@@ -133,6 +129,11 @@ database_access:
     hostname: foundry-db
     port: 5432
     cidr: 100.64.0.0/10
+  public:
+    # public is restricted to the dev environment and opens this VM port to
+    # the Internet. It is unencrypted PostgreSQL TCP: use only temporarily.
+    port: 15432
+    acknowledge_internet_exposure: false
 
 observability:
   enabled: false
@@ -204,6 +205,8 @@ services:
     enabled: true
     environments: [dev, production]
     major: 17
+    # Required: choose the logical database name before the first deployment.
+    database: "CHANGE_ME_DATABASE_NAME"
     # Omit passwords to have Foundry generate stable values on the VM. Put
     # manually managed passwords in Vault instead of this file.
     credentials: {}
@@ -259,6 +262,9 @@ platform:
   dokploy:
     enabled: true
     management_port: 3000
+    # restricted: only management.allowed_cidrs can open the Dokploy UI.
+    # public: anyone can reach the authenticated Dokploy login page.
+    dashboard_access: restricted
     credentials: {}
     secret_version: v1
     bootstrap:

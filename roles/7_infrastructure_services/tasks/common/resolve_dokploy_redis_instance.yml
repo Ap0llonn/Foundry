@@ -88,7 +88,7 @@
     infrastructure_services_redis_instances: >-
       {{ infrastructure_services_redis_instances + [{
         'environment': infrastructure_services_instance_environment,
-        'service_name': 'foundry-' + infrastructure_services_instance_environment + '-redis',
+        'service_name': foundry_resource_name_prefix + infrastructure_services_instance_environment + '-redis',
         'image': foundry_services_resolved.redis.image,
         'password': infrastructure_services_redis_password_raw.content | b64decode | trim,
         'password_file': infrastructure_services_secret_directory + '/' + project.name + '/' + infrastructure_services_instance_environment + '/redis/password',

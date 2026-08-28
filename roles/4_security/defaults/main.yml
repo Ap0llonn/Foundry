@@ -42,7 +42,14 @@ security_defaults:
   logging:
     persistent_journal: true
 
-security_network_exposure_config: "{{ (network | default({})).get('exposure', []) }}"
+security_network_exposure_config: >-
+  {{
+    (
+      (network | default({})).get('exposure', [])
+      + (foundry_platform_exposure_requirements | default([], true))
+    )
+    | unique(attribute='name') | list
+  }}
 security_management_allowed_cidrs: >-
   {{
     (
@@ -55,7 +62,11 @@ security_management_allowed_cidrs: >-
       )
     ) | unique | list
   }}
-security_management_restrict_by_cidr: "{{ (management | default({})).get('restrict_by_cidr', false) }}"
+security_management_restrict_by_cidr: >-
+  {{
+    (management | default({})).get('restrict_by_cidr', false) | bool
+    and not ((management | default({})).get('allow_from_anywhere', false) | bool)
+  }}
 
 security_ssh_service: ssh
 security_sshd_binary: /usr/sbin/sshd
@@ -76,7 +87,7 @@ security_firewall_comment_prefix: "foundry:"
 
 security_allowed_root_keys: [ssh, firewall, fail2ban, updates, apparmor, logging]
 security_allowed_network_keys: [exposure]
-security_allowed_management_keys: [allowed_cidrs, restrict_by_cidr]
+security_allowed_management_keys: [allowed_cidrs, restrict_by_cidr, allow_from_anywhere]
 security_allowed_exposure_keys: [name, port, protocol, scope, source_cidrs]
 security_allowed_ssh_keys:
   - enabled

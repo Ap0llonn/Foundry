@@ -17,7 +17,7 @@
       - item is mapping
       - item.keys() | difference(['environment', 'service_name', 'image', 'user', 'database', 'password', 'password_file', 'resources']) | length == 0
       - item.environment | default('') is match('^[a-z][a-z0-9-]{0,31}$')
-      - item.service_name | default('') == 'foundry-' + item.environment + '-postgres'
+      - item.service_name | default('') == foundry_resource_name_prefix + item.environment + '-postgres'
       - item.service_name | default('') | length <= 63
       - item.image | default('') is match('^.+@sha256:[a-f0-9]{64}$')
       - item.user | default('') is match('^[A-Za-z_][A-Za-z0-9_-]{0,62}$')

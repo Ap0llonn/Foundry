@@ -1,0 +1,40 @@
+---
+- name: Inspect the existing database access proxy before Security validation
+  ansible.builtin.command:
+    argv: [docker, container, inspect, "{{ infrastructure_services_database_access_proxy_container_name }}"]
+  register: infrastructure_services_database_access_existing_proxy
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Refuse to remove an externally owned database access proxy
+  ansible.builtin.assert:
+    that:
+      - >-
+        infrastructure_services_database_access_existing_proxy.rc != 0
+        or (
+          ((infrastructure_services_database_access_existing_proxy.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.managed') == 'true'
+          and ((infrastructure_services_database_access_existing_proxy.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.project') == project.name
+          and ((infrastructure_services_database_access_existing_proxy.stdout | from_json | first).Config.Labels | default({}, true)).get('foundry.service') == 'database-access'
+        )
+    fail_msg: Same-name database access proxy is external; refusing to remove it before Security convergence.
+
+- name: Resolve whether an old database proxy publishes a wildcard listener
+  ansible.builtin.set_fact:
+    infrastructure_services_database_access_existing_proxy_is_public: >-
+      {{
+        infrastructure_services_database_access_existing_proxy.rc == 0
+        and (
+          ((infrastructure_services_database_access_existing_proxy.stdout | from_json | first).NetworkSettings.Ports | default({}, true))
+          | dict2items | map(attribute='value') | flatten
+          | selectattr('HostIp', 'equalto', '0.0.0.0') | list | length > 0
+        )
+      }}
+
+- name: Remove an old public database proxy before Security convergence
+  ansible.builtin.command:
+    argv: [docker, container, rm, --force, "{{ infrastructure_services_database_access_proxy_container_name }}"]
+  when:
+    - foundry_database_access_resolved.mode != 'public'
+    - infrastructure_services_database_access_existing_proxy_is_public
+  changed_when: true

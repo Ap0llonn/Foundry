@@ -88,7 +88,7 @@
     infrastructure_services_postgres_instances: >-
       {{ infrastructure_services_postgres_instances + [{
         'environment': infrastructure_services_instance_environment,
-        'service_name': 'foundry-' + infrastructure_services_instance_environment + '-postgres',
+        'service_name': foundry_resource_name_prefix + infrastructure_services_instance_environment + '-postgres',
         'image': foundry_services_resolved.postgres.image,
         'user': foundry_services_resolved.postgres.user,
         'database': foundry_services_resolved.postgres.database,

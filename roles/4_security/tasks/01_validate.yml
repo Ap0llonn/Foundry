@@ -124,6 +124,7 @@
       - security_management_allowed_cidrs is sequence
       - security_management_allowed_cidrs is not string
       - security_management_restrict_by_cidr is boolean
+      - (management | default({})).get('allow_from_anywhere', false) is boolean
       - not security_management_restrict_by_cidr or security_management_allowed_cidrs | length > 0
     fail_msg: Firewall must be default-deny with a valid global exposure manifest.
 

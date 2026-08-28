@@ -509,6 +509,15 @@ test_cases:
     fixture: fixtures/infrastructure/invalid-zero-cpu.yml
     expected: CPU constraints must be strictly greater than zero.
 
+  - id: TC-INFRA-012
+    criterion: AC-INFRA-001
+    title: Require an explicit PostgreSQL database name
+    tier: static
+    automated: true
+    destructive: false
+    fixture: fixtures/infrastructure/invalid-missing-postgres-database.yml
+    expected: Enabling PostgreSQL without choosing services.postgres.database fails before mutation.
+
   - id: TC-INFRA-100
     criterion: AC-INFRA-006
     title: Fresh full Infrastructure Services convergence and second run

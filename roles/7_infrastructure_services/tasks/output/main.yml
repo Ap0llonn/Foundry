@@ -85,6 +85,8 @@
           {{
             '127.0.0.1'
             if foundry_database_access_resolved.mode == 'tunnel'
+            else ansible_host | default(inventory_hostname)
+            if foundry_database_access_resolved.mode == 'public'
             else foundry_database_access_tailscale_ip
             if foundry_database_access_resolved.enabled
             else none
@@ -93,6 +95,8 @@
           {{
             foundry_database_access_resolved.tunnel.local_port
             if foundry_database_access_resolved.mode == 'tunnel'
+            else foundry_database_access_resolved.public.port
+            if foundry_database_access_resolved.mode == 'public'
             else foundry_database_access_resolved.tailscale.port
             if foundry_database_access_resolved.enabled
             else none

@@ -162,6 +162,12 @@
   when: foundry_database_access_resolved.enabled
   tags: [infrastructure_services, database_access]
 
+- name: 7.24.1 Retire unused Foundry Tailscale access in targeted runs
+  ansible.builtin.import_tasks: database_access/tailscale_cleanup.yml
+  become: true
+  when: foundry_database_access_resolved.mode != 'tailscale'
+  tags: [infrastructure_services, database_access, tailscale]
+
 - name: 7.25 Publish private MinIO Consoles through Tailscale
   ansible.builtin.import_tasks: object_storage/tailscale_console.yml
   become: true

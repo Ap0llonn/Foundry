@@ -25,3 +25,11 @@
           - infrastructure_services_dokploy_endpoint == expected_dokploy_endpoint
       when: expected_resolved_domains is defined
 
+    - name: Assert configurable deployed-resource branding
+      ansible.builtin.assert:
+        that:
+          - foundry_resource_name_prefix + 'dev-postgres' == expected_postgres_service_name
+          - foundry_resource_display_name + ' PostgreSQL (dev)' == expected_postgres_description
+          - foundry_resource_name_prefix + 'dev-redis' == expected_redis_service_name
+          - foundry_resource_display_name + ' Redis (dev)' == expected_redis_description
+      when: expected_postgres_service_name is defined

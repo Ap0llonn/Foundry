@@ -156,11 +156,9 @@
 
   pre_tasks:
     - name: Resolve platform listeners before Security owns firewall convergence
-      ansible.builtin.include_role:
+      ansible.builtin.import_role:
         name: 7_infrastructure_services
         tasks_from: plan/main
-        apply:
-          tags: [always, infrastructure_services_plan]
       tags: [always, infrastructure_services_plan, security]
 
     - name: Validate complete Infrastructure Services intent before host mutation
@@ -170,6 +168,30 @@
         apply:
           tags: [always, infrastructure_services_validation]
       tags: [always, infrastructure_services_plan, infrastructure_services_validation]
+
+    - name: Retire unused Foundry Tailscale access before Security validates listeners
+      ansible.builtin.include_role:
+        name: 7_infrastructure_services
+        tasks_from: database_access/tailscale_cleanup
+        apply:
+          become: true
+          tags: [always, database_access, tailscale]
+      when:
+        - foundry_database_access_resolved is defined
+        - foundry_database_access_resolved.mode != 'tailscale'
+      tags: [always, infrastructure_services_plan, database_access, tailscale]
+
+    - name: Retire an old public database listener before Security validates listeners
+      ansible.builtin.include_role:
+        name: 7_infrastructure_services
+        tasks_from: database_access/public_listener_cleanup
+        apply:
+          become: true
+          tags: [always, database_access]
+      when:
+        - foundry_database_access_resolved is defined
+        - foundry_database_access_resolved.mode != 'public'
+      tags: [always, infrastructure_services_plan, database_access]
 
   # Les couches seront ajoutées ici dans leur ordre d'exécution (1 à 9)
   # à mesure qu'elles seront implémentées.

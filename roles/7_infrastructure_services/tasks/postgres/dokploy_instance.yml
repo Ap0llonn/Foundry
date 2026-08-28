@@ -1,8 +1,8 @@
 ---
-- name: Resolve Foundry ownership marker for Dokploy PostgreSQL
+- name: Resolve configured ownership description for Dokploy PostgreSQL
   ansible.builtin.set_fact:
     infrastructure_services_dokploy_postgres_description: >-
-      Foundry PostgreSQL ({{ postgres_instance.environment }})
+      {{ foundry_resource_display_name }} PostgreSQL ({{ postgres_instance.environment }})
 
 - name: Require healthy Dokploy API context for PostgreSQL
   ansible.builtin.assert:

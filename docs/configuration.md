@@ -40,10 +40,16 @@ identity:
         - "ssh-ed25519 AAAA... admin@example.com"
 
 management:
+  allow_from_anywhere: false
   restrict_by_cidr: true
   allowed_cidrs:
     - 198.51.100.20/32
 ```
+
+`network.exposure` is for custom host listeners such as SSH. Do not manually
+declare ports 80/TCP, 443/TCP, or 443/UDP for Traefik/Dokploy: Foundry plans
+those listeners before Security converges UFW, with stable Traefik ownership
+comments.
 
 ## 1. VM and project identity
 
@@ -64,16 +70,26 @@ project:
 
 ### `project.resource_prefix`
 
-Optional prefix (up to 20 lowercase letters, numbers, or hyphens) for new
-shared-object-storage bucket and Dokploy S3 destination names. It defaults to
-`foundry`; set it to an empty string to omit that prefix. This affects future
-resource names only: changing it does not rename or remove resources that
-already exist.
+Optional deployed-resource prefix (up to 20 lowercase letters, numbers, or
+hyphens). It controls Dokploy PostgreSQL and Redis service names and
+descriptions, shared-object-storage buckets, Dokploy S3 destinations,
+PostgreSQL backup prefixes, and other generated resource names. It defaults to
+`foundry` for compatibility with existing installations.
+
+Set it to an empty string before the first deployment to omit Foundry branding.
+For example, the PostgreSQL name becomes `dev-postgres` instead of
+`foundry-dev-postgres`; its description uses the project name, such as
+`My-Project PostgreSQL (dev)`. A custom value such as `acme` produces
+`acme-dev-postgres` and `Acme PostgreSQL (dev)`.
+
+This affects future resource identities. Changing it after deploying stateful
+services does not rename their existing storage and can require a deliberate
+Dokploy/database migration. Keep the old value until that migration is planned.
 
 ```yaml
 project:
   name: my-project
-  resource_prefix: ""  # buckets begin with my-project-... instead of foundry-...
+  resource_prefix: ""
 ```
 
 ### `environments[].name`
@@ -442,6 +458,16 @@ Optional source allow-list. Use `/32` for one IPv4 address. Never use
 
 Restricts management services to `management.allowed_cidrs`. Keep `true`.
 
+### `management.allow_from_anywhere`
+
+When `true`, SSH management access is allowed from any source address. This
+overrides `restrict_by_cidr`, which remains the recommended default. Use it for
+administrators with changing public IP addresses only when SSH password
+authentication is disabled and trusted public keys are configured. Fail2ban
+remains active. Keep `management.allowed_cidrs` populated when Dokploy is
+enabled: Foundry continues to use it for the Dokploy/Cloudflare management
+allow-list.
+
 ### `management.allowed_cidrs`
 
 Public source addresses allowed to reach management services such as SSH and
@@ -451,12 +477,14 @@ domainless Dokploy. Update this when the administrator's public IP changes.
 
 ### `database_access.enabled`
 
-Creates a private PostgreSQL access proxy when `true`.
+Creates a PostgreSQL access proxy when `true`.
 
 ### `database_access.mode`
 
-Select one method: `tunnel` for SSH forwarding or `tailscale` for a Tailscale
-listener.
+Select one method: `tunnel` for SSH forwarding, `tailscale` for a private
+Tailscale listener, or `public` for an Internet-facing development listener.
+`public` is intentionally limited to the `dev` environment and requires an
+explicit acknowledgement.
 
 ### `database_access.environment`
 
@@ -489,6 +517,20 @@ PostgreSQL port on the Tailscale address. Default: `5432`.
 
 Source CIDR allowed by the VM firewall. The usual Tailscale range is
 `100.64.0.0/10`. Use Tailscale ACLs/grants for identity-based restrictions.
+
+### `database_access.public.port`
+
+Internet-facing TCP port for the temporary `public` development listener.
+Default: `15432`. Foundry opens this port in the host firewall only when
+`database_access.mode: public` is enabled.
+
+### `database_access.public.acknowledge_internet_exposure`
+
+Must be `true` before the `public` mode can apply. This publishes the dev
+database proxy on every VM interface and permits traffic from any IP address.
+The proxy does not add TLS; PostgreSQL credentials and queries can traverse the
+network unencrypted. Use this only for short-lived development access with a
+strong unique development password, never for production.
 
 Foundry currently creates a TCP proxy, not a database web UI. Use DBeaver,
 TablePlus, or pgAdmin Desktop, or deploy a separate pgAdmin service through
@@ -648,7 +690,11 @@ Database user. Default: `foundry`.
 
 ### `services.postgres.database`
 
-Database name. Default: `foundry`.
+Required logical database name; there is no default. Choose it before the first
+deployment. It must start with a lowercase letter or underscore and contain
+only lowercase letters, numbers, underscores, or hyphens, up to 63 characters.
+Changing this value later is a database migration, not a harmless rename; back
+up the existing database and use a database-aware migration workflow.
 
 ### `services.postgres.credentials.<environment>.password`
 
@@ -884,6 +930,16 @@ Immutable image digest for Dokploy's internal PostgreSQL.
 Dokploy management port. Domainless access is protected by the management CIDR
 policy.
 
+### `platform.dokploy.dashboard_access`
+
+Controls access to the Dokploy dashboard when it is served on a domain.
+`restricted` (default) limits it to `management.allowed_cidrs` both in
+Traefik and Cloudflare. `public` lets anyone reach the authenticated Dokploy
+login page; SSH access remains governed separately by `management`.
+
+Use `public` only with a strong Dokploy administrator password and MFA when
+available. It does not make the Dokploy API unauthenticated.
+
 ### `platform.dokploy.credentials.postgres_password`
 
 Optional Vault-supplied password for Dokploy's internal PostgreSQL.
@@ -1116,7 +1172,60 @@ database_access:
 ```
 
 The developer runs `scripts/foundry-db-tunnel.sh` and connects to
-`127.0.0.1:15432`.
+`127.0.0.1:15432`. The same SSH connection also forwards the VM's local
+OpenTelemetry OTLP/HTTP receiver to `127.0.0.1:4318`, so a local application
+can use `OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318` and
+`OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` without exposing telemetry
+ingestion publicly. Override either pair with `FOUNDRY_DB_*_PORT` or
+`FOUNDRY_OTLP_*_PORT` when a local port is already in use.
+
+The script uses SSH-key authentication by default. Override the VM login when
+needed:
+
+```bash
+FOUNDRY_SSH_USER=developer \
+FOUNDRY_SSH_HOST=vm.example.com \
+FOUNDRY_SSH_KEY="$HOME/.ssh/foundry" \
+./scripts/foundry-db-tunnel.sh
+```
+
+For a VM deliberately configured to permit SSH passwords, select password
+mode. OpenSSH prompts for the password without displaying or storing it:
+
+```bash
+FOUNDRY_SSH_AUTH=password \
+FOUNDRY_SSH_USER=developer \
+FOUNDRY_SSH_HOST=vm.example.com \
+./scripts/foundry-db-tunnel.sh
+```
+
+Foundry disables SSH password authentication by default. Password mode works
+only when `security.ssh.password_authentication: true` has been explicitly
+configured and applied to the VM. Public-key authentication remains the
+recommended mode.
+
+### Temporary public development access
+
+```yaml
+database_access:
+  enabled: true
+  mode: public
+  environment: dev
+  public:
+    port: 15432
+    acknowledge_internet_exposure: true
+```
+
+Connect using the VM public IP and selected port, for example
+`Host=<vm-public-ip>;Port=15432`. This is direct PostgreSQL TCP, not an HTTPS
+URL, and Cloudflare does not proxy it. It is deliberately rejected for
+production and should be switched back to `tailscale` or `tunnel` as soon as
+possible. Foundry stops and disables its Tailscale daemon while this mode is
+selected, so the Tailscale-only MinIO Console is unavailable.
+
+When switching away from `public`, Foundry removes the old wildcard database
+listener before Security validates sockets, then creates the selected private
+listener later in the infrastructure phase.
 
 ### No external database access
 

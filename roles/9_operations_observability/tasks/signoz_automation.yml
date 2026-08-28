@@ -6,7 +6,7 @@
 - name: Read SigNoz root user session context
   ansible.builtin.uri:
     url: >-
-      http://{{ observability_signoz_ui_address }}:8080/api/v2/sessions/context?email={{ observability_signoz_root_email | urlencode }}&ref={{ ('https://' + observability_signoz_hostname) | urlencode }}
+      http://{{ observability_signoz_ui_loopback_host }}:{{ observability_signoz_ui_loopback_port }}/api/v2/sessions/context?email={{ observability_signoz_root_email | urlencode }}&ref={{ ('https://' + observability_signoz_hostname) | urlencode }}
     method: GET
     status_code: 200
     return_content: true
@@ -45,7 +45,7 @@
 
 - name: Authenticate the SigNoz root user for automation bootstrap
   ansible.builtin.uri:
-    url: "http://{{ observability_signoz_ui_address }}:8080/api/v2/sessions/email_password"
+    url: "http://{{ observability_signoz_ui_loopback_host }}:{{ observability_signoz_ui_loopback_port }}/api/v2/sessions/email_password"
     method: POST
     body_format: json
     body:
@@ -73,7 +73,7 @@
 
 - name: Read existing SigNoz service accounts
   ansible.builtin.uri:
-    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/service_accounts"
+    url: "http://{{ observability_signoz_ui_loopback_host }}:{{ observability_signoz_ui_loopback_port }}/api/v1/service_accounts"
     method: GET
     headers:
       Authorization: "Bearer {{ observability_signoz_root_access_token }}"
@@ -102,7 +102,7 @@
 
 - name: Create the Foundry SigNoz automation service account
   ansible.builtin.uri:
-    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/service_accounts"
+    url: "http://{{ observability_signoz_ui_loopback_host }}:{{ observability_signoz_ui_loopback_port }}/api/v1/service_accounts"
     method: POST
     headers:
       Authorization: "Bearer {{ observability_signoz_root_access_token }}"
@@ -119,7 +119,7 @@
 
 - name: Re-read SigNoz service accounts after reconciliation
   ansible.builtin.uri:
-    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/service_accounts"
+    url: "http://{{ observability_signoz_ui_loopback_host }}:{{ observability_signoz_ui_loopback_port }}/api/v1/service_accounts"
     method: GET
     headers:
       Authorization: "Bearer {{ observability_signoz_root_access_token }}"
@@ -148,7 +148,7 @@
 
 - name: Read SigNoz managed roles
   ansible.builtin.uri:
-    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/roles"
+    url: "http://{{ observability_signoz_ui_loopback_host }}:{{ observability_signoz_ui_loopback_port }}/api/v1/roles"
     method: GET
     headers:
       Authorization: "Bearer {{ observability_signoz_root_access_token }}"
@@ -174,7 +174,7 @@
 
 - name: Read roles assigned to the Foundry SigNoz automation service account
   ansible.builtin.uri:
-    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/service_accounts/{{ observability_signoz_service_account_id }}/roles"
+    url: "http://{{ observability_signoz_ui_loopback_host }}:{{ observability_signoz_ui_loopback_port }}/api/v1/service_accounts/{{ observability_signoz_service_account_id }}/roles"
     method: GET
     headers:
       Authorization: "Bearer {{ observability_signoz_root_access_token }}"
@@ -194,7 +194,7 @@
 
 - name: Assign the SigNoz editor role to the Foundry automation service account
   ansible.builtin.uri:
-    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/service_accounts/{{ observability_signoz_service_account_id }}/roles"
+    url: "http://{{ observability_signoz_ui_loopback_host }}:{{ observability_signoz_ui_loopback_port }}/api/v1/service_accounts/{{ observability_signoz_service_account_id }}/roles"
     method: POST
     headers:
       Authorization: "Bearer {{ observability_signoz_root_access_token }}"
@@ -208,7 +208,7 @@
 
 - name: Re-read roles assigned to the Foundry SigNoz automation service account
   ansible.builtin.uri:
-    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/service_accounts/{{ observability_signoz_service_account_id }}/roles"
+    url: "http://{{ observability_signoz_ui_loopback_host }}:{{ observability_signoz_ui_loopback_port }}/api/v1/service_accounts/{{ observability_signoz_service_account_id }}/roles"
     method: GET
     headers:
       Authorization: "Bearer {{ observability_signoz_root_access_token }}"
@@ -264,7 +264,7 @@
 
 - name: Validate the persistent Foundry SigNoz automation API key
   ansible.builtin.uri:
-    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/service_accounts/me"
+    url: "http://{{ observability_signoz_ui_loopback_host }}:{{ observability_signoz_ui_loopback_port }}/api/v1/service_accounts/me"
     method: GET
     headers:
       SIGNOZ-API-KEY: "{{ observability_signoz_service_account_key }}"
@@ -278,7 +278,7 @@
 
 - name: Create a replacement Foundry SigNoz automation API key when needed
   ansible.builtin.uri:
-    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/service_accounts/{{ observability_signoz_service_account_id }}/keys"
+    url: "http://{{ observability_signoz_ui_loopback_host }}:{{ observability_signoz_ui_loopback_port }}/api/v1/service_accounts/{{ observability_signoz_service_account_id }}/keys"
     method: POST
     headers:
       Authorization: "Bearer {{ observability_signoz_root_access_token }}"
@@ -316,7 +316,7 @@
 
 - name: Require the Foundry SigNoz automation API key to work
   ansible.builtin.uri:
-    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/service_accounts/me"
+    url: "http://{{ observability_signoz_ui_loopback_host }}:{{ observability_signoz_ui_loopback_port }}/api/v1/service_accounts/me"
     method: GET
     headers:
       SIGNOZ-API-KEY: "{{ observability_signoz_active_service_account_key }}"
@@ -344,7 +344,7 @@
 
 - name: Read existing SigNoz dashboards
   ansible.builtin.uri:
-    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/dashboards"
+    url: "http://{{ observability_signoz_ui_loopback_host }}:{{ observability_signoz_ui_loopback_port }}/api/v1/dashboards"
     method: GET
     headers:
       SIGNOZ-API-KEY: "{{ observability_signoz_active_service_account_key }}"
@@ -387,7 +387,7 @@
 
 - name: Create the Foundry host overview dashboard
   ansible.builtin.uri:
-    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/dashboards"
+    url: "http://{{ observability_signoz_ui_loopback_host }}:{{ observability_signoz_ui_loopback_port }}/api/v1/dashboards"
     method: POST
     headers:
       SIGNOZ-API-KEY: "{{ observability_signoz_active_service_account_key }}"
@@ -404,7 +404,7 @@
 
 - name: Update the Foundry host overview dashboard when its contract changed
   ansible.builtin.uri:
-    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/dashboards/{{ (observability_signoz_foundry_overview_matches | first).id }}"
+    url: "http://{{ observability_signoz_ui_loopback_host }}:{{ observability_signoz_ui_loopback_port }}/api/v1/dashboards/{{ (observability_signoz_foundry_overview_matches | first).id }}"
     method: PUT
     headers:
       SIGNOZ-API-KEY: "{{ observability_signoz_active_service_account_key }}"
@@ -421,7 +421,7 @@
 
 - name: Re-read SigNoz dashboards after Foundry overview reconciliation
   ansible.builtin.uri:
-    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/dashboards"
+    url: "http://{{ observability_signoz_ui_loopback_host }}:{{ observability_signoz_ui_loopback_port }}/api/v1/dashboards"
     method: GET
     headers:
       SIGNOZ-API-KEY: "{{ observability_signoz_active_service_account_key }}"

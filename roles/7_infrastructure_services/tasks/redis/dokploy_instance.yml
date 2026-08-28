@@ -1,8 +1,8 @@
 ---
-- name: Resolve Foundry Redis ownership description
+- name: Resolve configured Redis ownership description
   ansible.builtin.set_fact:
     infrastructure_services_dokploy_redis_description: >-
-      Foundry Redis ({{ redis_instance.environment }})
+      {{ foundry_resource_display_name }} Redis ({{ redis_instance.environment }})
     infrastructure_services_dokploy_redis_args: >-
       {{
         (['--maxmemory', redis_instance.maxmemory]

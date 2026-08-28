@@ -17,7 +17,7 @@
       - item is mapping
       - item.keys() | difference(['environment', 'service_name', 'image', 'password', 'password_file', 'persistence', 'maxmemory', 'maxmemory_policy', 'resources']) | length == 0
       - item.environment | default('') is match('^[a-z][a-z0-9-]{0,31}$')
-      - item.service_name | default('') == 'foundry-' + item.environment + '-redis'
+      - item.service_name | default('') == foundry_resource_name_prefix + item.environment + '-redis'
       - item.image | default('') is match('^.+@sha256:[a-f0-9]{64}$')
       - item.password | default('') is string
       - item.password | default('') | length >= 16

@@ -6,6 +6,7 @@ environments:
 services:
   postgres:
     enabled: true
+    database: fixture_app
     image: postgres:latest
 network:
   exposure: []

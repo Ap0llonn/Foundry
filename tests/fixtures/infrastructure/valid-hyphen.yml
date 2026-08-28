@@ -1,12 +1,14 @@
 ---
 project:
   name: fixture-project
+  resource_prefix: ""
 environments:
   - name: dev
   - name: prod
 services:
   postgres:
     enabled: true
+    database: fixture_app
   redis:
     enabled: true
     persistence: true
@@ -33,4 +35,7 @@ expected_resolved_domains:
   prod:
     api: prod-api.example.com
 expected_dokploy_endpoint: http://dokploy.example.com
-
+expected_postgres_service_name: dev-postgres
+expected_postgres_description: Fixture-Project PostgreSQL (dev)
+expected_redis_service_name: dev-redis
+expected_redis_description: Fixture-Project Redis (dev)

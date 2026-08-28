@@ -92,6 +92,7 @@
       - (database_access | default({})).keys() | difference(database_access_allowed_keys) | length == 0
       - ((database_access | default({})).get('tunnel', {})).keys() | difference(database_access_allowed_tunnel_keys) | length == 0
       - ((database_access | default({})).get('tailscale', {})).keys() | difference(database_access_allowed_tailscale_keys) | length == 0
+      - ((database_access | default({})).get('public', {})).keys() | difference(database_access_allowed_public_keys) | length == 0
     fail_msg: Infrastructure Services contains an unsupported option. Consult roles/7_infrastructure_services/Doc.MD.
 
 - name: Validate environment and project contracts
@@ -105,6 +106,19 @@
       - infrastructure_services_environment_names | unique | length == infrastructure_services_environment_names | length
       - infrastructure_services_environment_names | select('match', infrastructure_services_environment_pattern) | list | length == infrastructure_services_environment_names | length
     fail_msg: Project and environment names must be unique lowercase Foundry identifiers.
+
+- name: Resolve configurable deployed-resource branding
+  ansible.builtin.set_fact:
+    foundry_resource_prefix: "{{ project.resource_prefix | default('foundry') }}"
+    foundry_resource_name_prefix: >-
+      {{ (project.resource_prefix | default('foundry')) + '-'
+         if (project.resource_prefix | default('foundry')) | length > 0 else '' }}
+    foundry_resource_display_name: >-
+      {{
+        (project.resource_prefix | default('foundry') | title)
+        if (project.resource_prefix | default('foundry')) | length > 0
+        else (project.name | title)
+      }}
 
 - name: Validate Dokploy Remote Server declarations
   ansible.builtin.assert:
@@ -140,6 +154,7 @@
       - foundry_services_resolved.object_storage.environments is sequence
       - foundry_services_resolved.object_storage.environments is not string
       - foundry_services_resolved.postgres.credentials is mapping
+      - foundry_services_resolved.postgres.database is string
       - foundry_services_resolved.postgres.backup is mapping
       - foundry_services_resolved.postgres.backup.enabled is boolean
       - foundry_services_resolved.postgres.backup.schedule is string
@@ -187,7 +202,7 @@
     that:
       - foundry_database_access_resolved is mapping
       - foundry_database_access_resolved.enabled is boolean
-      - foundry_database_access_resolved.mode in ['tunnel', 'tailscale']
+      - foundry_database_access_resolved.mode in ['tunnel', 'tailscale', 'public']
       - foundry_database_access_resolved.environment is string
       - foundry_database_access_resolved.environment in infrastructure_services_environment_names
       - foundry_database_access_resolved.tunnel is mapping
@@ -206,6 +221,11 @@
       - foundry_database_access_resolved.tailscale.cidr is string
       - (foundry_database_access_resolved.tailscale.cidr | ansible.utils.ipaddr) != false
       - foundry_database_access_resolved.tailscale.cidr not in ['0.0.0.0/0', '::/0']
+      - foundry_database_access_resolved.public is mapping
+      - foundry_database_access_resolved.public.port is number
+      - foundry_database_access_resolved.public.port | int >= 1024
+      - foundry_database_access_resolved.public.port | int <= 65535
+      - foundry_database_access_resolved.public.acknowledge_internet_exposure is boolean
       - not foundry_database_access_resolved.enabled or foundry_services_resolved.postgres.enabled
       - >-
         not foundry_database_access_resolved.enabled
@@ -216,9 +236,12 @@
         )
       - not foundry_database_access_resolved.enabled or foundry_database_access_resolved.mode != 'tunnel' or foundry_database_access_resolved.tunnel.allowed_cidrs | length > 0
       - not foundry_database_access_resolved.enabled or foundry_database_access_resolved.mode != 'tailscale' or foundry_database_access_resolved.tailscale.auth_key | length >= 20
+      - not foundry_database_access_resolved.enabled or foundry_database_access_resolved.mode != 'public' or foundry_database_access_resolved.environment == 'dev'
+      - not foundry_database_access_resolved.enabled or foundry_database_access_resolved.mode != 'public' or foundry_database_access_resolved.public.acknowledge_internet_exposure
     fail_msg: >-
       Database access requires a PostgreSQL environment and either a non-empty
-      tunnel CIDR whitelist or a secure Tailscale auth key.
+      tunnel CIDR whitelist, a secure Tailscale auth key, or an explicitly
+      acknowledged public listener limited to the dev environment.
   no_log: true
 
 - name: Validate database access CIDR whitelist
@@ -303,7 +326,12 @@
       - not foundry_services_resolved.redis.enabled or foundry_services_resolved.redis.image is match(infrastructure_services_immutable_image_pattern)
       - not foundry_services_resolved.object_storage.enabled or foundry_services_resolved.object_storage.image is match(infrastructure_services_immutable_image_pattern)
       - foundry_services_resolved.postgres.user is match('^[a-z_][a-z0-9_-]{0,62}$')
-      - foundry_services_resolved.postgres.database is match('^[a-z_][a-z0-9_-]{0,62}$')
+      - >-
+        not foundry_services_resolved.postgres.enabled
+        or (
+          'database' in ((services | default({})).get('postgres', {}))
+          and foundry_services_resolved.postgres.database is match('^[a-z_][a-z0-9_-]{0,62}$')
+        )
       - foundry_services_resolved.postgres.resources.memory | length == 0 or foundry_services_resolved.postgres.resources.memory is match(infrastructure_services_memory_pattern)
       - foundry_services_resolved.redis.resources.memory | length == 0 or foundry_services_resolved.redis.resources.memory is match(infrastructure_services_memory_pattern)
       - foundry_services_resolved.postgres.resources.cpus | string | length == 0 or foundry_services_resolved.postgres.resources.cpus | string is match(infrastructure_services_cpu_pattern)
@@ -311,7 +339,10 @@
       - foundry_services_resolved.postgres.resources.cpus | string | length == 0 or foundry_services_resolved.postgres.resources.cpus | float > 0
       - foundry_services_resolved.redis.resources.cpus | string | length == 0 or foundry_services_resolved.redis.resources.cpus | float > 0
       - foundry_services_resolved.redis.maxmemory | length == 0 or foundry_services_resolved.redis.maxmemory is match(infrastructure_services_memory_pattern)
-    fail_msg: Enabled services require immutable image digests and valid resource settings.
+    fail_msg: >-
+      Enabled services require immutable image digests and valid resource
+      settings. PostgreSQL also requires an explicit services.postgres.database
+      lowercase identifier.
 
 - name: Validate platform and domain configuration
   ansible.builtin.assert:
@@ -367,6 +398,8 @@
       - foundry_platform_resolved.traefik.https_port | int <= 65535
       - foundry_platform_resolved.dokploy.management_port | int >= 1
       - foundry_platform_resolved.dokploy.management_port | int <= 65535
+      - foundry_platform_resolved.dokploy.dashboard_access is string
+      - foundry_platform_resolved.dokploy.dashboard_access in ['restricted', 'public']
       - foundry_platform_resolved.swarm.subnet_size | int >= 16
       - foundry_platform_resolved.swarm.subnet_size | int <= 28
       - not foundry_platform_resolved.traefik.enabled or foundry_platform_resolved.traefik.image is match(infrastructure_services_immutable_image_pattern)
@@ -388,7 +421,8 @@
         )
       - >-
         not foundry_platform_resolved.dokploy.enabled
-        or ((management | default({})).get('restrict_by_cidr', false) | bool
+        or (((management | default({})).get('restrict_by_cidr', false) | bool
+             or (management | default({})).get('allow_from_anywhere', false) | bool)
             and (management | default({})).get('allowed_cidrs', []) | length > 0)
       - >-
         not foundry_domains_resolved.cloudflare.enabled
@@ -489,36 +523,49 @@
         or foundry_database_access_resolved.enabled)
       }}
 
+- name: Resolve planned host exposure for Security validation
+  ansible.builtin.set_fact:
+    infrastructure_services_effective_exposure: >-
+      {{
+        (network | default({})).get('exposure', [])
+        + (foundry_platform_exposure_requirements | default([], true))
+      }}
+
 - name: Validate required host exposure is declared before Security convergence
   ansible.builtin.assert:
     that:
       - >-
         not infrastructure_services_traefik_enabled
-        or ((network | default({})).get('exposure', [])
+        or (infrastructure_services_effective_exposure
             | selectattr('port', 'defined')
             | selectattr('port', 'equalto', foundry_platform_resolved.traefik.http_port)
-            | selectattr('protocol', 'equalto', 'tcp') | list | length > 0)
+            | selectattr('protocol', 'equalto', 'tcp')
+            | selectattr('scope', 'equalto', 'public') | list | length > 0)
       - >-
         not (infrastructure_services_traefik_enabled and foundry_platform_resolved.traefik.tls.enabled)
-        or ((network | default({})).get('exposure', [])
+        or (infrastructure_services_effective_exposure
             | selectattr('port', 'defined')
             | selectattr('port', 'equalto', foundry_platform_resolved.traefik.https_port)
-            | selectattr('protocol', 'equalto', 'tcp') | list | length > 0)
+            | selectattr('protocol', 'equalto', 'tcp')
+            | selectattr('scope', 'equalto', 'public') | list | length > 0)
       - >-
         not (infrastructure_services_traefik_enabled and foundry_platform_resolved.traefik.tls.enabled)
-        or ((network | default({})).get('exposure', [])
+        or (infrastructure_services_effective_exposure
             | selectattr('port', 'defined')
             | selectattr('port', 'equalto', foundry_platform_resolved.traefik.https_port)
-            | selectattr('protocol', 'equalto', 'udp') | list | length > 0)
+            | selectattr('protocol', 'equalto', 'udp')
+            | selectattr('scope', 'equalto', 'public') | list | length > 0)
       - >-
         not (foundry_platform_resolved.dokploy.enabled and not infrastructure_services_domain_enabled)
-        or ((network | default({})).get('exposure', [])
+        or (infrastructure_services_effective_exposure
             | selectattr('port', 'defined')
             | selectattr('port', 'equalto', foundry_platform_resolved.dokploy.management_port)
-            | selectattr('protocol', 'equalto', 'tcp') | list | length > 0)
+            | selectattr('protocol', 'equalto', 'tcp')
+            | selectattr('scope', 'equalto', 'management') | list | length > 0)
     fail_msg: >-
-      Declare every Traefik/Dokploy listener in network.exposure before running
-      Security. Domainless Dokploy requires its management port; domain mode uses Traefik.
+      Foundry could not resolve every required Traefik/Dokploy listener before
+      Security converges UFW. Domainless Dokploy requires its management port;
+      domain mode uses Traefik.
 
 - name: Validate legacy MinIO option names and types
   ansible.builtin.assert:

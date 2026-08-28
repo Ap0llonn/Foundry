@@ -338,6 +338,7 @@ def run_static() -> None:
         ("TC-INFRA-009", "fixtures/infrastructure/valid-domainless-ipv6.yml", True),
         ("TC-INFRA-010", "fixtures/infrastructure/invalid-memory-suffix.yml", False),
         ("TC-INFRA-011", "fixtures/infrastructure/invalid-zero-cpu.yml", False),
+        ("TC-INFRA-012", "fixtures/infrastructure/invalid-missing-postgres-database.yml", False),
     ]:
         collect_command(
             failures,

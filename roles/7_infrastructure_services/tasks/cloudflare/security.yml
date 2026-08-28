@@ -113,7 +113,12 @@
     infrastructure_services_cloudflare_rule_set_description: Restricts Dokploy administration while allowing ACME HTTP-01 validation.
     infrastructure_services_cloudflare_rule_declaration:
       ref: "{{ infrastructure_services_cloudflare_management_rule_ref }}"
-      description: Restrict Dokploy administration to Foundry management CIDRs; allow ACME HTTP-01.
+      description: >-
+        {{
+          'Restrict Dokploy administration to Foundry management CIDRs; allow ACME HTTP-01.'
+          if foundry_platform_resolved.dokploy.dashboard_access == 'restricted'
+          else 'Disabled because Foundry exposes the authenticated Dokploy dashboard publicly.'
+        }}
       expression: >-
         {{
           'http.host eq "' + foundry_domains_resolved.dokploy_label + '.' + foundry_domains_resolved.base
@@ -121,7 +126,7 @@
           + ' and not ip.src in {' + ((management | default({})).get('allowed_cidrs', []) | join(' ')) + '}'
         }}
       action: block
-      enabled: true
+      enabled: "{{ foundry_platform_resolved.dokploy.dashboard_access == 'restricted' }}"
   when: foundry_platform_resolved.dokploy.enabled
 
 - name: Reconcile Cloudflare Dokploy management access rule

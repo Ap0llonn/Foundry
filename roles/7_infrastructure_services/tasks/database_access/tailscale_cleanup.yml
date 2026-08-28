@@ -1,0 +1,13 @@
+---
+- name: Gather service facts before retiring unused Foundry Tailscale access
+  ansible.builtin.service_facts:
+  when: foundry_database_access_resolved.mode != 'tailscale'
+
+- name: Stop and disable unused Foundry Tailscale access
+  ansible.builtin.systemd_service:
+    name: tailscaled
+    enabled: false
+    state: stopped
+  when:
+    - foundry_database_access_resolved.mode != 'tailscale'
+    - "'tailscaled.service' in ansible_facts.services"

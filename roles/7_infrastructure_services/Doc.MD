@@ -44,7 +44,11 @@ management:
 
 PostgreSQL 17 and Redis 8.2 are the only data-service versions accepted for V1.
 PostgreSQL databases are created and deployed through the Dokploy API inside
-their exact Foundry project/environment. Redis services are created and
+their exact Foundry project/environment. Every enabled PostgreSQL declaration
+must explicitly choose `services.postgres.database`; Foundry does not infer a
+persistent database name. `project.resource_prefix` consistently controls the
+visible Dokploy data-service names and descriptions; an empty prefix removes
+Foundry branding while retaining project ownership metadata. Redis services are created and
 deployed through the Dokploy API in the same way. Traefik, Dokploy, and
 Dokploy's internal PostgreSQL also have digest-pinned defaults. Shared MinIO
 uses a reviewed immutable server and client digest. For each enabled
@@ -108,8 +112,11 @@ database_access:
 
 In `tunnel` mode, Foundry creates a TCP proxy bound only to VM localhost.
 The developer runs `scripts/foundry-db-tunnel.sh`, which forwards local port
-`15432` through SSH. The configured tunnel CIDRs are added to the SSH source
-allow-list; SSH public-key authentication is still required.
+`15432` through SSH and also forwards the local OTLP/HTTP receiver on port
+`4318` for local application telemetry. The configured tunnel CIDRs are added
+to the SSH source allow-list. The script defaults to public-key authentication
+and also supports an interactive `FOUNDRY_SSH_AUTH=password` mode when SSH
+password authentication has been explicitly enabled on the VM.
 
 In `tailscale` mode, Foundry installs and authenticates Tailscale on the VM,
 then binds the PostgreSQL proxy only to the VM's Tailscale IPv4 address. The

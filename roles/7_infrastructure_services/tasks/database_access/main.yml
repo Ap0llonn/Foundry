@@ -20,12 +20,16 @@
       {{
         '127.0.0.1'
         if foundry_database_access_resolved.mode == 'tunnel'
+        else '0.0.0.0'
+        if foundry_database_access_resolved.mode == 'public'
         else foundry_database_access_tailscale_ip
       }}
     infrastructure_services_database_access_published_port: >-
       {{
         foundry_database_access_resolved.tunnel.local_port
         if foundry_database_access_resolved.mode == 'tunnel'
+        else foundry_database_access_resolved.public.port
+        if foundry_database_access_resolved.mode == 'public'
         else foundry_database_access_resolved.tailscale.port
       }}
   no_log: true

@@ -1,6 +1,7 @@
 ---
 project:
   name: fixture-project
+  resource_prefix: acme
 environments:
   - name: dev
   - name: prod
@@ -12,12 +13,23 @@ domains:
 services:
   postgres:
     enabled: true
+    database: fixture_app
+platform:
+  dokploy:
+    enabled: true
+management:
+  restrict_by_cidr: true
+  allowed_cidrs: [192.0.2.0/24]
 network:
-  exposure: []
+  exposure:
+    - {name: traefik-http, port: 80, protocol: tcp, scope: public}
 expected_resolved_domains:
   dev:
     api: dev.api.example.com
   prod:
     api: prod.api.example.com
 expected_dokploy_endpoint: http://dokploy.example.com
-
+expected_postgres_service_name: acme-dev-postgres
+expected_postgres_description: Acme PostgreSQL (dev)
+expected_redis_service_name: acme-dev-redis
+expected_redis_description: Acme Redis (dev)

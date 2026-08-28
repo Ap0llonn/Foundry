@@ -60,6 +60,10 @@ observability_signoz_collector_version: v0.144.5
 observability_signoz_state_directory: /var/lib/foundry/signoz
 observability_signoz_cache_directory: /var/cache/foundry/signoz
 observability_signoz_otlp_grpc_port: 14317
+# Private host-only endpoint used by Foundry's SigNoz API automation. The UI
+# remains publicly available through Traefik; this port is never exposed.
+observability_signoz_ui_loopback_host: 127.0.0.1
+observability_signoz_ui_loopback_port: 18080
 # Cloud providers commonly describe a 4 GB VM in decimal units, which Linux
 # reports as roughly 3815 MiB. Keep a small margin for that unit difference.
 observability_signoz_minimum_memory_mb: 3800

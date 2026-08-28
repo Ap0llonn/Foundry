@@ -15,7 +15,9 @@ services_defaults:
     major: 17
     image: "postgres@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94"
     user: foundry
-    database: foundry
+    # Required when PostgreSQL is enabled; there is deliberately no implicit
+    # database name because it becomes part of the persistent data contract.
+    database: ""
     credentials: {}
     backup:
       enabled: false
@@ -79,6 +81,9 @@ platform_defaults:
     image: "dokploy/dokploy@sha256:0061c6cb66a77fba26180db45281792dbd0a70d08e29dc19140b7433fed5ab14"
     postgres_image: "postgres@sha256:11a9d238fbb48bab14599c57e41123254452b1a2d93c6c8595bce96f346bd082"
     management_port: 3000
+    # restricted keeps the Dokploy UI behind management CIDRs; public exposes
+    # its authenticated login page through Traefik and Cloudflare.
+    dashboard_access: restricted
     credentials: {}
     bootstrap:
       email: "admin@example.com"
@@ -128,6 +133,11 @@ database_access_defaults:
     hostname: ""
     port: 5432
     cidr: 100.64.0.0/10
+  public:
+    # This is not a security boundary; PostgreSQL is reachable from the
+    # Internet whenever this mode is enabled.
+    port: 15432
+    acknowledge_internet_exposure: false
 
 infrastructure_services_allowed_root_keys: [minio]
 infrastructure_services_allowed_minio_keys: [enabled, run_as_uid, run_as_gid, instances]
@@ -194,6 +204,7 @@ infrastructure_services_allowed_dokploy_keys:
   - image
   - postgres_image
   - management_port
+  - dashboard_access
   - credentials
   - bootstrap
   - secret_version
@@ -235,9 +246,10 @@ infrastructure_services_allowed_cloudflare_rate_limit_keys:
   - mitigation_timeout
   - action
 
-database_access_allowed_keys: [enabled, mode, environment, tunnel, tailscale]
+database_access_allowed_keys: [enabled, mode, environment, tunnel, tailscale, public]
 database_access_allowed_tunnel_keys: [allowed_cidrs, local_port]
 database_access_allowed_tailscale_keys: [auth_key, hostname, port, cidr]
+database_access_allowed_public_keys: [port, acknowledge_internet_exposure]
 infrastructure_services_allowed_domain_styles: [hyphen, nested]
 infrastructure_services_allowed_redis_policies:
   - noeviction

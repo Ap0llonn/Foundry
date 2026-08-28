@@ -79,6 +79,19 @@
     - foundry_database_access_plan.enabled
     - foundry_database_access_plan.mode == 'tailscale'
 
+- name: Plan public development database exposure
+  ansible.builtin.set_fact:
+    foundry_platform_exposure_requirements: >-
+      {{ foundry_platform_exposure_requirements + [{
+        'name': 'database-access',
+        'port': foundry_database_access_plan.public.port | int,
+        'protocol': 'tcp',
+        'scope': 'public'
+      }] }}
+  when:
+    - foundry_database_access_plan.enabled
+    - foundry_database_access_plan.mode == 'public'
+
 - name: Validate predeclared platform exposure does not conflict
   ansible.builtin.assert:
     that:
@@ -89,6 +102,27 @@
             and ((network | default({})).get('exposure', []) | selectattr('name', 'equalto', item.name) | first).scope == item.scope
             and (((network | default({})).get('exposure', []) | selectattr('name', 'equalto', item.name) | first).get('source_cidrs', []) == item.get('source_cidrs', [])))
     fail_msg: "network.exposure already contains a conflicting {{ item.name }} declaration."
+  loop: "{{ foundry_platform_exposure_requirements }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Reject manually duplicated platform listener declarations
+  ansible.builtin.assert:
+    that:
+      - >-
+        (
+          (network | default({})).get('exposure', [])
+          | selectattr('port', 'defined')
+          | selectattr('port', 'equalto', item.port)
+          | selectattr('protocol', 'equalto', item.protocol)
+          | selectattr('scope', 'equalto', item.scope)
+          | rejectattr('name', 'equalto', item.name)
+          | list | length
+        ) == 0
+    fail_msg: >-
+      network.exposure duplicates the {{ item.port }}/{{ item.protocol }}
+      {{ item.scope }} listener planned for {{ item.name }}. Remove the manual
+      entry: Foundry plans platform listeners before Security manages UFW.
   loop: "{{ foundry_platform_exposure_requirements }}"
   loop_control:
     label: "{{ item.name }}"

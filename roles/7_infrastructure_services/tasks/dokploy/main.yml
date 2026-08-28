@@ -214,6 +214,8 @@
       }}
     infrastructure_services_dokploy_entrypoint: >-
       {{ 'web' if infrastructure_services_domain_enabled else 'management' }}
+    infrastructure_services_dokploy_dashboard_public: >-
+      {{ foundry_platform_resolved.dokploy.dashboard_access == 'public' }}
     infrastructure_services_dokploy_allowlist: >-
       {{
         (
@@ -243,6 +245,7 @@
           if infrastructure_services_domain_enabled else 'PathPrefix(`/`)'
         ),
         'entrypoint': ('web' if infrastructure_services_domain_enabled else 'management'),
+        'dashboard_access': foundry_platform_resolved.dokploy.dashboard_access,
         'allowlist': (
           infrastructure_services_cloudflare_origin_cidrs
           if infrastructure_services_cloudflare_proxy_enabled
@@ -400,9 +403,11 @@
         + ['--label', 'traefik.enable=true',
            '--label', 'traefik.http.routers.dokploy.rule=' + infrastructure_services_dokploy_host_rule,
            '--label', 'traefik.http.routers.dokploy.entrypoints=' + infrastructure_services_dokploy_entrypoint,
-           '--label', 'traefik.http.routers.dokploy.middlewares=' + ('dokploy-allow@swarm,dokploy-redirect@swarm' if foundry_platform_resolved.traefik.tls.enabled else 'dokploy-allow@swarm'),
-           '--label', 'traefik.http.middlewares.dokploy-allow.ipallowlist.sourcerange=' + infrastructure_services_dokploy_allowlist,
            '--label', 'traefik.http.services.dokploy.loadbalancer.server.port=3000']
+        + (['--label', 'traefik.http.routers.dokploy.middlewares='
+            + ('dokploy-allow@swarm,dokploy-redirect@swarm' if foundry_platform_resolved.traefik.tls.enabled else 'dokploy-allow@swarm'),
+            '--label', 'traefik.http.middlewares.dokploy-allow.ipallowlist.sourcerange=' + infrastructure_services_dokploy_allowlist]
+           if not infrastructure_services_dokploy_dashboard_public else [])
         + (['--label', 'traefik.http.middlewares.dokploy-redirect.redirectscheme.scheme=https',
             '--label', 'traefik.http.middlewares.dokploy-redirect.redirectscheme.permanent=true']
            if foundry_platform_resolved.traefik.tls.enabled else [])
@@ -412,8 +417,9 @@
             + (['--label', 'traefik.http.routers.dokploy-secure.tls.certresolver=letsencrypt']
                if foundry_platform_resolved.traefik.tls.mode == 'public_acme'
                else ['--label', 'foundry.tls.mode=cloudflare-origin'])
-            + ['--label', 'traefik.http.routers.dokploy-secure.service=dokploy',
-               '--label', 'traefik.http.routers.dokploy-secure.middlewares=dokploy-allow@swarm'])
+            + ['--label', 'traefik.http.routers.dokploy-secure.service=dokploy']
+            + (['--label', 'traefik.http.routers.dokploy-secure.middlewares=dokploy-allow@swarm']
+               if not infrastructure_services_dokploy_dashboard_public else []))
            if infrastructure_services_domain_enabled and foundry_platform_resolved.traefik.tls.enabled else [])
         + [foundry_platform_resolved.dokploy.image]
       }}

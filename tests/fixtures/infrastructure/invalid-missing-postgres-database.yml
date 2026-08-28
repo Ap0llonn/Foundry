@@ -6,8 +6,5 @@ environments:
 services:
   postgres:
     enabled: true
-    database: fixture_app
-    resources:
-      memory: 512mb
 network:
   exposure: []

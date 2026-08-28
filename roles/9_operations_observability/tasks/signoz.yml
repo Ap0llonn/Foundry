@@ -666,6 +666,10 @@
               'SIGNOZ_USER_ROOT_ORG_NAME': observability_signoz_root_organization
             },
             'volumes': ['sqlite:/var/lib/signoz'],
+            'ports': [
+              observability_signoz_ui_loopback_host + ':'
+              + (observability_signoz_ui_loopback_port | string) + ':8080'
+            ],
             'healthcheck': {
               'test': ['CMD', 'wget', '--spider', '-q', 'http://localhost:8080/api/v1/health'],
               'interval': '30s', 'timeout': '5s', 'retries': 5
@@ -1264,7 +1268,8 @@
 
 - name: Validate self-hosted SigNoz dashboard health
   ansible.builtin.uri:
-    url: "http://{{ observability_signoz_ui_address }}:8080/api/v1/health"
+    url: >-
+      http://{{ observability_signoz_ui_loopback_host }}:{{ observability_signoz_ui_loopback_port }}/api/v1/health
     method: GET
     status_code: 200
   register: observability_signoz_health
