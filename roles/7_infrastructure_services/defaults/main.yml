@@ -45,7 +45,7 @@ services_defaults:
     environments: []
     # One Dokploy-managed MinIO Compose service per environment. Each instance
     # has assets-public, assets-private, and db-backups buckets.
-    image: "minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
+    image: "quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
     credentials: {}
     data_root: ""
     allow_root_filesystem: false
@@ -282,7 +282,7 @@ infrastructure_services_minio_console_port: 9001
 infrastructure_services_minio_label_resource: minio
 infrastructure_services_minio_health_retries: 15
 infrastructure_services_minio_health_delay: 2
-infrastructure_services_minio_client_image: "minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727"
+infrastructure_services_minio_client_image: "quay.io/minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727"
 infrastructure_services_minio_shared_container_name: "foundry-{{ project.name }}-minio"
 infrastructure_services_minio_shared_state_directory: "{{ infrastructure_services_state_directory }}/minio/{{ project.name }}"
 infrastructure_services_minio_shared_secret_directory: "{{ infrastructure_services_secret_directory }}/{{ project.name }}/minio"

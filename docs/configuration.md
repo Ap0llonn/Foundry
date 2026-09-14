@@ -494,11 +494,13 @@ Environment whose PostgreSQL service is exposed. It must exist in
 ### `database_access.tunnel.allowed_cidrs`
 
 Public source CIDRs allowed to create the SSH tunnel. These are added to the
-SSH firewall allow-list; a public SSH key is still required.
+SSH firewall allow-list. The VM must separately permit either public-key or
+password login for the selected Linux account.
 
 ### `database_access.tunnel.local_port`
 
-Local port used by `scripts/foundry-db-tunnel.sh`. Default: `15432`.
+Local PostgreSQL port used by `scripts/foundry-db-tunnel.sh` and
+`scripts/foundry-db-tunnel.ps1`. Default: `15432`.
 
 ### `database_access.tailscale.auth_key`
 
@@ -1032,6 +1034,11 @@ observability:
     service_account_name: foundry-automation
 ```
 
+`enabled` is the authoritative parent switch. When it is `false`, Foundry ends
+the observability role before gathering platform facts or validating any
+Collector, backend, or SigNoz settings; those nested settings remain inert
+until observability is enabled again.
+
 `dashboard` is currently restricted to `signoz`; it documents the supported UI
 without coupling the Collector pipeline to SigNoz. `backend.endpoint` accepts
 any OTLP/gRPC `host:port` target. `backend.headers` is an optional string map
@@ -1171,13 +1178,16 @@ database_access:
     local_port: 15432
 ```
 
-The developer runs `scripts/foundry-db-tunnel.sh` and connects to
+Use `scripts/foundry-db-tunnel.sh` on macOS/Linux or
+`scripts/foundry-db-tunnel.ps1` from Windows PowerShell, then connect to
 `127.0.0.1:15432`. The same SSH connection also forwards the VM's local
 OpenTelemetry OTLP/HTTP receiver to `127.0.0.1:4318`, so a local application
 can use `OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318` and
 `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` without exposing telemetry
 ingestion publicly. Override either pair with `FOUNDRY_DB_*_PORT` or
 `FOUNDRY_OTLP_*_PORT` when a local port is already in use.
+
+#### macOS and Linux
 
 The script uses SSH-key authentication by default. Override the VM login when
 needed:
@@ -1190,19 +1200,78 @@ FOUNDRY_SSH_KEY="$HOME/.ssh/foundry" \
 ```
 
 For a VM deliberately configured to permit SSH passwords, select password
-mode. OpenSSH prompts for the password without displaying or storing it:
+mode. `-Password` is a switch and does not take the password as a value;
+OpenSSH prompts without displaying or storing it:
 
 ```bash
-FOUNDRY_SSH_AUTH=password \
 FOUNDRY_SSH_USER=developer \
 FOUNDRY_SSH_HOST=vm.example.com \
-./scripts/foundry-db-tunnel.sh
+./scripts/foundry-db-tunnel.sh -Password
 ```
+
+`FOUNDRY_SSH_AUTH=password` remains supported for existing callers.
 
 Foundry disables SSH password authentication by default. Password mode works
 only when `security.ssh.password_authentication: true` has been explicitly
 configured and applied to the VM. Public-key authentication remains the
 recommended mode.
+
+#### Windows PowerShell
+
+Windows PowerShell 5.1 and PowerShell 7 are supported. Install the Windows
+OpenSSH Client optional feature first and confirm that `ssh.exe` is available
+on `PATH`:
+
+```powershell
+ssh -V
+```
+
+The helper prefers Windows' built-in
+`C:\Windows\System32\OpenSSH\ssh.exe`, then falls back to a trusted
+`ssh.exe` on `PATH`. To select another trusted installation explicitly, pass
+`-SshExecutable 'C:\path\to\ssh.exe'`.
+
+From the repository root, start the tunnel and leave the PowerShell window
+open:
+
+```powershell
+.\scripts\foundry-db-tunnel.ps1
+```
+
+For key authentication, set overrides in the current PowerShell session
+before starting the tunnel:
+
+```powershell
+$env:FOUNDRY_SSH_USER = 'developer'
+$env:FOUNDRY_SSH_HOST = 'vm.example.com'
+$env:FOUNDRY_SSH_KEY = "$HOME\.ssh\foundry"
+.\scripts\foundry-db-tunnel.ps1
+```
+
+For a VM explicitly configured to permit SSH passwords, use password mode:
+
+```powershell
+$env:FOUNDRY_SSH_USER = 'developer'
+$env:FOUNDRY_SSH_HOST = 'vm.example.com'
+.\scripts\foundry-db-tunnel.ps1 -Password
+```
+
+`-Password` selects password authentication; it does not take the password as
+a value. OpenSSH prompts for the password without displaying or storing it.
+The existing `$env:FOUNDRY_SSH_AUTH = 'password'` form remains supported for
+shell configuration and parity with the macOS/Linux helper.
+
+Password login works only when `security.ssh.password_authentication: true`
+has been applied and the selected Linux account has a password. Foundry
+currently provisions that account password from `identity.users[].sudo.password_hash`
+when its sudo policy requires password authentication. The hash belongs in an
+encrypted Vault variables file; the plaintext password must not be added to
+`config.yml`.
+
+While the script runs, PostgreSQL is available at `127.0.0.1:15432` and
+OTLP/HTTP at `http://127.0.0.1:4318`. On the first connection, compare the
+displayed host fingerprint with a trusted value for the VM before accepting
+it. Press `Ctrl+C` to close both forwards.
 
 ### Temporary public development access
 

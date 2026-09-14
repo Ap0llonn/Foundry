@@ -31,6 +31,7 @@
     path: >-
       {{ infrastructure_services_minio_shared_secret_directory }}/{{ infrastructure_services_object_storage_bucket.contract_key }}-secret-key
   register: infrastructure_services_object_storage_bucket_secret_raw
+  no_log: true
 
 - name: Add {{ infrastructure_services_object_storage_bucket.environment }} S3 secret to its runtime contract
   ansible.builtin.set_fact:
@@ -42,3 +43,4 @@
           })
         )
       }) }}
+  no_log: true

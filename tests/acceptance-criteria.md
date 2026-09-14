@@ -288,3 +288,24 @@ isolation, data survival across recreation and reboot, negative external
 exposure, collision/failure handling, stable secret IDs, and a final identical
 convergence with `changed=0`. Until those tests execute, status is
 `implemented; certification pending`.
+
+### AC-INFRA-007 — Safe Windows developer tunnel parity
+
+The Windows PowerShell database tunnel must support Windows PowerShell 5.1,
+honor the same `FOUNDRY_*` inputs and defaults as the Bash tunnel, and reject
+invalid SSH targets, authentication modes, ports, keys, or unavailable OpenSSH
+before connection. It must forward the database and OTLP endpoints through an
+argument-array invocation of `ssh.exe`, preserve OpenSSH's exit status, and
+offer a `-Password` switch that selects OpenSSH's native interactive password
+prompt. It must not accept a password value in arguments or environment
+variables, evaluate commands, weaken host-key checking, or bind a forwarded
+service beyond loopback.
+
+## Operations Observability
+
+### AC-OBSERVABILITY-001 — Authoritative parent enable switch
+
+When `observability.enabled` is `false`, Foundry must validate only that the
+observability root is a mapping and that its parent enable flag is boolean,
+then end the role without gathering platform facts, validating enabled-only
+backend or SigNoz settings, or changing the managed host.

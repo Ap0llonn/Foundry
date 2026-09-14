@@ -329,6 +329,21 @@ def run_static() -> None:
             "roles/7_infrastructure_services/tests/syntax.yml",
         ],
     )
+    collect_command(
+        failures,
+        "TC-INFRA-013",
+        [sys.executable, "scripts/verify-windows-tunnel-script.py"],
+    )
+    collect_command(
+        failures,
+        "TC-OBSERVABILITY-001",
+        role_fixture_command(
+            ansible_playbook,
+            "tests/playbooks/observability_disabled_fixture.yml",
+            "fixtures/observability/disabled.yml",
+        ),
+        require_zero_changes=True,
+    )
     for test_id, fixture_name, expect_success in [
         ("TC-INFRA-003", "fixtures/infrastructure/valid-hyphen.yml", True),
         ("TC-INFRA-004", "fixtures/infrastructure/valid-nested.yml", True),

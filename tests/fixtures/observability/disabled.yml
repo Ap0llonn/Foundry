@@ -1,0 +1,18 @@
+---
+observability:
+  enabled: false
+  dashboard: unsupported-dashboard
+  collector:
+    version: invalid
+  backend:
+    endpoint: invalid
+    headers: invalid
+    tls_insecure: invalid
+  signoz:
+    enabled: true
+    host: missing-host
+    project: INVALID
+    hostname: not-a-hostname
+    account: invalid
+    service_account_name: INVALID
+

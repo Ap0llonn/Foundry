@@ -1,4 +1,22 @@
 ---
+- name: Validate observability parent configuration
+  ansible.builtin.assert:
+    that:
+      - observability | default({}) is mapping
+    fail_msg: observability must be a mapping.
+  no_log: true
+
+- name: Validate observability parent enable switch
+  ansible.builtin.assert:
+    that:
+      - (observability | default({})).get('enabled', false) is boolean
+    fail_msg: observability.enabled must be a boolean.
+  no_log: true
+
+- name: Skip observability when its parent switch is disabled
+  ansible.builtin.meta: end_role
+  when: not (observability | default({})).get('enabled', false)
+
 - name: Gather operating-system facts for observability
   ansible.builtin.setup:
     gather_subset: [min, hardware]

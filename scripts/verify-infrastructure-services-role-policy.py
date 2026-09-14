@@ -41,14 +41,46 @@ for relative in required_files:
     require((ROLE / relative).is_file(), f"missing {relative}")
 
 defaults = yaml.safe_load((ROLE / "defaults/main.yml").read_text())
+minio_server_image = defaults["services_defaults"]["object_storage"]["image"]
+minio_client_image = defaults["infrastructure_services_minio_client_image"]
 for image in [
     defaults["services_defaults"]["postgres"]["image"],
     defaults["services_defaults"]["redis"]["image"],
+    minio_server_image,
+    minio_client_image,
     defaults["platform_defaults"]["traefik"]["image"],
     defaults["platform_defaults"]["dokploy"]["image"],
     defaults["platform_defaults"]["dokploy"]["postgres_image"],
 ]:
     require(re.search(r"@sha256:[a-f0-9]{64}$", image) is not None, f"mutable image default: {image}")
+
+require(
+    minio_server_image.startswith("quay.io/minio/minio@sha256:"),
+    "MinIO server default must use the available official Quay repository",
+)
+require(
+    minio_client_image.startswith("quay.io/minio/mc@sha256:"),
+    "MinIO client default must use the available official Quay repository",
+)
+
+object_storage_main = (ROLE / "tasks/object_storage/main.yml").read_text()
+require(
+    object_storage_main.index("dokploy_compose.yml")
+    < object_storage_main.index("validate.yml")
+    < object_storage_main.index("buckets.yml"),
+    "Dokploy-managed MinIO must be healthy before bucket convergence",
+)
+
+object_storage_prepare_instance = (ROLE / "tasks/object_storage/prepare_instance.yml").read_text()
+require(
+    "no_log: true" in object_storage_prepare_instance,
+    "MinIO runtime credential rendering can expose the root password",
+)
+object_storage_prepare_bucket = (ROLE / "tasks/object_storage/prepare_bucket.yml").read_text()
+require(
+    object_storage_prepare_bucket.count("no_log: true") >= 3,
+    "MinIO bucket secret reads and fact resolution must remain censored",
+)
 
 all_tasks = "\n".join(path.read_text() for path in (ROLE / "tasks").rglob("*.yml"))
 for forbidden in [

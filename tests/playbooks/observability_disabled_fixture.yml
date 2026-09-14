@@ -1,0 +1,24 @@
+---
+- name: Verify disabled observability skips all enabled-only work
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars:
+    # Any accidental fact-gathering or remote module execution must make this
+    # fixture fail. Controller-side assert/include/meta actions still work.
+    ansible_python_interpreter: /definitely/not/a/python
+  tasks:
+    - name: Load disabled observability fixture
+      ansible.builtin.include_vars:
+        file: "{{ fixture_file }}"
+
+    - name: Run the complete observability role
+      ansible.builtin.include_role:
+        name: 9_operations_observability
+
+    - name: Require the disabled role to leave operating-system facts untouched
+      ansible.builtin.assert:
+        that:
+          - "'distribution' not in (ansible_facts | default({}))"
+          - observability_resolved is not defined
+

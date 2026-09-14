@@ -20,4 +20,3 @@
   retries: "{{ infrastructure_services_minio_health_retries }}"
   delay: "{{ infrastructure_services_minio_health_delay }}"
   until: infrastructure_services_object_storage_health.rc == 0
-  no_log: true

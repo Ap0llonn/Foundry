@@ -111,12 +111,37 @@ database_access:
 ```
 
 In `tunnel` mode, Foundry creates a TCP proxy bound only to VM localhost.
-The developer runs `scripts/foundry-db-tunnel.sh`, which forwards local port
-`15432` through SSH and also forwards the local OTLP/HTTP receiver on port
-`4318` for local application telemetry. The configured tunnel CIDRs are added
-to the SSH source allow-list. The script defaults to public-key authentication
-and also supports an interactive `FOUNDRY_SSH_AUTH=password` mode when SSH
-password authentication has been explicitly enabled on the VM.
+Run `scripts/foundry-db-tunnel.sh` on macOS/Linux or
+`scripts/foundry-db-tunnel.ps1` from PowerShell on Windows. Both scripts
+forward PostgreSQL to `127.0.0.1:15432` and the OTLP/HTTP receiver to
+`http://127.0.0.1:4318`. The configured tunnel CIDRs are added to the SSH
+source allow-list.
+
+On macOS/Linux, append `-Password` to the Bash helper to select OpenSSH's
+interactive password prompt:
+
+```bash
+./scripts/foundry-db-tunnel.sh -Password
+```
+
+Windows requires the OpenSSH Client. The helper prefers the built-in
+`C:\Windows\System32\OpenSSH\ssh.exe` and otherwise uses a trusted `ssh.exe`
+on `PATH`. From the repository root:
+
+```powershell
+$env:FOUNDRY_SSH_USER = 'developer'
+$env:FOUNDRY_SSH_HOST = 'vm.example.com'
+$env:FOUNDRY_SSH_KEY = "$HOME\.ssh\foundry"
+.\scripts\foundry-db-tunnel.ps1
+```
+
+For interactive password authentication, run
+`.\scripts\foundry-db-tunnel.ps1 -Password`. The switch selects password mode,
+then OpenSSH prompts without echoing or storing the password. It never accepts
+the secret as a command-line value. SSH password authentication must already
+be enabled and the selected Linux account must have a password. Leave the
+window open while using either endpoint, verify the host fingerprint on first
+connection, and press `Ctrl+C` to stop the tunnel.
 
 In `tailscale` mode, Foundry installs and authenticates Tailscale on the VM,
 then binds the PostgreSQL proxy only to the VM's Tailscale IPv4 address. The

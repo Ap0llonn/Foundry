@@ -19,6 +19,7 @@
   loop:
     - {path: "{{ infrastructure_services_object_storage_instance.state_path }}/root-user", content: "{{ infrastructure_services_object_storage_root_user }}"}
     - {path: "{{ infrastructure_services_object_storage_instance.state_path }}/root-password", content: "{{ infrastructure_services_object_storage_root_password }}"}
+  no_log: true
 
 - name: Create {{ infrastructure_services_object_storage_instance.environment }} MinIO data directory
   ansible.builtin.file:

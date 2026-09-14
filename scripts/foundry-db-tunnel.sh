@@ -16,6 +16,19 @@ remote_port="${FOUNDRY_DB_REMOTE_PORT:-15432}"
 otlp_local_port="${FOUNDRY_OTLP_LOCAL_PORT:-4318}"
 otlp_remote_port="${FOUNDRY_OTLP_REMOTE_PORT:-4318}"
 
+while (($# > 0)); do
+  case "$1" in
+    -Password|--password)
+      ssh_auth="password"
+      ;;
+    *)
+      echo "Unexpected argument. Use -Password without a value, then enter the password at the OpenSSH prompt." >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
 if [[ -z "${ssh_target}" ]]; then
   echo "Set FOUNDRY_SSH_TARGET or both FOUNDRY_SSH_USER and FOUNDRY_SSH_HOST." >&2
   exit 2
@@ -40,7 +53,7 @@ ssh_args=(-p "${ssh_port}")
 if [[ "${ssh_auth}" == "key" ]]; then
   if [[ -z "${ssh_key}" || ! -r "${ssh_key}" ]]; then
     echo "SSH key is not readable: ${ssh_key}" >&2
-    echo "Set FOUNDRY_SSH_KEY, or use FOUNDRY_SSH_AUTH=password." >&2
+    echo "Set FOUNDRY_SSH_KEY, or use -Password." >&2
     exit 2
   fi
   ssh_args+=(
@@ -56,6 +69,8 @@ else
   ssh_args+=(
     -o BatchMode=no
     -o PubkeyAuthentication=no
+    -o PasswordAuthentication=yes
+    -o KbdInteractiveAuthentication=yes
     -o PreferredAuthentications=password,keyboard-interactive
   )
 fi
